@@ -1,0 +1,456 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Document Migration Dashboard</h2>
+            <p class="text-muted">Two-step migration process: Prepare → Preview → Execute</p>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Migration Batches</h5>
+                    <a href="{{ url_for('app.prepare') }}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> New Migration Batch
+                    </a>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover" id="batchesTable">
+                            <thead>
+                                <tr>
+                                    <th>Batch ID</th>
+                                    <th>Created</th>
+                                    <th>Created By</th>
+                                    <th>Source</th>
+                                    <th>Total</th>
+                                    <th>Approved</th>
+                                    <th>Executed</th>
+                                    <th>Success</th>
+                                    <th>Failed</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batchesBody">
+                                <tr>
+                                    <td colspan="11" class="text-center">
+                                        <div class="spinner-border" role="status">
+                                            <span class="sr-only">Loading...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadBatches();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(loadBatches, 30000);
+});
+
+function loadBatches() {
+    fetch('/batches')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayBatches(data.batches);
+            } else {
+                showError('Failed to load batches: ' + data.error);
+            }
+        })
+        .catch(error => {
+            showError('Error loading batches: ' + error);
+        });
+}
+
+function displayBatches(batches) {
+    const tbody = document.getElementById('batchesBody');
+    
+    if (batches.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center">No batches found. Create a new migration batch to get started.</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = batches.map(batch => {
+        const statusBadge = getStatusBadge(batch.status);
+        const actions = getActionButtons(batch);
+        
+        return `
+            <tr>
+                <td><code>${batch.batch_id}</code></td>
+                <td>${formatDateTime(batch.created_at)}</td>
+                <td>${batch.created_by || '-'}</td>
+                <td>${batch.source_file || '-'}</td>
+                <td>${batch.total_records || 0}</td>
+                <td>${batch.approved_records || 0}</td>
+                <td>${batch.executed_records || 0}</td>
+                <td class="text-success">${batch.successful_records || 0}</td>
+                <td class="text-danger">${batch.failed_records || 0}</td>
+                <td>${statusBadge}</td>
+                <td>${actions}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function getStatusBadge(status) {
+    const badges = {
+        'prepared': '<span class="badge badge-info">Prepared</span>',
+        'executing': '<span class="badge badge-warning">Executing</span>',
+        'completed': '<span class="badge badge-success">Completed</span>',
+        'failed': '<span class="badge badge-danger">Failed</span>'
+    };
+    return badges[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+function getActionButtons(batch) {
+    let buttons = [];
+    
+    if (batch.status === 'prepared') {
+        buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Preview & Execute">
+            <i class="fas fa-eye"></i> Preview
+        </a>`);
+    }
+    
+    if (batch.status === 'prepared' && batch.approved_records > 0) {
+        buttons.push(`<button onclick="executeBatch('${batch.batch_id}')" class="btn btn-sm btn-success" title="Execute Migration">
+            <i class="fas fa-play"></i> Execute
+        </button>`);
+    }
+    
+    if (batch.status === 'completed' || batch.executed_records > 0) {
+        buttons.push(`<button onclick="viewResults('${batch.batch_id}')" class="btn btn-sm btn-info" title="View Results">
+            <i class="fas fa-eye"></i> Results
+        </button>`);
+        buttons.push(`<button onclick="viewStatistics('${batch.batch_id}')" class="btn btn-sm btn-warning" title="View Statistics">
+            <i class="fas fa-chart-bar"></i> Stats
+        </button>`);
+    }
+    
+    buttons.push(`<button onclick="viewDetails('${batch.batch_id}')" class="btn btn-sm btn-secondary" title="View Details">
+        <i class="fas fa-info-circle"></i> Detail
+    </button>`);
+    
+    return buttons.join(' ');
+}
+
+function executeBatch(batchId) {
+    if (!confirm('Are you sure you want to execute migration for all approved records in this batch?')) {
+        return;
+    }
+    
+    const btn = event.target.closest('button');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Executing...';
+    
+    fetch('/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}\nPartial: ${data.partial || 0}`);
+            loadBatches();
+        } else {
+            alert('Migration failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute';
+    })
+    .catch(error => {
+        alert('Error executing migration: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute';
+    });
+}
+
+function viewResults(batchId) {
+    window.location.href = `/logs?batch_id=${batchId}`;
+}
+
+function viewDetails(batchId) {
+    window.location.href = `/preview?batch_id=${batchId}`;
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return date.toLocaleString();
+}
+
+function showError(message) {
+    console.error(message);
+    const tbody = document.getElementById('batchesBody');
+    tbody.innerHTML = `<tr><td colspan="11" class="text-danger">${message}</td></tr>`;
+}
+
+function viewStatistics(batchId) {
+    fetch(`/batch_statistics?batch_id=${batchId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showStatisticsModal(batchId, data.statistics);
+            } else {
+                alert('Failed to load statistics: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error loading statistics: ' + error);
+        });
+}
+
+function showStatisticsModal(batchId, stats) {
+    // Create modal if it doesn't exist
+    let modal = document.getElementById('statisticsModal');
+    if (!modal) {
+        const modalHtml = `
+        <div class="modal fade" id="statisticsModal" tabindex="-1" role="dialog">
+            <div class="modal-dialog modal-xl" role="document" style="max-width: 95vw;">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning text-dark py-2">
+                        <h5 class="modal-title"><i class="fas fa-chart-bar"></i> Batch Statistics - <code>${batchId}</code></h5>
+                        <button type="button" class="close" data-dismiss="modal">
+                            <span>&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body p-2" id="statisticsModalBody" style="max-height: 85vh; overflow-y: auto;">
+                    </div>
+                    <div class="modal-footer py-1">
+                        <button type="button" class="btn btn-sm btn-secondary" data-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        modal = document.getElementById('statisticsModal');
+    }
+    
+    // Update title with current batch ID
+    modal.querySelector('.modal-title').innerHTML = `<i class="fas fa-chart-bar"></i> Batch Statistics - <code>${batchId}</code>`;
+    
+    const body = document.getElementById('statisticsModalBody');
+    body.innerHTML = `
+        <div class="row">
+            <!-- Left Column: Overview Stats -->
+            <div class="col-lg-4">
+                <div class="card mb-2 border-primary">
+                    <div class="card-header bg-primary text-white py-1">
+                        <i class="fas fa-clock"></i> Duration & Throughput
+                    </div>
+                    <div class="card-body p-2 text-center">
+                        <div class="row">
+                            <div class="col-6">
+                                <h3 class="mb-0">${stats.batch_duration_formatted || '-'}</h3>
+                                <small class="text-muted">Duration</small>
+                            </div>
+                            <div class="col-6">
+                                <h3 class="mb-0 text-success">${stats.throughput_mb_per_minute || 0}</h3>
+                                <small class="text-muted">MB/min</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mb-2">
+                    <div class="card-header py-1"><i class="fas fa-file"></i> Summary</div>
+                    <div class="card-body p-2">
+                        <table class="table table-sm mb-0">
+                            <tr><td>Documents:</td><td class="text-right"><strong>${stats.total_documents || 0}</strong></td></tr>
+                            <tr><td>Files:</td><td class="text-right"><strong>${stats.total_files || 0}</strong></td></tr>
+                            <tr><td>Total Size:</td><td class="text-right"><strong>${stats.total_mb || 0} MB</strong></td></tr>
+                            <tr><td>Avg/Doc:</td><td class="text-right"><strong>${stats.avg_time_per_document_seconds || 0}s</strong></td></tr>
+                            <tr><td>Avg/MB:</td><td class="text-right"><strong>${stats.avg_time_per_mb_seconds || 0}s</strong></td></tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="card mb-2 bg-light">
+                    <div class="card-header py-1"><i class="fas fa-cog"></i> Configuration</div>
+                    <div class="card-body p-2">
+                        <table class="table table-sm mb-0">
+                            <tr><td>Workers:</td><td class="text-right"><strong>${stats.workers || '-'}</strong></td></tr>
+                            <tr><td>Pacing:</td><td class="text-right"><strong>${stats.pacing_seconds || '-'}s</strong></td></tr>
+                        </table>
+                    </div>
+                </div>
+                
+                ${stats.file_size_analysis ? `
+                <div class="card mb-2 ${stats.file_size_analysis.size_errors > 0 ? 'border-danger' : 'border-success'}">
+                    <div class="card-header py-1 ${stats.file_size_analysis.size_errors > 0 ? 'bg-danger' : 'bg-success'} text-white">
+                        <i class="fas fa-file-alt"></i> File Analysis
+                    </div>
+                    <div class="card-body p-2">
+                        <table class="table table-sm mb-0">
+                            <tr><td>Successful:</td><td class="text-right text-success"><strong>${stats.file_size_analysis.successful_files || 0}</strong></td></tr>
+                            <tr><td>Failed:</td><td class="text-right text-danger"><strong>${stats.file_size_analysis.failed_files || 0}</strong></td></tr>
+                            <tr><td>Max Success Size:</td><td class="text-right"><strong>${stats.file_size_analysis.max_successful_size_mb || 0} MB</strong></td></tr>
+                            ${stats.file_size_analysis.estimated_limit_mb ? `<tr><td>Est. Limit:</td><td class="text-right text-warning"><strong>~${stats.file_size_analysis.estimated_limit_mb} MB</strong></td></tr>` : ''}
+                        </table>
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+            
+            <!-- Middle Column: Timing Analysis -->
+            <div class="col-lg-4">
+                ${stats.timing_analysis ? `
+                <div class="card mb-2 border-info">
+                    <div class="card-header bg-info text-white py-1">
+                        <i class="fas fa-stopwatch"></i> Timing Analysis
+                    </div>
+                    <div class="card-body p-2">
+                        <div class="row text-center mb-2">
+                            <div class="col-4">
+                                <h4 class="mb-0">${stats.timing_analysis.avg_seconds_per_mb || '-'}</h4>
+                                <small>s/MB</small>
+                            </div>
+                            <div class="col-4">
+                                <h4 class="mb-0">${stats.timing_analysis.max_actual_time_seconds || '-'}</h4>
+                                <small>Max (s)</small>
+                            </div>
+                            <div class="col-4">
+                                <h4 class="mb-0 text-success">${stats.timing_analysis.recommended_pacing_seconds || '-'}</h4>
+                                <small>Rec. Pacing</small>
+                            </div>
+                        </div>
+                        
+                        ${stats.timing_analysis.file_details && stats.timing_analysis.file_details.length > 0 ? `
+                        <div style="max-height: 280px; overflow-y: auto;">
+                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
+                                <thead class="thead-light">
+                                    <tr><th>File</th><th>MB</th><th>Time</th><th>s/MB</th></tr>
+                                </thead>
+                                <tbody>
+                                    ${stats.timing_analysis.file_details.map(f => `
+                                        <tr class="${f.status === 'SUCCESS' ? '' : 'table-danger'}">
+                                            <td title="${f.file || ''}">${(f.file || '-').substring(0, 20)}${(f.file || '').length > 20 ? '...' : ''}</td>
+                                            <td>${f.size_mb || '-'}</td>
+                                            <td><strong>${f.actual_time_seconds || '-'}</strong></td>
+                                            <td>${f.size_mb > 0 ? (f.actual_time_seconds / f.size_mb).toFixed(1) : '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        ` : '<p class="text-muted mb-0">No timing data available</p>'}
+                    </div>
+                </div>
+                ` : `
+                <div class="card mb-2 border-secondary">
+                    <div class="card-header bg-secondary text-white py-1">
+                        <i class="fas fa-stopwatch"></i> Timing Analysis
+                    </div>
+                    <div class="card-body p-2 text-center text-muted">
+                        <p class="mb-0">No timing data available</p>
+                        <small>Run a new batch to collect timing data</small>
+                    </div>
+                </div>
+                `}
+            </div>
+            
+            <!-- Right Column: Error Analysis -->
+            <div class="col-lg-4">
+                ${stats.error_analysis && stats.error_analysis.total_errors > 0 ? `
+                <div class="card mb-2 border-danger">
+                    <div class="card-header bg-danger text-white py-1">
+                        <i class="fas fa-exclamation-circle"></i> Errors (${stats.error_analysis.total_errors})
+                    </div>
+                    <div class="card-body p-2">
+                        <table class="table table-sm table-bordered mb-2" style="font-size: 0.85rem;">
+                            <thead class="thead-dark">
+                                <tr><th>Category</th><th>Count</th></tr>
+                            </thead>
+                            <tbody>
+                                ${stats.error_analysis.categories.map(cat => `
+                                    <tr>
+                                        <td><code>${cat.category}</code><br><small class="text-muted">${cat.description}</small></td>
+                                        <td class="text-center"><span class="badge badge-danger">${cat.count}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        
+                        ${stats.error_analysis.details && stats.error_analysis.details.length > 0 ? `
+                        <h6 class="mb-1">Details:</h6>
+                        <div style="max-height: 200px; overflow-y: auto;">
+                            <table class="table table-sm table-bordered table-striped mb-0" style="font-size: 0.75rem;">
+                                <thead class="thead-light">
+                                    <tr><th>ID</th><th>Category</th><th>Message</th></tr>
+                                </thead>
+                                <tbody>
+                                    ${stats.error_analysis.details.slice(0, 20).map(err => `
+                                        <tr>
+                                            <td>${err.staging_id || '-'}</td>
+                                            <td><span class="badge badge-danger">${err.category}</span></td>
+                                            <td title="${err.message || ''}">${err.message ? (err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message) : '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+                ` : `
+                <div class="card mb-2 border-success">
+                    <div class="card-header bg-success text-white py-1">
+                        <i class="fas fa-check-circle"></i> Error Analysis
+                    </div>
+                    <div class="card-body p-2 text-center">
+                        <h4 class="text-success mb-1"><i class="fas fa-check"></i></h4>
+                        <p class="mb-0">No errors detected</p>
+                    </div>
+                </div>
+                `}
+                
+                ${stats.file_size_analysis && stats.file_size_analysis.size_error_details && stats.file_size_analysis.size_error_details.length > 0 ? `
+                <div class="card mb-2 border-warning">
+                    <div class="card-header bg-warning text-dark py-1">
+                        <i class="fas fa-exclamation-triangle"></i> Size Errors
+                    </div>
+                    <div class="card-body p-2">
+                        <div style="max-height: 150px; overflow-y: auto;">
+                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
+                                <thead class="thead-light">
+                                    <tr><th>File</th><th>Size</th></tr>
+                                </thead>
+                                <tbody>
+                                    ${stats.file_size_analysis.size_error_details.map(e => `
+                                        <tr class="table-danger">
+                                            <td title="${e.file || ''}">${(e.file || '-').substring(0, 25)}...</td>
+                                            <td>${e.size_mb || '-'} MB</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    
+    $(modal).modal('show');
+}
+</script>
+{% endblock %}

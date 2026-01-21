@@ -1,0 +1,807 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Validate Migration Batch{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Validate Migration Batch</h2>
+            <p class="text-muted">Review and approve documents for migration</p>
+            <p><strong>Batch ID:</strong> <code>{{ batch_id }}</code></p>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="mb-0">Staging Records</h5>
+                        <small id="selectionInfo" class="text-muted">0 records selected</small>
+                    </div>
+                    <div class="btn-group">
+                        <button onclick="window.location.href='/logs?batch_id={{ batch_id }}'" class="btn btn-secondary" title="View detailed logs">
+                            <i class="fas fa-file-alt"></i> View Logs
+                        </button>
+                        
+                        <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Show/hide columns">
+                            <i class="fas fa-columns"></i> Columns
+                        </button>
+                        <button onclick="approveSelected()" class="btn btn-success" id="approveBtn" disabled>
+                            <i class="fas fa-check"></i> Approve Selected
+                        </button>
+                        <button onclick="skipSelected()" class="btn btn-warning" id="skipBtn" disabled>
+                            <i class="fas fa-times"></i> Skip Selected
+                        </button>
+                        <button onclick="selectAll()" class="btn btn-secondary" id="selectAllBtn">
+                            <i class="fas fa-check-double"></i> Select All
+                        </button>
+                        <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
+                            <i class="fas fa-play-circle"></i> Execute Selected
+                        </button>
+                        <button onclick="executeApproved()" class="btn btn-primary" id="executeBtn">
+                            <i class="fas fa-play"></i> Execute Approved
+                        </button>
+                        <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
+                            <i class="fas fa-redo"></i> Retry Failed
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <input type="text" id="searchInput" class="form-control" placeholder="Search records...">
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped table-hover" id="recordsTable">
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" id="selectAllCheckbox"></th>
+                                    <th data-column="id">ID</th>
+                                    <th data-column="batch_id">Batch ID</th>
+                                    <th data-column="source_doc">Source Doc</th>
+                                    <th data-column="source_loioid">Source LOIO</th>
+                                    <th data-column="target_doc">Target Doc</th>
+                                    <th data-column="type_info">Type/Ver/Part</th>
+                                    <th data-column="description">Description</th>
+                                    <th data-column="filename">Filename</th>
+                                    <th data-column="file_size">File Size</th>
+                                    <th data-column="mime_type">MIME Type</th>
+                                    <th data-column="auth_group">Auth Group</th>
+                                    <th data-column="validation">Validation</th>
+                                    <th data-column="execution">Execution</th>
+                                    <th data-column="created_at">Created At</th>
+                                    <th data-column="created_by">Created By</th>
+                                    <th data-column="validated_at">Validated At</th>
+                                    <th data-column="validated_by">Validated By</th>
+                                    <th data-column="exec_started">Exec Started</th>
+                                    <th data-column="exec_completed">Exec Completed</th>
+                                    <th data-column="exec_error">Exec Error</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recordsBody">
+                                <tr>
+                                    <td colspan="10" class="text-center">
+                                        <div class="spinner-border" role="status">
+                                            <span class="sr-only">Loading...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Record Detail Modal -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Record Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body" id="detailContent">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Column Visibility Modal -->
+<div class="modal fade" id="columnModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Show/Hide Columns</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_id" value="id" checked>
+                    <label class="form-check-label" for="col_id">ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_source_doc" value="source_doc" checked>
+                    <label class="form-check-label" for="col_source_doc">Source Document</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_doc" value="target_doc" checked>
+                    <label class="form-check-label" for="col_target_doc">Target Document</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_type_info" value="type_info" checked>
+                    <label class="form-check-label" for="col_type_info">Type/Version/Part</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_description" value="description" checked>
+                    <label class="form-check-label" for="col_description">Description</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
+                    <label class="form-check-label" for="col_auth_group">Authorization Group</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_validation" value="validation" checked>
+                    <label class="form-check-label" for="col_validation">Validation Status</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_execution" value="execution" checked>
+                    <label class="form-check-label" for="col_execution">Execution Status</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
+                    <label class="form-check-label" for="col_batch_id">Batch ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_source_loioid" value="source_loioid">
+                    <label class="form-check-label" for="col_source_loioid">Source LOIO ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename">
+                    <label class="form-check-label" for="col_filename">Filename</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_file_size" value="file_size">
+                    <label class="form-check-label" for="col_file_size">File Size</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_mime_type" value="mime_type">
+                    <label class="form-check-label" for="col_mime_type">MIME Type</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_created_at" value="created_at">
+                    <label class="form-check-label" for="col_created_at">Created At</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_created_by" value="created_by">
+                    <label class="form-check-label" for="col_created_by">Created By</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_validated_at" value="validated_at">
+                    <label class="form-check-label" for="col_validated_at">Validated At</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_validated_by" value="validated_by">
+                    <label class="form-check-label" for="col_validated_by">Validated By</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_started" value="exec_started">
+                    <label class="form-check-label" for="col_exec_started">Execution Started</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_completed" value="exec_completed">
+                    <label class="form-check-label" for="col_exec_completed">Execution Completed</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_error" value="exec_error">
+                    <label class="form-check-label" for="col_exec_error">Execution Error</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="resetColumns()">Reset</button>
+                <button type="button" class="btn btn-primary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let allRecords = [];
+let selectedRecords = new Set();
+let currentEditingRecordId = null;
+const batchId = '{{ batch_id }}';
+
+// Column visibility state
+let visibleColumns = {
+    'id': true,
+    'batch_id': false,
+    'source_doc': true,
+    'source_loioid': false,
+    'target_doc': true,
+    'type_info': true,
+    'description': true,
+    'filename': false,
+    'file_size': false,
+    'mime_type': false,
+    'auth_group': true,
+    'validation': true,
+    'execution': true,
+    'created_at': false,
+    'created_by': false,
+    'validated_at': false,
+    'validated_by': false,
+    'exec_started': false,
+    'exec_completed': false,
+    'exec_error': false
+};
+
+// Load column preferences from localStorage
+function loadColumnPreferences() {
+    const saved = localStorage.getItem('migrate_columns_' + batchId);
+    if (saved) {
+        visibleColumns = JSON.parse(saved);
+    }
+    // Update checkboxes to match current state (when they exist)
+    Object.keys(visibleColumns).forEach(col => {
+        const checkbox = document.getElementById('col_' + col);
+        if (checkbox) {
+            checkbox.checked = visibleColumns[col];
+        }
+    });
+}
+
+// Apply column visibility to table
+function applyColumnVisibility() {
+    Object.keys(visibleColumns).forEach(col => {
+        const visible = visibleColumns[col];
+        
+        // Update table header
+        const headers = document.querySelectorAll(`th[data-column="${col}"]`);
+        headers.forEach(th => {
+            th.style.display = visible ? '' : 'none';
+        });
+        
+        // Update table cells
+        const columnIndex = getColumnIndex(col);
+        if (columnIndex >= 0) {
+            const rows = document.querySelectorAll('#recordsTable tbody tr');
+            rows.forEach(row => {
+                const cell = row.cells[columnIndex];
+                if (cell) {
+                    cell.style.display = visible ? '' : 'none';
+                }
+            });
+        }
+    });
+}
+
+// Save column preferences to localStorage
+function saveColumnPreferences() {
+    localStorage.setItem('migrate_columns_' + batchId, JSON.stringify(visibleColumns));
+}
+
+// Toggle column visibility
+function toggleColumn(columnName, visible) {
+    visibleColumns[columnName] = visible;
+    saveColumnPreferences();
+    
+    // Update table header
+    const headers = document.querySelectorAll(`th[data-column="${columnName}"]`);
+    headers.forEach(th => {
+        th.style.display = visible ? '' : 'none';
+    });
+    
+    // Update table cells
+    const columnIndex = getColumnIndex(columnName);
+    const rows = document.querySelectorAll('#recordsTable tbody tr');
+    rows.forEach(row => {
+        const cell = row.cells[columnIndex];
+        if (cell) {
+            cell.style.display = visible ? '' : 'none';
+        }
+    });
+}
+
+// Get column index by name
+function getColumnIndex(columnName) {
+    const headers = document.querySelectorAll('#recordsTable thead th');
+    for (let i = 0; i < headers.length; i++) {
+        if (headers[i].dataset.column === columnName) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Reset columns to default
+function resetColumns() {
+    Object.keys(visibleColumns).forEach(col => {
+        visibleColumns[col] = true;
+        const checkbox = document.getElementById('col_' + col);
+        if (checkbox) {
+            checkbox.checked = true;
+        }
+        toggleColumn(col, true);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load column preferences from localStorage
+    loadColumnPreferences();
+    
+    // Apply initial column visibility to table headers immediately
+    applyColumnVisibility();
+    
+    // Then load records
+    loadRecords();
+    
+    // Column toggle event listeners
+    document.querySelectorAll('.column-toggle').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            toggleColumn(this.value, this.checked);
+        });
+    });
+    
+    // Search functionality
+    document.getElementById('searchInput').addEventListener('input', function() {
+        filterRecords(this.value);
+    });
+    
+    // Select all checkbox
+    document.getElementById('selectAllCheckbox').addEventListener('change', function() {
+        const checkboxes = document.querySelectorAll('.record-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = this.checked;
+            if (this.checked) {
+                selectedRecords.add(parseInt(cb.dataset.id));
+            } else {
+                selectedRecords.delete(parseInt(cb.dataset.id));
+            }
+        });
+        updateSelectionInfo();
+    });
+});
+
+function loadRecords() {
+    fetch(`/batch/${batchId}/records`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                allRecords = data.records;
+                displayRecords(allRecords);
+            } else {
+                showError('Failed to load records: ' + data.error);
+            }
+        })
+        .catch(error => {
+            showError('Error loading records: ' + error);
+        });
+}
+
+function displayRecords(records) {
+    const tbody = document.getElementById('recordsBody');
+    
+    if (records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="22" class="text-center">No records found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = records.map(record => {
+        const validationBadge = getValidationBadge(record.validation_status, record.user_approved, record.skip_migration, record.validation_notes);
+        const executionBadge = getExecutionBadge(record.execution_status, record.user_approved);
+        const typeInfo = `${record.source_documenttype}/${record.source_documentversion}/${record.source_documentpart}`;
+        const fileSize = (record.file_size_bytes !== null && record.file_size_bytes !== undefined)
+            ? formatFileSize(Number(record.file_size_bytes))
+            : '-';
+        const createdAt = record.created_at ? formatDateTime(record.created_at) : '-';
+        const validatedAt = record.validated_at ? formatDateTime(record.validated_at) : '-';
+        const execStarted = record.execution_started_at ? formatDateTime(record.execution_started_at) : '-';
+        const execCompleted = record.execution_completed_at ? formatDateTime(record.execution_completed_at) : '-';
+        
+        return `
+            <tr class="${record.skip_migration ? 'table-secondary' : ''}">
+                <td>
+                    <input type="checkbox" class="record-checkbox" 
+                           data-id="${record.id}" 
+                           onchange="toggleSelection(${record.id})"
+                           ${record.skip_migration ? 'disabled' : ''}>
+                </td>
+                <td data-column="id">${record.id}</td>
+                <td data-column="batch_id"><small>${record.batch_id || '-'}</small></td>
+                <td data-column="source_doc"><code>${record.source_documentnumber}</code></td>
+                <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
+                <td data-column="target_doc"><code>${record.target_documentnumber || '-'}</code></td>
+                <td data-column="type_info"><small>${typeInfo}</small></td>
+                <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
+                <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
+                <td data-column="file_size"><small>${fileSize}</small></td>
+                <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
+                <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
+                <td data-column="validation">${validationBadge}</td>
+                <td data-column="execution">${executionBadge}</td>
+                <td data-column="created_at"><small>${createdAt}</small></td>
+                <td data-column="created_by"><small>${record.created_by || '-'}</small></td>
+                <td data-column="validated_at"><small>${validatedAt}</small></td>
+                <td data-column="validated_by"><small>${record.validated_by || '-'}</small></td>
+                <td data-column="exec_started"><small>${execStarted}</small></td>
+                <td data-column="exec_completed"><small>${execCompleted}</small></td>
+                <td data-column="exec_error"><small>${truncate(record.execution_error, 30) || '-'}</small></td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info" 
+                            onclick="viewRecordDetail(${record.id})"
+                            title="View Details">
+                        <i class="fas fa-info-circle"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Apply column visibility after rendering
+    applyColumnVisibility();
+}
+
+function getValidationBadge(status, approved, skipped, notes) {
+    if (skipped) {
+        return '<span class="badge badge-secondary">Skipped</span>';
+    }
+    if (approved) {
+        return '<span class="badge badge-success">Approved</span>';
+    }
+    if (status === 'pending') {
+        // Always show generic review hint to avoid confusing translation message
+        const hint = 'Pending: review';
+        return `<span class="badge badge-warning" title="${escapeHtml(notes || '')}">${hint}</span>`;
+    }
+    return '<span class="badge badge-info">' + status + '</span>';
+}
+
+function getExecutionBadge(status, approved) {
+    const map = {
+        'success': '<span class="badge badge-success">Success</span>',
+        'failed': '<span class="badge badge-danger">Failed</span>',
+        'partial': '<span class="badge badge-warning">Partial</span>'
+    };
+    if (status === 'pending') {
+        const hint = approved ? 'Pending: queued' : 'Pending: not approved';
+        return `<span class="badge badge-secondary">${hint}</span>`;
+    }
+    return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function toggleSelection(id) {
+    if (selectedRecords.has(id)) {
+        selectedRecords.delete(id);
+    } else {
+        selectedRecords.add(id);
+    }
+    updateSelectionInfo();
+}
+
+function selectAll() {
+    const checkboxes = document.querySelectorAll('.record-checkbox:not([disabled])');
+    const allSelected = Array.from(checkboxes).every(cb => cb.checked);
+    
+    checkboxes.forEach(cb => {
+        cb.checked = !allSelected;
+        const id = parseInt(cb.dataset.id);
+        if (!allSelected) {
+            selectedRecords.add(id);
+        } else {
+            selectedRecords.delete(id);
+        }
+    });
+    
+    updateSelectionInfo();
+}
+
+function updateSelectionInfo() {
+    document.getElementById('selectionInfo').textContent = `${selectedRecords.size} records selected`;
+    document.getElementById('approveBtn').disabled = selectedRecords.size === 0;
+    document.getElementById('skipBtn').disabled = selectedRecords.size === 0;
+    document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
+}
+
+function approveSelected() {
+    if (selectedRecords.size === 0) return;
+    
+    fetch(`/batch/${batchId}/approve`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ record_ids: Array.from(selectedRecords) })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Successfully approved ${selectedRecords.size} records`);
+            selectedRecords.clear();
+            loadRecords();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Error approving records: ' + error);
+    });
+}
+
+function skipSelected() {
+    if (selectedRecords.size === 0) return;
+    
+    if (!confirm(`Mark ${selectedRecords.size} records to skip migration?`)) {
+        return;
+    }
+    
+    fetch(`/batch/${batchId}/skip`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ record_ids: Array.from(selectedRecords) })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Successfully marked ${selectedRecords.size} records to skip`);
+            selectedRecords.clear();
+            loadRecords();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Error skipping records: ' + error);
+    });
+}
+
+function executeApproved() {
+    if (!confirm('Execute migration for all approved records in this batch?')) {
+        return;
+    }
+    
+    const btn = document.getElementById('executeBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Executing...';
+    
+    fetch('/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            loadRecords();
+        } else {
+            alert('Migration failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute Approved';
+    })
+    .catch(error => {
+        alert('Error executing migration: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute Approved';
+    });
+}
+
+function executeSelected() {
+    if (selectedRecords.size === 0) {
+        alert('Please select records to execute');
+        return;
+    }
+    
+    if (!confirm(`Execute migration for ${selectedRecords.size} selected record(s)?`)) {
+        return;
+    }
+    
+    const btn = document.getElementById('executeSelectedBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Executing...';
+    
+    fetch('/execute_selected', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+            batch_id: batchId,
+            record_ids: Array.from(selectedRecords)
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            selectedRecords.clear();
+            loadRecords();
+        } else {
+            alert('Migration failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play-circle"></i> Execute Selected';
+    })
+    .catch(error => {
+        alert('Error executing migration: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play-circle"></i> Execute Selected';
+    });
+}
+
+function viewRecordDetail(recordId) {
+    $('#detailModal').modal('show');
+    $('#detailContent').html('<div class="text-center"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Loading details...</p></div>');
+    
+    // Fetch record details from results API
+    fetch(`/batch/${batchId}/results`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const record = data.results.find(r => r.id === recordId);
+                if (record) {
+                    displayRecordDetail(record);
+                } else {
+                    $('#detailContent').html('<div class="alert alert-warning">Record not found in execution results</div>');
+                }
+            } else {
+                $('#detailContent').html(`<div class="alert alert-danger">Failed to load details: ${data.error}</div>`);
+            }
+        })
+        .catch(error => {
+            $('#detailContent').html(`<div class="alert alert-danger">Error loading details: ${error}</div>`);
+        });
+}
+
+function displayRecordDetail(record) {
+    let html = '<div class="row">';
+    
+    // Document Information
+    html += '<div class="col-md-6"><h6 class="text-primary">Document Information</h6>';
+    html += `<table class="table table-sm table-bordered">`;
+    html += `<tr><th>ID</th><td>${record.id}</td></tr>`;
+    html += `<tr><th>Source Document</th><td><code>${record.source_documentnumber}</code></td></tr>`;
+    html += `<tr><th>Target Document</th><td><code>${record.target_documentnumber || '-'}</code></td></tr>`;
+    html += `<tr><th>Document Type</th><td>${record.source_documenttype}</td></tr>`;
+    html += `<tr><th>Description</th><td>${record.source_description || '-'}</td></tr>`;
+    html += `<tr><th>Auth Group</th><td>${record.authorization_group || '-'}</td></tr>`;
+    html += `</table></div>`;
+    
+    // Execution Information
+    html += '<div class="col-md-6"><h6 class="text-primary">Execution Information</h6>';
+    html += `<table class="table table-sm table-bordered">`;
+    html += `<tr><th>Status</th><td>${getExecutionBadge(record.execution_status)}</td></tr>`;
+    html += `<tr><th>Validated By</th><td>${record.validated_by || '-'}</td></tr>`;
+    html += `<tr><th>Validated At</th><td>${record.validated_at ? new Date(record.validated_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>Completed At</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>File</th><td>${record.filename || '-'}</td></tr>`;
+    html += `<tr><th>MIME Type</th><td>${record.mime_type || '-'}</td></tr>`;
+    html += `</table></div>`;
+    
+    html += '</div>';
+    
+    // Validation Notes
+    if (record.validation_notes) {
+        html += '<div class="row mt-3"><div class="col-12"><h6 class="text-primary">Validation Notes</h6>';
+        html += `<div class="alert alert-info">${escapeHtml(record.validation_notes)}</div></div></div>`;
+    }
+    
+    // Execution Error
+    if (record.execution_error) {
+        html += '<div class="row mt-3"><div class="col-12"><h6 class="text-danger">Execution Error</h6>';
+        let errorContent = '';
+        if (typeof record.execution_error === 'object') {
+            errorContent = JSON.stringify(record.execution_error, null, 2);
+        } else {
+            errorContent = record.execution_error;
+        }
+        html += `<pre class="alert alert-danger" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto;">${escapeHtml(errorContent)}</pre></div></div>`;
+    }
+    
+    $('#detailContent').html(html);
+}
+
+
+
+function retryFailed() {
+    if (!confirm('Re-execute all failed records in this batch?')) {
+        return;
+    }
+    
+    const btn = document.getElementById('retryBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Retrying...';
+    
+    fetch('/retry_failed', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Retry completed!\n\nRetried: ${data.retried}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            loadRecords();
+        } else {
+            alert('Retry failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
+    })
+    .catch(error => {
+        alert('Error retrying failed records: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
+    });
+}
+
+function filterRecords(searchTerm) {
+    const filtered = allRecords.filter(record => {
+        const searchStr = searchTerm.toLowerCase();
+        return (
+            record.source_documentnumber.toLowerCase().includes(searchStr) ||
+            (record.target_documentnumber && record.target_documentnumber.toLowerCase().includes(searchStr)) ||
+            (record.source_description && record.source_description.toLowerCase().includes(searchStr))
+        );
+    });
+    displayRecords(filtered);
+}
+
+function truncate(str, len) {
+    if (!str) return '-';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+function showError(message) {
+    console.error(message);
+    const tbody = document.getElementById('recordsBody');
+    tbody.innerHTML = `<tr><td colspan="10" class="text-danger">${message}</td></tr>`;
+}
+</script>
+{% endblock %}

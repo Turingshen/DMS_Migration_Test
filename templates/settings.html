@@ -1,0 +1,203 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="fas fa-cog"></i> Settings</h2>
+            <p class="text-muted">Konfiguriere die Migration-Parameter</p>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-tachometer-alt"></i> Performance Settings</h5>
+                </div>
+                <div class="card-body">
+                    <form id="settingsForm">
+                        <div class="form-group">
+                            <label for="maxWorkers">
+                                <i class="fas fa-users"></i> Max API Workers
+                            </label>
+                            <input type="number" class="form-control" id="maxWorkers" 
+                                   value="{{ settings.max_workers }}" min="1" max="50">
+                            <small class="form-text text-muted">
+                                Anzahl paralleler API-Aufrufe (1-50). Mehr Workers = schneller, aber höhere Last.
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="pacingSeconds">
+                                <i class="fas fa-clock"></i> Pacing (Sekunden)
+                            </label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="pacingSeconds" 
+                                       value="{{ settings.pacing_seconds }}" min="0" max="60" step="0.5">
+                                <div class="input-group-append">
+                                    <span class="input-group-text" id="pacingModeLabel">
+                                        {% if settings.pacing_seconds == 0 %}
+                                            <span class="badge badge-success">Dynamisch</span>
+                                        {% else %}
+                                            <span class="badge badge-secondary">Fixiert</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                            <small class="form-text text-muted">
+                                <strong>0 = Dynamisches Pacing</strong> (empfohlen): 5s für ≤1MB, 10s für 1-10MB, 20s für 10-50MB, 45s für >50MB<br>
+                                <strong>>0 = Fixiertes Pacing</strong>: Gleiche Zeit für alle Dokumente
+                            </small>
+                        </div>
+
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            <strong>Empfehlung:</strong><br>
+                            <ul class="mb-0">
+                                <li>Formel: <code>Pacing / Workers ≈ 1.5</code> für optimalen Durchsatz</li>
+                                <li>Beispiel: 2 Workers, 3s Pacing → 1.5s effektive Zeit pro Request</li>
+                                <li>Beispiel: 10 Workers, 15s Pacing → 1.5s effektive Zeit pro Request</li>
+                            </ul>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Berechneter Durchsatz:</label>
+                            <div class="alert alert-secondary" id="throughputInfo">
+                                <strong id="throughputValue">-</strong> Dokumente pro Minute (theoretisch)
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-lg btn-block">
+                            <i class="fas fa-save"></i> Einstellungen speichern
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0"><i class="fas fa-info-circle"></i> Aktuelle Konfiguration</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-bordered">
+                        <tr>
+                            <th>Source System</th>
+                            <td><span class="badge badge-info">{{ source_system | upper }}</span> {{ source_system_label }}</td>
+                        </tr>
+                        <tr>
+                            <th>Target System</th>
+                            <td><span class="badge badge-success">{{ target_system | upper }}</span> {{ target_system_label }}</td>
+                        </tr>
+                        <tr>
+                            <th>Max Workers</th>
+                            <td id="currentWorkers">{{ settings.max_workers }}</td>
+                        </tr>
+                        <tr>
+                            <th>Pacing</th>
+                            <td id="currentPacing">
+                                {% if settings.pacing_seconds == 0 %}
+                                    <span class="badge badge-success">Dynamisch</span> (5-45s basierend auf Dateigröße)
+                                {% else %}
+                                    <span class="badge badge-secondary">Fixiert</span> {{ settings.pacing_seconds }} Sekunden
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card mt-3">
+                <div class="card-header bg-warning">
+                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> Hinweise</h5>
+                </div>
+                <div class="card-body">
+                    <ul>
+                        <li><strong>Zu viele Workers</strong> können zu Rate Limiting Fehlern führen</li>
+                        <li><strong>Zu wenig Pacing</strong> kann die API überlasten</li>
+                        <li>Änderungen gelten für <strong>neue</strong> Batch-Ausführungen</li>
+                        <li>Aktuelle Migrationen werden nicht beeinflusst</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    updateThroughput();
+    
+    document.getElementById('maxWorkers').addEventListener('input', updateThroughput);
+    document.getElementById('pacingSeconds').addEventListener('input', updateThroughput);
+});
+
+function updateThroughput() {
+    const workers = parseInt(document.getElementById('maxWorkers').value) || 1;
+    const pacing = parseFloat(document.getElementById('pacingSeconds').value);
+    
+    // Update pacing mode label
+    const pacingLabel = document.getElementById('pacingModeLabel');
+    if (pacing === 0) {
+        pacingLabel.innerHTML = '<span class="badge badge-success">Dynamisch</span>';
+        // For dynamic pacing, estimate average (tiny=5, small=10, medium=20, large=45) ≈ 15s average
+        const avgPacing = 15;
+        const throughput = (workers * (60 / avgPacing)).toFixed(1);
+        document.getElementById('throughputValue').textContent = throughput + ' (Durchschnitt bei dynamischem Pacing)';
+    } else {
+        pacingLabel.innerHTML = '<span class="badge badge-secondary">Fixiert</span>';
+        const throughput = (workers * (60 / pacing)).toFixed(1);
+        document.getElementById('throughputValue').textContent = throughput;
+    }
+}
+
+document.getElementById('settingsForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const maxWorkers = parseInt(document.getElementById('maxWorkers').value);
+    const pacingSeconds = parseFloat(document.getElementById('pacingSeconds').value);
+    
+    if (maxWorkers < 1 || maxWorkers > 50) {
+        alert('Max Workers muss zwischen 1 und 50 liegen');
+        return;
+    }
+    
+    if (pacingSeconds < 0 || pacingSeconds > 60) {
+        alert('Pacing muss zwischen 0 und 60 Sekunden liegen');
+        return;
+    }
+    
+    fetch('/settings', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            max_workers: maxWorkers,
+            pacing_seconds: pacingSeconds
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Einstellungen gespeichert!');
+            document.getElementById('currentWorkers').textContent = maxWorkers;
+            if (pacingSeconds === 0) {
+                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-success">Dynamisch</span> (5-45s basierend auf Dateigröße)';
+            } else {
+                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-secondary">Fixiert</span> ' + pacingSeconds + ' Sekunden';
+            }
+        } else {
+            alert('Fehler beim Speichern: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Fehler: ' + error);
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,1034 @@
+"""
+Step 2: Execute migration based on approved staging records.
+Reads from staging database and performs API calls.
+"""
+
+import pandas as pd
+import datetime as dt
+import time
+import requests
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from sqlalchemy import text
+from flask import session as http_session
+
+# Global migration lock to prevent parallel executions
+_migration_lock = threading.Lock()
+_active_migrations = {}  # batch_id -> start_time
+
+from app_config import Config, MiscEngine
+from app.process import (
+    prepare_session_headers, 
+    get_info,
+    _extract_error_fields,
+    _sanitize_filename,
+    _classify_error,
+    get_error_description,
+    MAX_API_WORKERS,
+    ADD_UP_TO,
+    MAX_DESC_LEN,
+    read_sap_system,
+    write_sap_system
+)
+from app.logger import get_logger
+
+cfg = Config.load()
+misc_db = MiscEngine.load()
+misc_engine = misc_db.engine
+
+
+# Dynamic pacing based on file size (in seconds)
+# Matches frontend calculation in preview.html
+PACING_BUCKETS = {
+    'tiny':    {'max_mb': 1,    'pacing': 5},   # ≤1MB: Fast batch processing
+    'small':   {'max_mb': 10,   'pacing': 10},  # 1-10MB: Normal processing
+    'medium':  {'max_mb': 50,   'pacing': 20},  # 10-50MB: Larger files
+    'large':   {'max_mb': float('inf'), 'pacing': 45},  # >50MB: Very large
+    'unknown': {'pacing': 5}    # Unknown size: Assume small (same as tiny)
+}
+
+
+def get_dynamic_pacing(file_size_bytes):
+    """
+    Calculate dynamic pacing based on file size.
+    Smaller files get shorter pacing, larger files get more time.
+    
+    Args:
+        file_size_bytes: File size in bytes (None if unknown)
+        
+    Returns:
+        Pacing time in seconds
+    """
+    import math
+    # Handle None, NaN, and invalid values - use tiny pacing as default for unknown small files
+    try:
+        if file_size_bytes is None:
+            return PACING_BUCKETS['tiny']['pacing']  # Assume small file if unknown
+        if math.isnan(float(file_size_bytes)):
+            return PACING_BUCKETS['tiny']['pacing']
+        if file_size_bytes <= 0:
+            return PACING_BUCKETS['tiny']['pacing']
+    except (TypeError, ValueError):
+        return PACING_BUCKETS['tiny']['pacing']
+    
+    size_mb = file_size_bytes / (1024 * 1024)
+    
+    if size_mb <= 1:
+        return PACING_BUCKETS['tiny']['pacing']
+    elif size_mb <= 10:
+        return PACING_BUCKETS['small']['pacing']
+    elif size_mb <= 50:
+        return PACING_BUCKETS['medium']['pacing']
+    else:
+        return PACING_BUCKETS['large']['pacing']
+
+
+def load_approved_records(batch_id):
+    """Load records from staging that are pending execution."""
+    query = f"""
+        SELECT 
+            id,
+            source_documentnumber,
+            source_documentpart,
+            source_documenttype,
+            source_documentversion,
+            source_loioid,
+            source_description,
+            target_documentnumber,
+            target_documentpart,
+            target_documenttype,
+            target_documentversion,
+            authorization_group,
+            filename,
+            file_size_bytes,
+            skip_migration
+        FROM dbo.migration_staging
+        WHERE batch_id = '{batch_id}'
+            AND skip_migration = 0
+            AND execution_status = 'pending'
+        ORDER BY CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END, file_size_bytes ASC, id
+    """
+    
+    with misc_engine.begin() as con:
+        df = pd.read_sql(query, con)
+    
+    return df
+
+
+def load_specific_records(batch_id, record_ids):
+    """Load specific records by IDs for execution."""
+    if not record_ids:
+        return pd.DataFrame()
+    
+    ids_str = ','.join(str(id) for id in record_ids)
+    query = f"""
+        SELECT 
+            id,
+            source_documentnumber,
+            source_documentpart,
+            source_documenttype,
+            source_documentversion,
+            source_loioid,
+            source_description,
+            target_documentnumber,
+            target_documentpart,
+            target_documenttype,
+            target_documentversion,
+            authorization_group,
+            filename,
+            file_size_bytes,
+            skip_migration
+        FROM dbo.migration_staging
+        WHERE batch_id = '{batch_id}'
+            AND id IN ({ids_str})
+            AND skip_migration = 0
+        ORDER BY CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END, file_size_bytes ASC, id
+    """
+    
+    with misc_engine.begin() as con:
+        df = pd.read_sql(query, con)
+    
+    return df
+
+
+def update_execution_status(staging_id, status, error=None):
+    """Update execution status for a staging record."""
+    try:
+        update_query = """
+            UPDATE dbo.migration_staging
+            SET execution_status = :status,
+                execution_completed_at = GETUTCDATE(),
+                execution_error = :error
+            WHERE id = :staging_id
+        """
+        
+        with misc_engine.begin() as con:
+            con.execute(text(update_query), {
+                'status': status,
+                'error': str(error) if error else None,
+                'staging_id': staging_id
+            })
+    except Exception as e:
+        print(f"[UPDATE_ERROR] Failed to update staging_id={staging_id}: {e}")
+
+
+def update_metadata_fields(staging_id, loioid=None, description=None, filename=None, file_size=None, mime_type=None):
+    """Update metadata fields for a staging record after successful read."""
+    try:
+        updates = []
+        params = {'staging_id': staging_id}
+        
+        if loioid:
+            updates.append("source_loioid = :loioid")
+            params['loioid'] = loioid
+        if description:
+            updates.append("source_description = :description")
+            params['description'] = description
+        if filename:
+            updates.append("filename = :filename")
+            params['filename'] = filename
+        if file_size is not None:
+            updates.append("file_size_bytes = :file_size")
+            params['file_size'] = file_size
+        if mime_type:
+            updates.append("mime_type = :mime_type")
+            params['mime_type'] = mime_type
+        
+        if updates:
+            update_query = f"""
+                UPDATE dbo.migration_staging
+                SET {', '.join(updates)}
+                WHERE id = :staging_id
+            """
+            
+            with misc_engine.begin() as con:
+                con.execute(text(update_query), params)
+    except Exception as e:
+        print(f"[UPDATE_METADATA_ERROR] Failed to update metadata for staging_id={staging_id}: {e}")
+
+
+def is_auto_generated_id(doc_number):
+    """Check if document number is auto-generated by SAP.
+    
+    Auto-generated IDs are:
+    - Exactly 25 characters long
+    - Convert to integer after removing leading zeros
+    
+    Args:
+        doc_number: Document number to check
+        
+    Returns:
+        bool: True if auto-generated, False if manually assigned
+    """
+    if not doc_number:
+        return False
+    
+    doc_str = str(doc_number).strip()
+    
+    # Must be exactly 25 characters
+    if len(doc_str) != 25:
+        return False
+    
+    # Try to convert to integer after removing leading zeros
+    try:
+        int(doc_str.lstrip('0') or '0')
+        return True  # Successfully converted to int = auto-generated
+    except (ValueError, TypeError):
+        return False  # Failed to convert = manually assigned
+
+
+def execute_single_document(server_session, staging_record, session_snapshot):
+    """Execute migration for a single staging record."""
+    staging_id = staging_record['id']
+    batch_id = staging_record.get('batch_id')
+    logger = get_logger(batch_id=batch_id, staging_id=staging_id)
+    start_time = time.time()
+    
+    logger.info(f"Starting migration for document {staging_record['source_documentnumber']}", category="EXECUTE")
+    
+    try:
+        # Prepare session headers for read system
+        prepare_session_headers(server_session, session_snapshot, read_sap_system)
+        server_session.headers.pop('Slug', None)
+        
+        logger.debug(f"Fetching document info from {read_sap_system}", category="EXECUTE")
+        
+        # Get document info from source system
+        documents = get_info(
+            server_session,
+            read_sap_system,
+            staging_record['source_documentnumber'],
+            staging_record['source_documentpart'],
+            staging_record['source_documenttype'],
+            staging_record['source_documentversion']
+        )
+        
+        if documents[0] != 200:
+            import json
+            error_info = {'status_code': documents[0], 'reason': documents[1]}
+            error_msg = f"READ_FAILED {documents[0]} {documents[1]}"
+            error_json = json.dumps(error_info)
+            logger.error(error_msg, category="READ", details=error_info)
+            update_execution_status(staging_id, 'failed', error_json)
+            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+        
+        if not documents[2] or len(documents[2]) == 0:
+            error_msg = "READ_EMPTY - No documents found"
+            logger.warning(error_msg, category="READ")
+            update_execution_status(staging_id, 'failed', error_msg)
+            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+        
+        logger.info(f"Found {len(documents[2])} files to migrate", category="EXECUTE")
+        
+        # Extract metadata from first document for updating staging table
+        first_doc = documents[2][0] if documents[2] else {}
+        doc_loioid = first_doc.get('LOIOID')
+        doc_description = first_doc.get('Description') or first_doc.get('DocumentDescription')
+        
+        # Process each file in the document container
+        doc_created = False
+        results = []
+        metadata_updated = False
+        
+        for document in documents[2]:
+            # Fetch document content
+            selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
+            document_args = {k: document[k] for k in selected_keys}
+            formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
+            base_read_url = cfg.get(read_sap_system, 'api_list', 'document', 'base_url')
+            request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
+            
+            try:
+                response = server_session.get(request_url, timeout=300)  # 5 min timeout for large files
+            except Exception as read_ex:
+                error_msg = f'READ_TIMEOUT: {str(read_ex)}'
+                logger.error(f"File read timeout/error: {error_msg}", category="READ")
+                results.append({
+                    'file': document.get('LOIOID'), 
+                    'status': error_msg,
+                    'error_detail': {'status_code': 0, 'detail': str(read_ex)},
+                    'error_category': 'TIMEOUT'
+                })
+                continue
+            
+            if response.status_code != 200:
+                error_info = _extract_error_fields(response)
+                error_msg = f'READ_FAIL_{response.status_code}'
+                logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
+                results.append({
+                    'file': document.get('LOIOID'), 
+                    'status': error_msg,
+                    'error_detail': error_info,
+                    'error_category': _classify_error(error_info)
+                })
+                continue
+            
+            filename = _sanitize_filename(document.get('Docpath', '').split('/')[-1] or 'unnamed')
+            
+            # Update metadata fields in staging table (once, on first successful file read)
+            if not metadata_updated:
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+                file_size = len(response.content) if response.content else 0
+                
+                update_metadata_fields(
+                    staging_id,
+                    loioid=doc_loioid,
+                    description=doc_description,
+                    filename=filename,
+                    file_size=file_size,
+                    mime_type=mime_type
+                )
+                metadata_updated = True
+                logger.debug(f"Updated metadata: LOIOID={doc_loioid}, filename={filename}, size={file_size}, mime={mime_type}", category="EXECUTE")
+            
+            # Prepare for write operations
+            prepare_session_headers(server_session, session_snapshot, write_sap_system)
+            
+            # Create document info record (once per container)
+            if not doc_created:
+                doc_type = staging_record['target_documenttype']
+                doc_number = staging_record['target_documentnumber']
+                doc_version = staging_record['target_documentversion']
+                doc_part = staging_record['target_documentpart']
+                
+                # Check if source document number is auto-generated
+                source_doc_number = staging_record['source_documentnumber']
+                is_auto_id = is_auto_generated_id(source_doc_number)
+                
+                if is_auto_id:
+                    logger.info(f"Source document {source_doc_number} is auto-generated (len={len(source_doc_number)}). Target system will assign new ID.", category="CREATE")
+                else:
+                    logger.info(f"Source document {source_doc_number} is manually assigned. Using as target ID.", category="CREATE")
+                
+                # Prepare description
+                source_description = staging_record.get('source_description') or filename
+                if isinstance(source_description, str):
+                    source_description = source_description.strip()
+                if len(source_description) > MAX_DESC_LEN:
+                    source_description = source_description[:MAX_DESC_LEN]
+                
+                # Create payload
+                doc_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+                create_url = f"{doc_base_url}/A_DocumentInfoRecord"
+                server_session.headers.update({'Content-Type': 'application/json'})
+                
+                dms_payload = {
+                    'DocumentInfoRecordDocType': doc_type,
+                    'DocumentInfoRecordDocVersion': doc_version,
+                    'DocumentInfoRecordDocPart': doc_part,
+                    'to_DocDesc': [
+                        {'Language': 'DE', 'DocumentDescription': source_description},
+                        {'Language': 'EN', 'DocumentDescription': source_description}
+                    ]
+                }
+                
+                # Only include document number if it's manually assigned
+                # Auto-generated IDs should be omitted to let target system create new ID
+                if not is_auto_id:
+                    dms_payload['DocumentInfoRecordDocNumber'] = doc_number
+                    logger.debug(f"Including document number in payload: {doc_number}", category="CREATE")
+                else:
+                    logger.debug("Omitting document number from payload - target system will auto-generate", category="CREATE")
+                
+                # Add authorization group if available
+                if staging_record.get('authorization_group'):
+                    dms_payload['AuthorizationGroup'] = staging_record['authorization_group']
+                    logger.debug(f"Using authorization group: {staging_record['authorization_group']}", category="CREATE")
+                
+                logger.info(f"Creating document info record", category="CREATE")
+                create_resp = server_session.post(create_url, json=dms_payload)
+                
+                body_txt_lower = create_resp.text.lower() if create_resp.text else ''
+                
+                if create_resp.status_code in (200, 201):
+                    # For auto-generated IDs, extract the new document number from response
+                    if is_auto_id:
+                        try:
+                            response_data = create_resp.json()
+                            if response_data and 'd' in response_data:
+                                created_doc_number = response_data['d'].get('DocumentInfoRecordDocNumber')
+                                if created_doc_number:
+                                    doc_number = created_doc_number
+                                    # Update staging record with the new document number
+                                    with misc_engine.begin() as con:
+                                        con.execute(text(f"""
+                                            UPDATE dbo.migration_staging
+                                            SET target_documentnumber = :new_doc_number
+                                            WHERE id = :staging_id
+                                        """), {'new_doc_number': created_doc_number, 'staging_id': staging_id})
+                                    logger.info(f"Target system assigned new document number: {created_doc_number}", category="CREATE")
+                                else:
+                                    logger.warning("Could not extract new document number from response", category="CREATE")
+                        except Exception as e:
+                            logger.warning(f"Failed to extract new document number: {e}", category="CREATE")
+                    
+                    logger.info(f"Document created successfully: {doc_number} (status {create_resp.status_code})", category="CREATE")
+                    doc_created = True
+                elif create_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
+                    logger.warning(f"Document already exists, continuing: {doc_number}", category="CREATE")
+                    doc_created = True  # Tolerate existing
+                else:
+                    error_info = _extract_error_fields(create_resp)
+                    error_msg = f"CREATE_FAIL_{create_resp.status_code}"
+                    if error_info.get('detail'):
+                        error_msg += f": {error_info['detail']}"
+                    logger.error(error_msg, category="CREATE", details=error_info)
+                    import json
+                    error_json = json.dumps(error_info)
+                    update_execution_status(staging_id, 'failed', error_json)
+                    return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+            
+            # Upload attachment
+            if doc_created:
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+                
+                server_session.headers.update({'Content-Type': mime_type, 'Slug': filename})
+                
+                try:
+                    attachment_base_url = cfg.get(write_sap_system, 'api_list', 'attachment', 'base_url')
+                except Exception:
+                    attachment_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+                
+                # Use the doc_number that was either:
+                # 1. Set from staging_record at the start, OR
+                # 2. Updated from the CREATE response for auto-generated IDs
+                # Don't re-read from staging_record as it still has the old value!
+                # doc_number is already set correctly above
+                doc_type = staging_record['target_documenttype']
+                doc_version = staging_record['target_documentversion']
+                doc_part = staging_record['target_documentpart']
+                
+                attachment_url = (
+                    f"{attachment_base_url}/A_DocumentInfoRecordAttch"
+                    f"(DocumentInfoRecordDocType='{doc_type}',"
+                    f"DocumentInfoRecordDocNumber='{doc_number}',"
+                    f"DocumentInfoRecordDocVersion='{doc_version}',"
+                    f"DocumentInfoRecordDocPart='{doc_part}'"
+                    f")/DocumentInfoRecordToAttachmentNavigation"
+                )
+                
+                content = response.content or b' '  # Pad empty files
+                file_size = len(content)
+                file_size_mb = file_size / 1024 / 1024
+                logger.info(f"Uploading file: {filename} ({file_size} bytes / {file_size_mb:.2f} MB)", category="UPLOAD")
+                upload_resp = server_session.post(attachment_url, data=content)
+                
+                if upload_resp.status_code in (200, 201):
+                    upload_time = time.time() - start_time  # Actual processing time (no pacing)
+                    logger.info(f"File uploaded successfully: {filename} (status {upload_resp.status_code})", category="UPLOAD")
+                    results.append({
+                        'file': filename, 
+                        'status': 'SUCCESS', 
+                        'file_size': file_size,
+                        'file_size_mb': round(file_size_mb, 2),
+                        'actual_time_seconds': round(upload_time, 2)
+                    })
+                else:
+                    upload_time = time.time() - start_time
+                    error_info = _extract_error_fields(upload_resp)
+                    error_msg = f'UPLOAD_FAIL_{upload_resp.status_code}'
+                    
+                    # Detect size-related errors
+                    is_size_error = False
+                    size_error_indicators = ['too large', 'size', 'payload', 'entity', 'limit', 'exceeded', 'maximum']
+                    error_text = str(error_info).lower()
+                    if upload_resp.status_code in (413, 507) or any(ind in error_text for ind in size_error_indicators):
+                        is_size_error = True
+                        error_msg = f'SIZE_LIMIT_EXCEEDED_{upload_resp.status_code}'
+                        logger.error(f"File too large: {filename} ({file_size_mb:.2f} MB) - {error_msg}", category="UPLOAD", details=error_info)
+                    else:
+                        if error_info.get('detail'):
+                            error_msg += f": {error_info['detail'][:100]}"
+                        logger.error(f"Upload failed: {filename} - {error_msg}", category="UPLOAD", details=error_info)
+                    
+                    results.append({
+                        'file': filename, 
+                        'status': error_msg,
+                        'error_detail': error_info,
+                        'error_category': _classify_error(error_info),
+                        'file_size': file_size,
+                        'file_size_mb': round(file_size_mb, 2),
+                        'is_size_error': is_size_error,
+                        'actual_time_seconds': round(upload_time, 2)
+                    })
+        
+        # Calculate timing and size statistics
+        execution_time = time.time() - start_time
+        total_bytes = sum(r.get('file_size', 0) for r in results)
+        
+        # Determine overall status
+        if all(r['status'] == 'SUCCESS' for r in results):
+            logger.info(f"Migration completed successfully for all {len(results)} files in {execution_time:.2f}s ({total_bytes/1024/1024:.2f} MB)", category="EXECUTE")
+            update_execution_status(staging_id, 'success')
+            return {
+                'staging_id': staging_id, 
+                'status': 'success', 
+                'results': results,
+                'stats': {
+                    'execution_time': execution_time,
+                    'total_bytes': total_bytes,
+                    'file_count': len(results)
+                }
+            }
+        else:
+            import json
+            # Collect all errors from results
+            error_details = [r.get('error_detail') for r in results if r.get('error_detail')]
+            success_count = len([r for r in results if r['status'] == 'SUCCESS'])
+            error_summary = f"PARTIAL_SUCCESS {success_count}/{len(results)} files"
+            
+            logger.warning(f"Partial success: {success_count} of {len(results)} files migrated in {execution_time:.2f}s", category="EXECUTE")
+            
+            # Store detailed errors as JSON if available
+            if error_details:
+                error_json = json.dumps({'summary': error_summary, 'errors': error_details})
+                update_execution_status(staging_id, 'partial', error_json)
+            else:
+                update_execution_status(staging_id, 'partial', error_summary)
+            
+            return {
+                'staging_id': staging_id, 
+                'status': 'partial', 
+                'results': results,
+                'stats': {
+                    'execution_time': execution_time,
+                    'total_bytes': total_bytes,
+                    'file_count': len(results)
+                }
+            }
+        
+    except Exception as e:
+        error_msg = f"EXCEPTION {e}"
+        logger.critical(f"Exception during migration: {str(e)}", category="EXECUTE", details={'exception': str(e)})
+        update_execution_status(staging_id, 'failed', error_msg)
+        return {'staging_id': staging_id, 'status': 'failed', 'error': str(e)}
+    
+    finally:
+        # Dynamic pacing based on file size
+        file_size = staging_record.get('file_size_bytes')
+        dynamic_pacing = get_dynamic_pacing(file_size)
+        
+        # Use session setting if explicitly set, otherwise use dynamic pacing
+        session_pacing = session_snapshot.get('pacing_seconds')
+        if session_pacing and session_pacing > 0:
+            # Manual override - use fixed pacing
+            pacing_seconds = session_pacing
+        else:
+            # Auto mode - use dynamic pacing based on file size
+            pacing_seconds = dynamic_pacing
+        
+        time_taken = time.time() - start_time
+        if time_taken < pacing_seconds:
+            sleep_time = pacing_seconds - time_taken
+            # Log pacing for transparency
+            try:
+                import math
+                if file_size and not math.isnan(float(file_size)):
+                    size_mb = file_size / (1024*1024)
+                else:
+                    size_mb = 0
+            except (TypeError, ValueError):
+                size_mb = 0
+            print(f"[PACING] ID={staging_id} Size={size_mb:.1f}MB Pacing={pacing_seconds}s (took {time_taken:.1f}s, sleeping {sleep_time:.1f}s)")
+            time.sleep(sleep_time)
+
+
+def is_migration_running(batch_id):
+    """Check if a migration is currently running for this batch."""
+    global _active_migrations
+    
+    # Check in-memory lock first (most reliable)
+    with _migration_lock:
+        if batch_id in _active_migrations:
+            start_time = _active_migrations[batch_id]
+            elapsed_minutes = (time.time() - start_time) / 60
+            print(f"[LOCK] Batch {batch_id} has been running for {elapsed_minutes:.1f} minutes")
+            return True, f"Migration already running since {elapsed_minutes:.1f} minutes"
+    
+    # Also check database status as fallback (in case of crash/restart)
+    with misc_engine.connect() as con:
+        result = con.execute(text(f"""
+            SELECT status, total_records, executed_records, 
+                   DATEDIFF(MINUTE, created_at, GETDATE()) as minutes_elapsed
+            FROM dbo.migration_batch 
+            WHERE batch_id = '{batch_id}'
+        """)).fetchone()
+        
+        if result and result.status == 'executing':
+            # Check if there are "executing" status records 
+            executing_count = con.execute(text(f"""
+                SELECT COUNT(*) as cnt 
+                FROM dbo.migration_staging 
+                WHERE batch_id = '{batch_id}' AND execution_status = 'executing'
+            """)).fetchone().cnt
+            
+            if executing_count > 0:
+                print(f"[LOCK] Found {executing_count} records still in 'executing' status - likely orphaned")
+                return False, f"Found {executing_count} orphaned 'executing' records (will be reset)"
+            
+    return False, None
+
+
+def clear_migration_lock(batch_id):
+    """Remove the migration lock for a batch."""
+    global _active_migrations
+    with _migration_lock:
+        if batch_id in _active_migrations:
+            del _active_migrations[batch_id]
+            print(f"[LOCK] Released lock for batch {batch_id}")
+
+
+def set_migration_lock(batch_id):
+    """Set the migration lock for a batch."""
+    global _active_migrations
+    with _migration_lock:
+        _active_migrations[batch_id] = time.time()
+        print(f"[LOCK] Acquired lock for batch {batch_id}")
+
+
+def reset_orphaned_records(batch_id):
+    """Reset any records stuck in 'executing' status back to 'pending'."""
+    with misc_engine.begin() as con:
+        result = con.execute(text(f"""
+            UPDATE dbo.migration_staging
+            SET execution_status = 'pending'
+            WHERE batch_id = '{batch_id}' AND execution_status = 'executing'
+        """))
+        if result.rowcount > 0:
+            print(f"[CLEANUP] Reset {result.rowcount} orphaned 'executing' records to 'pending'")
+        return result.rowcount
+
+
+def execute_migration(batch_id, record_ids=None):
+    """
+    Main entry point for Step 2: Execute Migration
+    
+    Args:
+        batch_id: Batch ID to execute
+        record_ids: Optional list of specific record IDs to execute. If None, executes all pending.
+    
+    Returns:
+        dict with execution results
+    """
+    try:
+        # Check if migration is already running
+        is_running, reason = is_migration_running(batch_id)
+        if is_running:
+            return {
+                'success': False,
+                'error': f'Migration already in progress: {reason}',
+                'already_running': True
+            }
+        
+        # Reset any orphaned records from previous crashed execution
+        reset_orphaned_records(batch_id)
+        
+        # Set the lock
+        set_migration_lock(batch_id)
+        
+        # Get settings from session (with defaults)
+        max_workers = http_session.get('max_workers', MAX_API_WORKERS)
+        pacing_seconds = http_session.get('pacing_seconds', 0)  # 0 = auto/dynamic mode
+        
+        # Snapshot session values
+        session_snapshot = {
+            'bearer_token': http_session.get('bearer_token'),
+            'sap_system': http_session.get('sap_system'),
+            'x_csrf_token': http_session.get('x-csrf-token'),
+            'cookies': http_session.get('cookies'),
+            'csrf_token_time': http_session.get('csrf_token_time', 0),
+            'max_workers': max_workers,
+            'pacing_seconds': pacing_seconds  # 0 = dynamic pacing based on file size
+        }
+        
+        # Load records - either specific IDs or all pending
+        if record_ids:
+            records_df = load_specific_records(batch_id, record_ids)
+        else:
+            records_df = load_approved_records(batch_id)
+        
+        if len(records_df) == 0:
+            return {
+                'success': False,
+                'error': 'No records found for execution'
+            }
+        
+        # Log pacing mode
+        pacing_mode = f"fixed={pacing_seconds}s" if pacing_seconds > 0 else "dynamic (5-45s based on file size)"
+        print(f"[EXECUTE] Starting migration for {len(records_df)} records in batch {batch_id}")
+        print(f"[EXECUTE] Settings: workers={max_workers}, pacing={pacing_mode}")
+        
+        # Track batch timing
+        batch_start_time = time.time()
+        total_records = len(records_df)
+        
+        # Update batch status - reset counters for this execution run
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET status = 'executing',
+                    total_records = {total_records},
+                    executed_records = 0,
+                    successful_records = 0,
+                    failed_records = 0
+                WHERE batch_id = '{batch_id}'
+            """))
+        
+        # Progress tracking
+        completed_count = 0
+        success_count = 0
+        failed_count = 0
+        partial_count = 0
+        
+        def update_progress():
+            """Update progress in batch table for frontend polling."""
+            nonlocal completed_count, success_count, failed_count, partial_count
+            with misc_engine.begin() as con:
+                con.execute(text(f"""
+                    UPDATE dbo.migration_batch
+                    SET executed_records = {completed_count},
+                        successful_records = {success_count},
+                        failed_records = {failed_count}
+                    WHERE batch_id = '{batch_id}'
+                """))
+        
+        # Execute in parallel using ThreadPoolExecutor
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            server_session = requests.Session()
+            
+            futures = {
+                executor.submit(execute_single_document, server_session, row, session_snapshot): idx
+                for idx, (_, row) in enumerate(records_df.iterrows())
+            }
+            
+            from concurrent.futures import as_completed
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    
+                    # Update counters
+                    completed_count += 1
+                    if result.get('status') == 'success':
+                        success_count += 1
+                    elif result.get('status') == 'failed':
+                        failed_count += 1
+                    elif result.get('status') == 'partial':
+                        partial_count += 1
+                    
+                    # Log progress
+                    pct = (completed_count / total_records) * 100
+                    elapsed = time.time() - batch_start_time
+                    rate = completed_count / elapsed if elapsed > 0 else 0
+                    eta_seconds = (total_records - completed_count) / rate if rate > 0 else 0
+                    eta_str = f"{int(eta_seconds//60)}m {int(eta_seconds%60)}s" if eta_seconds > 0 else "-"
+                    
+                    print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.1f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}")
+                    
+                    # Update DB every 2 records or at end for live progress
+                    if completed_count % 2 == 0 or completed_count == total_records:
+                        update_progress()
+                        
+                except Exception as e:
+                    print(f"[EXECUTE_ERROR] {e}")
+                    results.append({'status': 'failed', 'error': str(e)})
+                    completed_count += 1
+                    failed_count += 1
+            
+            server_session.close()
+        
+        # Final progress update
+        update_progress()
+        
+        # Calculate batch timing
+        batch_end_time = time.time()
+        batch_duration = batch_end_time - batch_start_time
+        
+        # Update batch statistics
+        success_count = len([r for r in results if r.get('status') == 'success'])
+        failed_count = len([r for r in results if r.get('status') == 'failed'])
+        partial_count = len([r for r in results if r.get('status') == 'partial'])
+        
+        # Calculate aggregate statistics from individual results
+        total_bytes = sum(r.get('stats', {}).get('total_bytes', 0) for r in results)
+        total_files = sum(r.get('stats', {}).get('file_count', 0) for r in results)
+        doc_times = [r.get('stats', {}).get('execution_time', 0) for r in results if r.get('stats')]
+        
+        # Calculate statistics
+        avg_time_per_doc = batch_duration / len(results) if results else 0
+        avg_time_per_mb = batch_duration / (total_bytes / 1024 / 1024) if total_bytes > 0 else 0
+        total_mb = total_bytes / 1024 / 1024
+        throughput_mb_per_min = (total_mb / batch_duration * 60) if batch_duration > 0 else 0
+        
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET status = 'completed',
+                    executed_records = {completed_count},
+                    successful_records = {success_count},
+                    failed_records = {failed_count + partial_count}
+                WHERE batch_id = '{batch_id}'
+            """))
+        
+        # Build statistics summary
+        batch_stats = {
+            'batch_duration_seconds': round(batch_duration, 2),
+            'batch_duration_formatted': f"{int(batch_duration // 60)}m {int(batch_duration % 60)}s",
+            'total_documents': len(results),
+            'total_files': total_files,
+            'total_bytes': total_bytes,
+            'total_mb': round(total_mb, 2),
+            'avg_time_per_document_seconds': round(avg_time_per_doc, 2),
+            'avg_time_per_mb_seconds': round(avg_time_per_mb, 2),
+            'throughput_mb_per_minute': round(throughput_mb_per_min, 2),
+            'workers': max_workers,
+            'pacing_seconds': pacing_seconds
+        }
+        
+        # Analyze file size errors
+        size_errors = []
+        all_file_results = []
+        error_by_category = {}  # Collect errors by category
+        all_error_details = []  # Collect detailed error info
+        
+        for r in results:
+            # Document-level errors (e.g., CREATE_FAIL, READ_FAILED)
+            if r.get('error_detail'):
+                category = _classify_error(r.get('error_detail'))
+                if category not in error_by_category:
+                    error_by_category[category] = []
+                error_by_category[category].append({
+                    'staging_id': r.get('staging_id'),
+                    'error': r.get('error'),
+                    'detail': r.get('error_detail')
+                })
+                all_error_details.append({
+                    'staging_id': r.get('staging_id'),
+                    'category': category,
+                    'category_desc': get_error_description(category),
+                    'error': r.get('error'),
+                    'status_code': r.get('error_detail', {}).get('status_code'),
+                    'sap_code': r.get('error_detail', {}).get('code'),
+                    'message': r.get('error_detail', {}).get('detail')
+                })
+            
+            if r.get('results'):  # Individual document results contain file details
+                for file_result in r.get('results', []):
+                    all_file_results.append(file_result)
+                    if file_result.get('is_size_error'):
+                        size_errors.append({
+                            'file': file_result.get('file'),
+                            'size_mb': file_result.get('file_size_mb', 0),
+                            'status': file_result.get('status')
+                        })
+                    # Collect file-level errors by category
+                    if file_result.get('error_detail'):
+                        category = file_result.get('error_category') or _classify_error(file_result.get('error_detail'))
+                        if category not in error_by_category:
+                            error_by_category[category] = []
+                        error_by_category[category].append({
+                            'file': file_result.get('file'),
+                            'error': file_result.get('status'),
+                            'detail': file_result.get('error_detail')
+                        })
+                        all_error_details.append({
+                            'staging_id': r.get('staging_id'),
+                            'file': file_result.get('file'),
+                            'file_size_mb': file_result.get('file_size_mb'),
+                            'category': category,
+                            'category_desc': get_error_description(category),
+                            'error': file_result.get('status'),
+                            'status_code': file_result.get('error_detail', {}).get('status_code'),
+                            'sap_code': file_result.get('error_detail', {}).get('code'),
+                            'message': file_result.get('error_detail', {}).get('detail')
+                        })
+        
+        # Calculate size-based statistics
+        if all_file_results:
+            successful_files = [f for f in all_file_results if f.get('status') == 'SUCCESS']
+            failed_files = [f for f in all_file_results if f.get('status') != 'SUCCESS']
+            
+            # Find max successful file size
+            max_success_size = max([f.get('file_size', 0) for f in successful_files], default=0)
+            min_failed_size = min([f.get('file_size', 0) for f in failed_files], default=0) if failed_files else 0
+            
+            batch_stats['file_size_analysis'] = {
+                'successful_files': len(successful_files),
+                'failed_files': len(failed_files),
+                'size_errors': len(size_errors),
+                'max_successful_size_mb': round(max_success_size / 1024 / 1024, 2),
+                'min_failed_size_mb': round(min_failed_size / 1024 / 1024, 2) if min_failed_size > 0 else None,
+                'size_error_details': size_errors[:10]  # Limit to first 10
+            }
+            
+            # Estimate size limit if we have both successful and failed
+            if max_success_size > 0 and min_failed_size > 0:
+                batch_stats['file_size_analysis']['estimated_limit_mb'] = round(max_success_size / 1024 / 1024, 2)
+            
+            # Timing analysis by file size (actual processing time, without pacing)
+            timing_data = []
+            for f in all_file_results:
+                if f.get('file_size') and f.get('actual_time_seconds'):
+                    timing_data.append({
+                        'file': f.get('file'),
+                        'size_mb': f.get('file_size_mb', round(f.get('file_size', 0) / 1024 / 1024, 2)),
+                        'actual_time_seconds': f.get('actual_time_seconds'),
+                        'status': 'SUCCESS' if f.get('status') == 'SUCCESS' else 'FAILED'
+                    })
+            
+            if timing_data:
+                # Sort by size for analysis
+                timing_data.sort(key=lambda x: x['size_mb'])
+                
+                # Calculate average time per MB for successful files
+                successful_timing = [t for t in timing_data if t['status'] == 'SUCCESS']
+                if successful_timing:
+                    total_success_mb = sum(t['size_mb'] for t in successful_timing)
+                    total_success_time = sum(t['actual_time_seconds'] for t in successful_timing)
+                    avg_seconds_per_mb = total_success_time / total_success_mb if total_success_mb > 0 else 0
+                    
+                    # Recommended pacing based on actual times
+                    max_actual_time = max(t['actual_time_seconds'] for t in successful_timing)
+                    recommended_pacing = round(max_actual_time * 1.2, 1)  # 20% buffer
+                    
+                    batch_stats['timing_analysis'] = {
+                        'files_with_timing': len(timing_data),
+                        'avg_seconds_per_mb': round(avg_seconds_per_mb, 2),
+                        'max_actual_time_seconds': round(max_actual_time, 2),
+                        'recommended_pacing_seconds': recommended_pacing,
+                        'file_details': timing_data[:20]  # First 20 files with timing
+                    }
+                else:
+                    batch_stats['timing_analysis'] = {
+                        'files_with_timing': len(timing_data),
+                        'note': 'No successful files with timing data',
+                        'file_details': timing_data[:20]
+                    }
+        
+        # Add error analysis to batch_stats
+        error_summary = []
+        for category, errors in error_by_category.items():
+            error_summary.append({
+                'category': category,
+                'description': get_error_description(category),
+                'count': len(errors),
+                'examples': errors[:3]  # First 3 examples per category
+            })
+        # Sort by count descending
+        error_summary.sort(key=lambda x: x['count'], reverse=True)
+        
+        batch_stats['error_analysis'] = {
+            'total_errors': len(all_error_details),
+            'categories': error_summary,
+            'details': all_error_details[:50]  # Limit to first 50 detailed errors
+        }
+        
+        # Save statistics to database
+        import json
+        stats_json = json.dumps(batch_stats).replace("'", "''")
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET notes = '{stats_json}'
+                WHERE batch_id = '{batch_id}'
+            """))
+        
+        print(f"[EXECUTE] Completed batch {batch_id}: {success_count} success, {failed_count} failed, {partial_count} partial")
+        print(f"[EXECUTE] Statistics: Duration={batch_stats['batch_duration_formatted']}, "
+              f"Total={total_mb:.2f}MB, Throughput={throughput_mb_per_min:.2f}MB/min, "
+              f"Avg/Doc={avg_time_per_doc:.2f}s, Avg/MB={avg_time_per_mb:.2f}s")
+        
+        # Release the lock
+        clear_migration_lock(batch_id)
+        
+        return {
+            'success': True,
+            'batch_id': batch_id,
+            'total': len(results),
+            'successful': success_count,
+            'failed': failed_count,
+            'partial': partial_count,
+            'statistics': batch_stats
+        }
+        
+    except Exception as e:
+        print(f"[EXECUTE_ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Release the lock on error
+        clear_migration_lock(batch_id)
+        
+        return {
+            'success': False,
+            'error': str(e)
+        }

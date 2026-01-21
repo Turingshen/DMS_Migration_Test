@@ -1,0 +1,11 @@
+Flask==3.0.0
+Flask-Session==0.6.0
+Flask-CORS==4.0.0
+SQLAlchemy==2.0.25
+pandas==2.1.4
+PyYAML==6.0.1
+requests==2.31.0
+Werkzeug==3.0.1
+pymssql==2.2.11
+hdbcli==2.19.21
+sqlalchemy-hana==0.5.0

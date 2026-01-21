@@ -1,0 +1,1231 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Preview Migration Batch{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Preview Migration Batch</h2>
+            <p class="text-muted">Preview how data will be committed when migration is executed</p>
+            <p><strong>Batch ID:</strong> <code>{{ batch_id }}</code></p>
+        </div>
+    </div>
+
+    <!-- Batch Statistics Panel -->
+    <div class="row mt-2 mb-3">
+        <div class="col-12">
+            <div class="card bg-light">
+                <div class="card-body py-2">
+                    <div class="row text-center" id="batchStats">
+                        <div class="col-md-1">
+                            <small class="text-muted">Total</small>
+                            <h5 id="statRecords">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">Size</small>
+                            <h5 id="statTotalSize">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">⚡ ≤1MB</small>
+                            <h5 id="statTiny" class="text-success">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">🟢 1-10MB</small>
+                            <h5 id="statSmall" class="text-success">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">🟡 10-50MB</small>
+                            <h5 id="statMedium" class="text-warning">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">🔴 >50MB</small>
+                            <h5 id="statLarge" class="text-danger">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">❓ Unknown</small>
+                            <h5 id="statUnknown" class="text-secondary">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted">Pacing</small>
+                            <h5 id="statPacing" class="text-info">-</h5>
+                        </div>
+                        <div class="col-md-2">
+                            <small class="text-muted">Est. Runtime</small>
+                            <h5 id="statRuntime" title="Click for details" style="cursor:pointer" onclick="showRuntimeDetails()">-</h5>
+                        </div>
+                        <div class="col-md-2">
+                            <small class="text-muted">Runtime Breakdown</small>
+                            <small id="statRuntimeDetail" class="d-block text-muted">-</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="mb-0">Staging Records</h5>
+                        <small id="selectionInfo" class="text-muted">0 records selected</small>
+                    </div>
+                    <div class="btn-group">
+                        <button onclick="window.location.href='/logs?batch_id={{ batch_id }}'" class="btn btn-secondary" title="View detailed logs">
+                            <i class="fas fa-file-alt"></i> View Logs
+                        </button>
+                        
+                        <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Show/hide columns">
+                            <i class="fas fa-columns"></i> Columns
+                        </button>
+                        <button onclick="excludeLargeFiles()" class="btn btn-warning" id="excludeLargeBtn" title="Exclude files larger than 50MB">
+                            <i class="fas fa-ban"></i> Exclude >50MB
+                        </button>
+                        <button onclick="selectAll()" class="btn btn-secondary" id="selectAllBtn">
+                            <i class="fas fa-check-double"></i> Select All
+                        </button>
+                        <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
+                            <i class="fas fa-play-circle"></i> Execute Selected
+                        </button>
+                        <button onclick="executeAll()" class="btn btn-primary" id="executeBtn">
+                            <i class="fas fa-play"></i> Execute All
+                        </button>
+                        <button onclick="resetFailed()" class="btn btn-warning" id="resetBtn">
+                            <i class="fas fa-undo"></i> Reset Failed
+                        </button>
+                        <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
+                            <i class="fas fa-redo"></i> Retry Failed
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3 d-flex gap-2 align-items-center">
+                        <input type="text" id="searchInput" class="form-control" placeholder="Search records..." style="flex: 1;">
+                        <small id="filterInfo" class="text-muted" style="min-width: 180px; text-align: right;"></small>
+                        <select id="statusFilter" class="form-select" style="width: auto;">
+                            <option value="">Alle Status</option>
+                            <option value="pending">⏳ Pending</option>
+                            <option value="success">✅ Erfolgreich</option>
+                            <option value="failed">❌ Fehlgeschlagen</option>
+                            <option value="partial">⚠️ Teilweise</option>
+                            <option value="hide_completed">📋 Nur unbearbeitet</option>
+                        </select>
+                    </div>
+                    
+                    <style>
+                        #recordsTable { table-layout: auto; width: 100%; }
+                        #recordsTable th, #recordsTable td { white-space: nowrap; padding: 0.3rem 0.5rem; }
+                        #recordsTable td[data-column="description"] { white-space: normal; max-width: 200px; }
+                        #recordsTable td[data-column="exec_error"] { white-space: normal; max-width: 200px; }
+                        #recordsTable code { font-size: 0.8rem; }
+                    </style>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped table-hover" id="recordsTable">
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" id="selectAllCheckbox"></th>
+                                    <th data-column="id">ID</th>
+                                    <th data-column="batch_id">Batch ID</th>
+                                    <th data-column="source_doc">Source Doc</th>
+                                    <th data-column="source_loioid">Source LOIO</th>
+                                    <th data-column="target_doc">Target Doc</th>
+                                    <th data-column="type_info">Type/Ver/Part</th>
+                                    <th data-column="description">Description</th>
+                                    <th data-column="filename">Filename</th>
+                                    <th data-column="file_size">File Size</th>
+                                    <th data-column="mime_type">MIME Type</th>
+                                    <th data-column="auth_group">Auth Group</th>
+                                    <th data-column="execution">Execution</th>
+                                    <th data-column="created_at">Created At</th>
+                                    <th data-column="created_by">Created By</th>
+                                    <th data-column="exec_started">Exec Started</th>
+                                    <th data-column="exec_completed">Exec Completed</th>
+                                    <th data-column="exec_error">Exec Error</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recordsBody">
+                                <tr>
+                                    <td colspan="10" class="text-center">
+                                        <div class="spinner-border" role="status">
+                                            <span class="sr-only">Loading...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Record Detail Modal -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Record Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body" id="detailContent">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Column Visibility Modal -->
+<div class="modal fade" id="columnModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Show/Hide Columns</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_id" value="id" checked>
+                    <label class="form-check-label" for="col_id">ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_source_doc" value="source_doc" checked>
+                    <label class="form-check-label" for="col_source_doc">Source Document</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_doc" value="target_doc" checked>
+                    <label class="form-check-label" for="col_target_doc">Target Document</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_type_info" value="type_info" checked>
+                    <label class="form-check-label" for="col_type_info">Type/Version/Part</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_description" value="description" checked>
+                    <label class="form-check-label" for="col_description">Description</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
+                    <label class="form-check-label" for="col_auth_group">Authorization Group</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_execution" value="execution" checked>
+                    <label class="form-check-label" for="col_execution">Execution Status</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
+                    <label class="form-check-label" for="col_batch_id">Batch ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_source_loioid" value="source_loioid">
+                    <label class="form-check-label" for="col_source_loioid">Source LOIO ID</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename">
+                    <label class="form-check-label" for="col_filename">Filename</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_file_size" value="file_size">
+                    <label class="form-check-label" for="col_file_size">File Size</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_mime_type" value="mime_type">
+                    <label class="form-check-label" for="col_mime_type">MIME Type</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_created_at" value="created_at">
+                    <label class="form-check-label" for="col_created_at">Created At</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_created_by" value="created_by">
+                    <label class="form-check-label" for="col_created_by">Created By</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_started" value="exec_started">
+                    <label class="form-check-label" for="col_exec_started">Execution Started</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_completed" value="exec_completed">
+                    <label class="form-check-label" for="col_exec_completed">Execution Completed</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_exec_error" value="exec_error">
+                    <label class="form-check-label" for="col_exec_error">Execution Error</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="resetColumns()">Reset</button>
+                <button type="button" class="btn btn-primary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let allRecords = [];
+let selectedRecords = new Set();
+const batchId = '{{ batch_id }}';
+
+// Column visibility state
+let visibleColumns = {
+    'id': true,
+    'batch_id': false,
+    'source_doc': true,
+    'source_loioid': false,
+    'target_doc': true,
+    'type_info': true,
+    'description': true,
+    'filename': true,
+    'file_size': true,
+    'mime_type': false,
+    'auth_group': true,
+    'execution': true,
+    'created_at': false,
+    'created_by': false,
+    'exec_started': false,
+    'exec_completed': false,
+    'exec_error': false
+};
+
+// Load column preferences from localStorage
+function loadColumnPreferences() {
+    const saved = localStorage.getItem('migrate_columns_' + batchId);
+    if (saved) {
+        visibleColumns = JSON.parse(saved);
+    }
+    // Update checkboxes to match current state (when they exist)
+    Object.keys(visibleColumns).forEach(col => {
+        const checkbox = document.getElementById('col_' + col);
+        if (checkbox) {
+            checkbox.checked = visibleColumns[col];
+        }
+    });
+}
+
+// Apply column visibility to table
+function applyColumnVisibility() {
+    Object.keys(visibleColumns).forEach(col => {
+        const visible = visibleColumns[col];
+        
+        // Update table header
+        const headers = document.querySelectorAll(`th[data-column="${col}"]`);
+        headers.forEach(th => {
+            th.style.display = visible ? '' : 'none';
+        });
+        
+        // Update table cells
+        const columnIndex = getColumnIndex(col);
+        if (columnIndex >= 0) {
+            const rows = document.querySelectorAll('#recordsTable tbody tr');
+            rows.forEach(row => {
+                const cell = row.cells[columnIndex];
+                if (cell) {
+                    cell.style.display = visible ? '' : 'none';
+                }
+            });
+        }
+    });
+}
+
+// Save column preferences to localStorage
+function saveColumnPreferences() {
+    localStorage.setItem('migrate_columns_' + batchId, JSON.stringify(visibleColumns));
+}
+
+// Toggle column visibility
+function toggleColumn(columnName, visible) {
+    visibleColumns[columnName] = visible;
+    saveColumnPreferences();
+    
+    // Update table header
+    const headers = document.querySelectorAll(`th[data-column="${columnName}"]`);
+    headers.forEach(th => {
+        th.style.display = visible ? '' : 'none';
+    });
+    
+    // Update table cells
+    const columnIndex = getColumnIndex(columnName);
+    const rows = document.querySelectorAll('#recordsTable tbody tr');
+    rows.forEach(row => {
+        const cell = row.cells[columnIndex];
+        if (cell) {
+            cell.style.display = visible ? '' : 'none';
+        }
+    });
+}
+
+// Get column index by name
+function getColumnIndex(columnName) {
+    const headers = document.querySelectorAll('#recordsTable thead th');
+    for (let i = 0; i < headers.length; i++) {
+        if (headers[i].dataset.column === columnName) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Reset columns to default
+function resetColumns() {
+    Object.keys(visibleColumns).forEach(col => {
+        visibleColumns[col] = true;
+        const checkbox = document.getElementById('col_' + col);
+        if (checkbox) {
+            checkbox.checked = true;
+        }
+        toggleColumn(col, true);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load column preferences from localStorage
+    loadColumnPreferences();
+    
+    // Apply initial column visibility to table headers immediately
+    applyColumnVisibility();
+    
+    // Load pacing settings
+    loadPacingSettings();
+    
+    // Then load records
+    loadRecords();
+    
+    // Column toggle event listeners
+    document.querySelectorAll('.column-toggle').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            toggleColumn(this.value, this.checked);
+        });
+    });
+    
+    // Search functionality
+    document.getElementById('searchInput').addEventListener('input', function() {
+        applyFilters();
+    });
+    
+    // Status filter functionality
+    document.getElementById('statusFilter').addEventListener('change', function() {
+        applyFilters();
+    });
+    
+    // Select all checkbox
+    document.getElementById('selectAllCheckbox').addEventListener('change', function() {
+        const checkboxes = document.querySelectorAll('.record-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = this.checked;
+            if (this.checked) {
+                selectedRecords.add(parseInt(cb.dataset.id));
+            } else {
+                selectedRecords.delete(parseInt(cb.dataset.id));
+            }
+        });
+        updateSelectionInfo();
+    });
+});
+
+// Current pacing setting from server
+let currentPacingSeconds = 0;
+
+function loadPacingSettings() {
+    fetch('/settings/json')
+        .then(response => response.json())
+        .then(data => {
+            currentPacingSeconds = data.pacing_seconds || 0;
+            updatePacingDisplay();
+        })
+        .catch(error => {
+            console.error('Error loading pacing settings:', error);
+            updatePacingDisplay();
+        });
+}
+
+function updatePacingDisplay() {
+    const pacingEl = document.getElementById('statPacing');
+    if (!pacingEl) return;
+    
+    if (currentPacingSeconds === 0) {
+        pacingEl.innerHTML = '<span class="badge badge-success" title="5s für ≤1MB, 10s für 1-10MB, 20s für 10-50MB, 45s für >50MB">Dynamisch</span>';
+    } else {
+        pacingEl.innerHTML = `<span class="badge badge-secondary" title="Gleiches Pacing für alle Dokumente">Fixiert: ${currentPacingSeconds}s</span>`;
+    }
+}
+
+function loadRecords() {
+    fetch(`/batch/${batchId}/records`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                allRecords = data.records;
+                displayRecords(allRecords);
+                updateBatchStatistics(allRecords);
+            } else {
+                showError('Failed to load records: ' + data.error);
+            }
+        })
+        .catch(error => {
+            showError('Error loading records: ' + error);
+        });
+}
+
+function updateBatchStatistics(records) {
+    // Count all records except successful ones (pending, failed, partial need to run)
+    const pendingRecords = records.filter(r => r.execution_status !== 'success');
+    const successCount = records.filter(r => r.execution_status === 'success').length;
+    
+    // Size buckets with dynamic pacing
+    // Pacing = API call overhead + transfer time + processing
+    const buckets = {
+        tiny:    { max: 1,   count: 0, size: 0, pacing: 5,  label: '⚡ ≤1MB' },      // Fast batch processing
+        small:   { max: 10,  count: 0, size: 0, pacing: 10, label: '🟢 1-10MB' },    // Normal processing
+        medium:  { max: 50,  count: 0, size: 0, pacing: 20, label: '🟡 10-50MB' },   // Slower, larger files
+        large:   { max: Infinity, count: 0, size: 0, pacing: 45, label: '🔴 >50MB' }, // Very large files
+        unknown: { count: 0, pacing: 5 }   // Unknown size - assume small (same as tiny)
+    };
+    
+    let totalSize = 0;
+    
+    pendingRecords.forEach(record => {
+        const bytes = record.file_size_bytes;
+        if (bytes !== null && bytes !== undefined && !isNaN(bytes) && bytes > 0) {
+            const sizeMB = bytes / (1024 * 1024);
+            totalSize += Number(bytes);
+            
+            if (sizeMB <= 1) {
+                buckets.tiny.count++;
+                buckets.tiny.size += bytes;
+            } else if (sizeMB <= 10) {
+                buckets.small.count++;
+                buckets.small.size += bytes;
+            } else if (sizeMB <= 50) {
+                buckets.medium.count++;
+                buckets.medium.size += bytes;
+            } else {
+                buckets.large.count++;
+                buckets.large.size += bytes;
+            }
+        } else {
+            buckets.unknown.count++;
+        }
+    });
+    
+    // Calculate runtime per bucket
+    // Formula: (bucket_size_MB * transfer_rate) + (count * pacing)
+    // Transfer rate: ~0.5 sec/MB (download) + ~0.5 sec/MB (upload) = 1 sec/MB
+    const transferRate = 1.0;  // seconds per MB
+    
+    const runtimeTiny = (buckets.tiny.size / (1024 * 1024) * transferRate) + (buckets.tiny.count * buckets.tiny.pacing);
+    const runtimeSmall = (buckets.small.size / (1024 * 1024) * transferRate) + (buckets.small.count * buckets.small.pacing);
+    const runtimeMedium = (buckets.medium.size / (1024 * 1024) * transferRate) + (buckets.medium.count * buckets.medium.pacing);
+    const runtimeLarge = (buckets.large.size / (1024 * 1024) * transferRate) + (buckets.large.count * buckets.large.pacing);
+    const runtimeUnknown = buckets.unknown.count * buckets.unknown.pacing;
+    
+    const totalRuntime = runtimeTiny + runtimeSmall + runtimeMedium + runtimeLarge + runtimeUnknown;
+    
+    // Update statistics display - show pending count and success count
+    document.getElementById('statRecords').innerHTML = pendingRecords.length > 0 
+        ? `${pendingRecords.length} <small class="text-muted">(${successCount} ✓)</small>`
+        : `<span class="text-success">✓ Alle ${records.length} erledigt</span>`;
+    document.getElementById('statTotalSize').textContent = formatFileSize(totalSize);
+    document.getElementById('statTiny').textContent = buckets.tiny.count;
+    document.getElementById('statSmall').textContent = buckets.small.count;
+    document.getElementById('statMedium').textContent = buckets.medium.count;
+    document.getElementById('statLarge').textContent = buckets.large.count > 0 ? buckets.large.count + ' ⚠️' : '0';
+    document.getElementById('statUnknown').textContent = buckets.unknown.count;
+    document.getElementById('statRuntime').textContent = pendingRecords.length > 0 ? formatDuration(totalRuntime) : '-';
+    
+    // Build runtime breakdown
+    const breakdown = [];
+    if (buckets.tiny.count > 0) breakdown.push(`⚡${buckets.tiny.count}×${buckets.tiny.pacing}s`);
+    if (buckets.small.count > 0) breakdown.push(`🟢${buckets.small.count}×${buckets.small.pacing}s`);
+    if (buckets.medium.count > 0) breakdown.push(`🟡${buckets.medium.count}×${buckets.medium.pacing}s`);
+    if (buckets.large.count > 0) breakdown.push(`🔴${buckets.large.count}×${buckets.large.pacing}s`);
+    if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}×${buckets.unknown.pacing}s`);
+    
+    const detailText = pendingRecords.length > 0 
+        ? breakdown.join(' + ') + ` + ${formatFileSize(totalSize)}@1s/MB`
+        : 'Keine ausstehenden Dokumente';
+    document.getElementById('statRuntimeDetail').textContent = detailText;
+    
+    // Store for modal details
+    window.runtimeStats = {
+        buckets: buckets,
+        totalSize: totalSize,
+        totalRuntime: totalRuntime,
+        transferRate: transferRate
+    };
+}
+
+function showRuntimeDetails() {
+    if (!window.runtimeStats) return;
+    
+    const stats = window.runtimeStats;
+    const b = stats.buckets;
+    
+    // Calculate individual runtimes
+    const calcTime = (bucket) => {
+        if (!bucket.size) bucket.size = 0;
+        const transfer = bucket.size / (1024 * 1024) * stats.transferRate;
+        const pacing = bucket.count * bucket.pacing;
+        return { transfer, pacing, total: transfer + pacing };
+    };
+    
+    const tiny = calcTime(b.tiny);
+    const small = calcTime(b.small);
+    const medium = calcTime(b.medium);
+    const large = calcTime(b.large);
+    const unknown = { transfer: 0, pacing: b.unknown.count * b.unknown.pacing, total: b.unknown.count * b.unknown.pacing };
+    
+    const details = `
+═══ Runtime Calculation Details ═══
+
+📦 PACKAGE BREAKDOWN:
+┌─────────────┬───────┬──────────┬─────────┬──────────┬──────────┐
+│ Package     │ Count │ Size     │ Pacing  │ Transfer │ Subtotal │
+├─────────────┼───────┼──────────┼─────────┼──────────┼──────────┤
+│ ⚡ ≤1MB     │ ${b.tiny.count.toString().padStart(5)} │ ${formatFileSize(b.tiny.size).padStart(8)} │ ${b.tiny.pacing.toString().padStart(4)}s/doc │ ${formatDuration(tiny.transfer).padStart(8)} │ ${formatDuration(tiny.total).padStart(8)} │
+│ 🟢 1-10MB   │ ${b.small.count.toString().padStart(5)} │ ${formatFileSize(b.small.size).padStart(8)} │ ${b.small.pacing.toString().padStart(4)}s/doc │ ${formatDuration(small.transfer).padStart(8)} │ ${formatDuration(small.total).padStart(8)} │
+│ 🟡 10-50MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size).padStart(8)} │ ${b.medium.pacing.toString().padStart(4)}s/doc │ ${formatDuration(medium.transfer).padStart(8)} │ ${formatDuration(medium.total).padStart(8)} │
+│ 🔴 >50MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size).padStart(8)} │ ${b.large.pacing.toString().padStart(4)}s/doc │ ${formatDuration(large.transfer).padStart(8)} │ ${formatDuration(large.total).padStart(8)} │
+│ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │ ${b.unknown.pacing.toString().padStart(4)}s/doc │        - │ ${formatDuration(unknown.total).padStart(8)} │
+└─────────────┴───────┴──────────┴─────────┴──────────┴──────────┘
+
+📊 CALCULATION:
+• Transfer Time = Total Size × ${stats.transferRate} sec/MB
+• Pacing Time = Documents × Pacing per Package
+• Total = Transfer + Pacing
+
+⏱️ TOTAL ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)}
+
+💡 PACING EXPLANATION:
+• ⚡ ≤1MB: Fast batch mode (${b.tiny.pacing}s) - minimal API overhead
+• 🟢 1-10MB: Normal processing (${b.small.pacing}s) - standard workflow
+• 🟡 10-50MB: Careful processing (${b.medium.pacing}s) - larger file handling
+• 🔴 >50MB: Slow mode (${b.large.pacing}s) - avoid timeouts, careful upload
+• ❓ Unknown: Conservative estimate (${b.unknown.pacing}s) - no size data
+    `.trim();
+    
+    alert(details);
+}
+
+function formatDuration(seconds) {
+    if (seconds < 60) return Math.round(seconds) + ' sec';
+    if (seconds < 3600) return Math.round(seconds / 60) + ' min';
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.round((seconds % 3600) / 60);
+    return hours + 'h ' + mins + 'm';
+}
+
+function displayRecords(records) {
+    const tbody = document.getElementById('recordsBody');
+    
+    if (records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="19" class="text-center">No records found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = records.map(record => {
+        const executionBadge = getExecutionBadge(record.execution_status);
+        const typeInfo = `${record.source_documenttype}/${record.source_documentversion}/${record.source_documentpart}`;
+        const fileSize = (record.file_size_bytes !== null && record.file_size_bytes !== undefined)
+            ? formatFileSizeWithColor(Number(record.file_size_bytes))
+            : '-';
+        const createdAt = record.created_at ? formatDateTime(record.created_at) : '-';
+        const execStarted = record.execution_started_at ? formatDateTime(record.execution_started_at) : '-';
+        const execCompleted = record.execution_completed_at ? formatDateTime(record.execution_completed_at) : '-';
+        
+        return `
+            <tr class="${record.skip_migration ? 'table-secondary' : ''}">
+                <td>
+                    <input type="checkbox" class="record-checkbox" 
+                           data-id="${record.id}" 
+                           onchange="toggleSelection(${record.id})"
+                           ${record.skip_migration ? 'disabled' : ''}>
+                </td>
+                <td data-column="id">${record.id}</td>
+                <td data-column="batch_id"><small>${record.batch_id || '-'}</small></td>
+                <td data-column="source_doc"><code>${record.source_documentnumber}</code></td>
+                <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
+                <td data-column="target_doc"><code>${record.target_documentnumber || '-'}</code></td>
+                <td data-column="type_info"><small>${typeInfo}</small></td>
+                <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
+                <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
+                <td data-column="file_size"><small>${fileSize}</small></td>
+                <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
+                <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
+                <td data-column="execution">${executionBadge}</td>
+                <td data-column="created_at"><small>${createdAt}</small></td>
+                <td data-column="created_by"><small>${record.created_by || '-'}</small></td>
+                <td data-column="exec_started"><small>${execStarted}</small></td>
+                <td data-column="exec_completed"><small>${execCompleted}</small></td>
+                <td data-column="exec_error"><small>${truncate(record.execution_error, 30) || '-'}</small></td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info" 
+                            onclick="viewRecordDetail(${record.id})"
+                            title="View Details">
+                        <i class="fas fa-info-circle"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Apply column visibility after rendering
+    applyColumnVisibility();
+}
+
+function getExecutionBadge(status) {
+    const map = {
+        'success': '<span class="badge badge-success">Success</span>',
+        'failed': '<span class="badge badge-danger">Failed</span>',
+        'partial': '<span class="badge badge-warning">Partial</span>',
+        'pending': '<span class="badge badge-secondary">Pending</span>'
+    };
+    return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+function formatFileSize(bytes) {
+    if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function formatFileSizeWithColor(bytes) {
+    if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
+    const sizeText = formatFileSize(bytes);
+    const sizeMB = bytes / (1024 * 1024);
+    
+    if (sizeMB > 50) {
+        // Red: high risk of failure (>50MB)
+        return `<span class="text-danger font-weight-bold" title="High risk: >50MB may fail">${sizeText} ⚠️</span>`;
+    } else if (sizeMB > 10) {
+        // Orange: moderate risk (10-50MB)
+        return `<span class="text-warning" title="Moderate size: 10-50MB">${sizeText}</span>`;
+    } else {
+        // Green: safe size (≤10MB)
+        return `<span class="text-success" title="Safe size: ≤10MB">${sizeText}</span>`;
+    }
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function toggleSelection(id) {
+    if (selectedRecords.has(id)) {
+        selectedRecords.delete(id);
+    } else {
+        selectedRecords.add(id);
+    }
+    updateSelectionInfo();
+}
+
+function selectAll() {
+    const checkboxes = document.querySelectorAll('.record-checkbox:not([disabled])');
+    const allSelected = Array.from(checkboxes).every(cb => cb.checked);
+    
+    checkboxes.forEach(cb => {
+        cb.checked = !allSelected;
+        const id = parseInt(cb.dataset.id);
+        if (!allSelected) {
+            selectedRecords.add(id);
+        } else {
+            selectedRecords.delete(id);
+        }
+    });
+    
+    updateSelectionInfo();
+}
+
+function updateSelectionInfo() {
+    document.getElementById('selectionInfo').textContent = `${selectedRecords.size} records selected`;
+    document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
+}
+
+// Progress polling for execution
+let progressInterval = null;
+let executionStartTime = null;
+
+function showProgressBar() {
+    // Create progress bar if not exists
+    let progressDiv = document.getElementById('executionProgress');
+    if (!progressDiv) {
+        progressDiv = document.createElement('div');
+        progressDiv.id = 'executionProgress';
+        progressDiv.className = 'alert alert-info mt-2';
+        progressDiv.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong><i class="fas fa-sync fa-spin"></i> Migration in Progress...</strong>
+                <span id="progressStats">0 / 0</span>
+            </div>
+            <div class="progress" style="height: 25px;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                     role="progressbar" style="width: 0%">0%</div>
+            </div>
+            <div class="d-flex justify-content-between mt-2">
+                <small id="progressDetails">Starting...</small>
+                <small id="progressETA">ETA: calculating...</small>
+            </div>
+        `;
+        document.getElementById('batchStats').parentNode.appendChild(progressDiv);
+    }
+    progressDiv.style.display = 'block';
+    executionStartTime = Date.now();
+}
+
+function hideProgressBar() {
+    const progressDiv = document.getElementById('executionProgress');
+    if (progressDiv) {
+        progressDiv.style.display = 'none';
+    }
+}
+
+function updateProgressDisplay(data) {
+    const bar = document.getElementById('progressBar');
+    const stats = document.getElementById('progressStats');
+    const details = document.getElementById('progressDetails');
+    const eta = document.getElementById('progressETA');
+    
+    if (!bar) return;
+    
+    const pct = data.progress_pct || 0;
+    bar.style.width = pct + '%';
+    bar.textContent = pct.toFixed(1) + '%';
+    
+    // Update color based on progress
+    bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+    if (data.failed > 0) bar.classList.add('bg-warning');
+    else bar.classList.add('bg-success');
+    
+    stats.textContent = `${data.executed} / ${data.total}`;
+    details.innerHTML = `<span class="text-success">✓ ${data.success}</span> | <span class="text-danger">✗ ${data.failed}</span> | Remaining: ${data.remaining}`;
+    
+    // Calculate ETA
+    if (data.executed > 0 && executionStartTime) {
+        const elapsed = (Date.now() - executionStartTime) / 1000;
+        const rate = data.executed / elapsed;
+        const etaSeconds = data.remaining / rate;
+        
+        if (etaSeconds > 3600) {
+            eta.textContent = `ETA: ${Math.floor(etaSeconds/3600)}h ${Math.round((etaSeconds%3600)/60)}m`;
+        } else if (etaSeconds > 60) {
+            eta.textContent = `ETA: ${Math.round(etaSeconds/60)}m ${Math.round(etaSeconds%60)}s`;
+        } else {
+            eta.textContent = `ETA: ${Math.round(etaSeconds)}s`;
+        }
+    }
+}
+
+function pollProgress() {
+    fetch(`/batch/${batchId}/progress`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Only update display when migration is actively executing
+                if (data.status === 'executing' && data.total > 0) {
+                    updateProgressDisplay(data);
+                }
+                
+                // Stop polling when done
+                if (data.status === 'completed' || data.status === 'failed') {
+                    stopProgressPolling();
+                }
+            }
+        })
+        .catch(err => console.error('Progress poll error:', err));
+}
+
+function startProgressPolling() {
+    showProgressBar();
+    // Delay polling to give server time to reset counters and start execution
+    setTimeout(() => {
+        progressInterval = setInterval(pollProgress, 1000); // Poll every 1 second
+        pollProgress(); // Initial poll after delay
+    }, 2000); // Wait 2 seconds before first poll
+}
+
+function stopProgressPolling() {
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+}
+
+function executeAll() {
+    if (!confirm('Execute migration for all records in this batch?')) {
+        return;
+    }
+    
+    const btn = document.getElementById('executeBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Executing...';
+    
+    // Start progress polling
+    startProgressPolling();
+    
+    fetch('/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        stopProgressPolling();
+        hideProgressBar();
+        
+        if (data.success) {
+            alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            loadRecords();
+        } else if (data.login_required) {
+            alert('⚠️ Not logged in!\n\nPlease login to SAP first before executing the migration.');
+            window.location.href = '/';
+        } else if (data.already_running) {
+            alert('⚠️ Migration already running!\n\n' + data.error + '\n\nPlease wait for the current migration to complete.');
+        } else {
+            alert('Migration failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute All';
+    })
+    .catch(error => {
+        stopProgressPolling();
+        hideProgressBar();
+        alert('Error executing migration: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> Execute All';
+    });
+}
+
+function executeSelected() {
+    if (selectedRecords.size === 0) {
+        alert('Please select records to execute');
+        return;
+    }
+    
+    if (!confirm(`Execute migration for ${selectedRecords.size} selected record(s)?`)) {
+        return;
+    }
+    
+    const btn = document.getElementById('executeSelectedBtn');
+    btn.disabled = true;
+    const totalSelected = selectedRecords.size;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Executing ${totalSelected}...`;
+    
+    // Show simple progress indicator
+    showProgressBar();
+    document.getElementById('progressStats').textContent = `Starte ${totalSelected} Dokumente...`;
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressBar').textContent = '0%';
+    document.getElementById('progressDetails').textContent = 'Initialisiere Migration...';
+    document.getElementById('progressETA').textContent = 'ETA: berechne...';
+    
+    // Start polling for progress updates
+    startProgressPolling();
+    
+    fetch('/execute_selected', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+            batch_id: batchId,
+            record_ids: Array.from(selectedRecords)
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        stopProgressPolling();
+        hideProgressBar();
+        if (data.success) {
+            alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            selectedRecords.clear();
+            loadRecords();
+        } else if (data.login_required) {
+            alert('⚠️ Not logged in!\n\nPlease login to SAP first before executing the migration.');
+            window.location.href = '/';
+        } else if (data.already_running) {
+            alert('⚠️ Migration already running!\n\n' + data.error + '\n\nPlease wait for the current migration to complete.');
+        } else {
+            alert('Migration failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play-circle"></i> Execute Selected';
+    })
+    .catch(error => {
+        stopProgressPolling();
+        hideProgressBar();
+        alert('Error executing migration: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play-circle"></i> Execute Selected';
+    });
+}
+
+function viewRecordDetail(recordId) {
+    $('#detailModal').modal('show');
+    $('#detailContent').html('<div class="text-center"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Loading details...</p></div>');
+    
+    // Fetch record details from results API
+    fetch(`/batch/${batchId}/results`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const record = data.results.find(r => r.id === recordId);
+                if (record) {
+                    displayRecordDetail(record);
+                } else {
+                    $('#detailContent').html('<div class="alert alert-warning">Record not found in execution results</div>');
+                }
+            } else {
+                $('#detailContent').html(`<div class="alert alert-danger">Failed to load details: ${data.error}</div>`);
+            }
+        })
+        .catch(error => {
+            $('#detailContent').html(`<div class="alert alert-danger">Error loading details: ${error}</div>`);
+        });
+}
+
+function displayRecordDetail(record) {
+    let html = '<div class="row">';
+    
+    // Document Information
+    html += '<div class="col-md-6"><h6 class="text-primary">Document Information</h6>';
+    html += `<table class="table table-sm table-bordered">`;
+    html += `<tr><th>ID</th><td>${record.id}</td></tr>`;
+    html += `<tr><th>Source Document</th><td><code>${record.source_documentnumber}</code></td></tr>`;
+    html += `<tr><th>Target Document</th><td><code>${record.target_documentnumber || '-'}</code></td></tr>`;
+    html += `<tr><th>Document Type</th><td>${record.source_documenttype}</td></tr>`;
+    html += `<tr><th>Description</th><td>${record.source_description || '-'}</td></tr>`;
+    html += `<tr><th>Auth Group</th><td>${record.authorization_group || '-'}</td></tr>`;
+    html += `</table></div>`;
+    
+    // Execution Information
+    html += '<div class="col-md-6"><h6 class="text-primary">Execution Information</h6>';
+    html += `<table class="table table-sm table-bordered">`;
+    html += `<tr><th>Status</th><td>${getExecutionBadge(record.execution_status)}</td></tr>`;
+    html += `<tr><th>Started At</th><td>${record.execution_started_at ? new Date(record.execution_started_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>Completed At</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>File</th><td>${record.filename || '-'}</td></tr>`;
+    html += `<tr><th>MIME Type</th><td>${record.mime_type || '-'}</td></tr>`;
+    html += `</table></div>`;
+    
+    html += '</div>';
+    
+    // Execution Error
+    if (record.execution_error) {
+        html += '<div class="row mt-3"><div class="col-12"><h6 class="text-danger">Execution Error</h6>';
+        let errorContent = '';
+        if (typeof record.execution_error === 'object') {
+            errorContent = JSON.stringify(record.execution_error, null, 2);
+        } else {
+            errorContent = record.execution_error;
+        }
+        html += `<pre class="alert alert-danger" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto;">${escapeHtml(errorContent)}</pre></div></div>`;
+    }
+    
+    $('#detailContent').html(html);
+}
+
+function excludeLargeFiles() {
+    // Find records with file_size_bytes > 50MB
+    const largeRecords = allRecords.filter(r => {
+        const bytes = r.file_size_bytes;
+        return bytes !== null && bytes !== undefined && (bytes / (1024 * 1024)) > 50;
+    });
+    
+    if (largeRecords.length === 0) {
+        alert('No files larger than 50MB found in this batch.');
+        return;
+    }
+    
+    const totalMB = largeRecords.reduce((sum, r) => sum + (r.file_size_bytes / (1024 * 1024)), 0);
+    
+    if (!confirm(`Exclude ${largeRecords.length} files larger than 50MB?\n\nTotal size: ${totalMB.toFixed(1)} MB\n\nThese files will be marked as "skip" and not migrated.`)) {
+        return;
+    }
+    
+    const btn = document.getElementById('excludeLargeBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Excluding...';
+    
+    const recordIds = largeRecords.map(r => r.id);
+    
+    fetch('/skip_records', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+            batch_id: batchId,
+            record_ids: recordIds,
+            skip: true,
+            reason: 'File size exceeds 50MB limit'
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`${data.updated} records marked as skipped.`);
+            loadRecords();
+        } else {
+            alert('Error: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-ban"></i> Exclude >50MB';
+    })
+    .catch(error => {
+        alert('Error excluding records: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-ban"></i> Exclude >50MB';
+    });
+}
+
+function resetFailed() {
+    if (!confirm('Reset all failed records to "pending" status?\n\nThis will allow you to re-execute them.')) {
+        return;
+    }
+    
+    const btn = document.getElementById('resetBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Resetting...';
+    
+    fetch('/reset_failed', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Reset completed!\n\n${data.reset_count} failed records reset to pending.`);
+            loadRecords();
+        } else {
+            alert('Reset failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-undo"></i> Reset Failed';
+    })
+    .catch(error => {
+        alert('Error resetting failed records: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-undo"></i> Reset Failed';
+    });
+}
+
+function retryFailed() {
+    if (!confirm('Re-execute all failed records in this batch?')) {
+        return;
+    }
+    
+    const btn = document.getElementById('retryBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Retrying...';
+    
+    fetch('/retry_failed', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Retry completed!\n\nRetried: ${data.retried}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            loadRecords();
+        } else {
+            alert('Retry failed: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
+    })
+    .catch(error => {
+        alert('Error retrying failed records: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
+    });
+}
+
+function applyFilters() {
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const statusFilter = document.getElementById('statusFilter').value;
+    
+    const filtered = allRecords.filter(record => {
+        // Text search filter
+        const matchesSearch = !searchTerm || (
+            record.source_documentnumber.toLowerCase().includes(searchTerm) ||
+            (record.target_documentnumber && record.target_documentnumber.toLowerCase().includes(searchTerm)) ||
+            (record.source_description && record.source_description.toLowerCase().includes(searchTerm))
+        );
+        
+        // Status filter
+        let matchesStatus = true;
+        if (statusFilter === 'hide_completed') {
+            // Hide success and partial - show only pending and failed
+            matchesStatus = record.execution_status === 'pending' || record.execution_status === 'failed';
+        } else if (statusFilter) {
+            matchesStatus = record.execution_status === statusFilter;
+        }
+        
+        return matchesSearch && matchesStatus;
+    });
+    
+    displayRecords(filtered);
+    
+    // Update filter info on the left side
+    const filterInfo = document.getElementById('filterInfo');
+    if (filtered.length < allRecords.length) {
+        filterInfo.textContent = `Zeige ${filtered.length} von ${allRecords.length}`;
+    } else {
+        filterInfo.textContent = `${allRecords.length} Datensätze`;
+    }
+}
+
+function filterRecords(searchTerm) {
+    // Legacy function - call applyFilters instead
+    applyFilters();
+}
+
+function truncate(str, len) {
+    if (!str) return '-';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showError(message) {
+    console.error(message);
+    const tbody = document.getElementById('recordsBody');
+    tbody.innerHTML = `<tr><td colspan="19" class="text-danger">${message}</td></tr>`;
+}
+</script>
+{% endblock %}

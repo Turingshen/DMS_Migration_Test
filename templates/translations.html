@@ -1,0 +1,549 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Migration Rules - Document Migration{% endblock %}
+
+{% block head %}
+<style>
+    .translation-table {
+        margin-top: 20px;
+    }
+    .btn-add {
+        margin-bottom: 15px;
+    }
+    .form-group label {
+        font-weight: 600;
+    }
+    .edit-icon, .delete-icon {
+        cursor: pointer;
+        margin: 0 5px;
+    }
+    .edit-icon:hover { color: #007bff; }
+    .delete-icon:hover { color: #dc3545; }
+    /* Distinct styling for optional condition section */
+    .condition-wrapper {
+        margin-top: 10px;
+        padding: 12px 14px;
+        background: #f1f5f9; /* light slate */
+        border: 1px solid #d0d7de;
+        border-left: 4px solid #6c757d; /* accent */
+        border-radius: 6px;
+    }
+    .condition-wrapper .form-group label {
+        font-weight: 500;
+    }
+    .condition-help {
+        font-size: 0.9rem;
+        color: #6c757d;
+        margin-bottom: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="fas fa-exchange-alt"></i> Migration Rules</h2>
+            <p class="text-muted">Define transformations and overwrites with optional conditions</p>
+            
+            <button class="btn btn-primary btn-add" data-toggle="modal" data-target="#addRuleModal">
+                <i class="fas fa-plus"></i> Add New Rule
+            </button>
+            
+            <div class="table-responsive translation-table">
+                <table class="table table-striped table-bordered" id="translationsTable">
+                    <thead class="thead-dark">
+                        <tr>
+                            <th>Order</th>
+                            <th>Type</th>
+                            <th>Source Column</th>
+                            <th>Target Column</th>
+                            <th>Source Value</th>
+                            <th>Target Value</th>
+                            <th>Condition</th>
+                            <th>Notes</th>
+                            <th>Created By</th>
+                            <th>Created At</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="translationsBody">
+                        <tr>
+                            <td colspan="11" class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="sr-only">Loading...</span>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Rule Modal -->
+<div class="modal fade" id="addRuleModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Migration Rule</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="addRuleForm">
+                    <div class="form-group">
+                        <label for="ruleType">Rule Type *</label>
+                        <select class="form-control" id="ruleType" required>
+                            <option value="translation">Translation</option>
+                            <option value="overwrite">Overwrite</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sourceColumn">Source Column</label>
+                        <input type="text" class="form-control" id="sourceColumn"
+                               placeholder="e.g., authorization_group">
+                    </div>
+                    <div class="form-group">
+                        <label for="targetColumn">Target Column *</label>
+                        <input type="text" class="form-control" id="targetColumn" required 
+                               placeholder="e.g., authorization_group">
+                    </div>
+                    <div class="form-group">
+                        <label for="sourceValue">Source Value</label>
+                        <input type="text" class="form-control" id="sourceValue"
+                               placeholder="e.g., L22">
+                    </div>
+                    <div class="form-group">
+                        <label for="targetValue">Target Value *</label>
+                        <input type="text" class="form-control" id="targetValue" required 
+                               placeholder="e.g., L00">
+                    </div>
+                    <div class="d-flex align-items-center justify-content-between">
+                        <h6 class="mb-0">Optional Condition</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleConditionBtn">Add Condition</button>
+                    </div>
+                    <div id="conditionSection" class="condition-wrapper" style="display:none;">
+                        <div class="condition-help">Apply this rule only when the condition matches.</div>
+                        <div class="form-group mt-2">
+                            <label for="conditionColumn">Condition Column</label>
+                            <input type="text" class="form-control" id="conditionColumn" placeholder="e.g., source_description">
+                        </div>
+                        <div class="form-group">
+                            <label for="conditionOperator">Condition Operator</label>
+                            <select class="form-control" id="conditionOperator">
+                                <option value="contains">contains</option>
+                                <option value="not_contains">does not contain</option>
+                                <option value="equals">equals</option>
+                                <option value="not_equal">not equal</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="conditionValue">Condition Value</label>
+                            <input type="text" class="form-control" id="conditionValue" placeholder="e.g., gasket">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="notes">Notes</label>
+                        <textarea class="form-control" id="notes" rows="2" 
+                                  placeholder="Optional description"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveRule()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Rule Modal -->
+<div class="modal fade" id="editRuleModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Migration Rule</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="editRuleForm">
+                    <input type="hidden" id="editRuleId">
+                    <div class="form-group">
+                        <label>Rule Type</label>
+                        <input type="text" class="form-control" id="editRuleType" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Source Column</label>
+                        <input type="text" class="form-control" id="editSourceColumn" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Target Column</label>
+                        <input type="text" class="form-control" id="editTargetColumn" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Source Value</label>
+                        <input type="text" class="form-control" id="editSourceValue" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label for="editTargetValue">Target Value *</label>
+                        <input type="text" class="form-control" id="editTargetValue" required>
+                    </div>
+                    <div class="d-flex align-items-center justify-content-between">
+                        <h6 class="mb-0">Optional Condition</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleEditConditionBtn">Add Condition</button>
+                    </div>
+                    <div id="editConditionSection" class="condition-wrapper" style="display:none;">
+                        <div class="condition-help">Apply this rule only when the condition matches.</div>
+                        <div class="form-group mt-2">
+                            <label for="editConditionColumn">Condition Column</label>
+                            <input type="text" class="form-control" id="editConditionColumn">
+                        </div>
+                        <div class="form-group">
+                            <label for="editConditionOperator">Condition Operator</label>
+                            <select class="form-control" id="editConditionOperator">
+                                <option value="contains">contains</option>
+                                <option value="not_contains">does not contain</option>
+                                <option value="equals">equals</option>
+                                <option value="not_equal">not equal</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="editConditionValue">Condition Value</label>
+                            <input type="text" class="form-control" id="editConditionValue">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="editNotes">Notes</label>
+                        <textarea class="form-control" id="editNotes" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="updateRule()">Update</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    loadRules();
+    // Toggle source field requirements based on rule type
+    $('#ruleType').on('change', function() {
+        const type = $(this).val();
+        const isTranslation = type === 'translation';
+        $('#sourceColumn').prop('required', isTranslation);
+        $('#sourceValue').prop('required', isTranslation);
+        $('#sourceColumn').prop('disabled', !isTranslation);
+        $('#sourceValue').prop('disabled', !isTranslation);
+    }).trigger('change');
+
+    // Toggle condition section visibility
+    $('#toggleConditionBtn').on('click', function() {
+        const section = $('#conditionSection');
+        const isHidden = section.is(':hidden');
+        section.toggle(isHidden);
+        $(this).text(isHidden ? 'Remove Condition' : 'Add Condition');
+        if (!isHidden) {
+            // Clearing values when removing condition
+            $('#conditionColumn').val('');
+            $('#conditionOperator').val('contains');
+            $('#conditionValue').val('');
+        }
+    });
+
+    // Toggle edit condition section visibility
+    $('#toggleEditConditionBtn').on('click', function() {
+        const section = $('#editConditionSection');
+        const isHidden = section.is(':hidden');
+        section.toggle(isHidden);
+        $(this).text(isHidden ? 'Remove Condition' : 'Add Condition');
+        if (!isHidden) {
+            // Clearing values when removing condition
+            $('#editConditionColumn').val('');
+            $('#editConditionOperator').val('contains');
+            $('#editConditionValue').val('');
+        }
+    });
+});
+
+function loadRules() {
+    $.get('/rules/list', function(response) {
+        if (response.success) {
+            displayRules(response.rules || []);
+        } else {
+            showError('Failed to load migration rules: ' + response.error);
+        }
+    }).fail(function(xhr) {
+        showError('Failed to load migration rules: ' + xhr.responseText);
+    });
+}
+
+function displayRules(rules) {
+    const tbody = $('#translationsBody');
+    tbody.empty();
+    
+    if (rules.length === 0) {
+        tbody.append('<tr><td colspan="11" class="text-center text-muted">No migration rules defined yet</td></tr>');
+        return;
+    }
+    
+    rules.forEach(function(t) {
+        const createdAt = t.created_at ? new Date(t.created_at).toLocaleString() : 'N/A';
+        const condition = (t.condition_column && t.condition_value) 
+            ? `${escapeHtml(t.condition_column)} ${escapeHtml(t.condition_operator || 'contains')} ${escapeHtml(t.condition_value)}`
+            : '-';
+        const type = (t.rule_type || 'translation').toLowerCase();
+        const typeClass = type === 'overwrite' ? 'badge-warning' : 'badge-info';
+        const execOrder = t.execution_order !== undefined ? t.execution_order : 100;
+        const row = `
+            <tr>
+                <td><span class="badge badge-secondary">${execOrder}</span></td>
+                <td><span class="badge ${typeClass}">${escapeHtml(t.rule_type || 'translation')}</span></td>
+                <td><code>${escapeHtml(t.source_column)}</code></td>
+                <td><code>${escapeHtml(t.target_column)}</code></td>
+                <td><strong>${escapeHtml(t.source_value)}</strong></td>
+                <td><strong>${escapeHtml(t.target_value)}</strong></td>
+                <td>${condition}</td>
+                <td>${escapeHtml(t.notes || '')}</td>
+                <td>${escapeHtml(t.created_by || 'system')}</td>
+                <td>${createdAt}</td>
+                <td>
+                    <i class="fas fa-arrow-up edit-icon" title="Move Up" onclick="moveRuleUp(${t.id})"></i>
+                    <i class="fas fa-arrow-down edit-icon" title="Move Down" onclick="moveRuleDown(${t.id})"></i>
+                    <i class="fas fa-edit edit-icon" title="Edit" onclick="editRule(${t.id})"></i>
+                    <i class="fas fa-copy edit-icon" title="Clone" onclick="cloneRule(${t.id})"></i>
+                    <i class="fas fa-trash delete-icon" title="Delete" onclick="deleteRule(${t.id})"></i>
+                </td>
+            </tr>
+        `;
+        tbody.append(row);
+    });
+}
+
+function saveRule() {
+    const data = {
+        rule_type: $('#ruleType').val().trim(),
+        source_column: $('#sourceColumn').val().trim(),
+        target_column: $('#targetColumn').val().trim(),
+        source_value: $('#sourceValue').val().trim(),
+        target_value: $('#targetValue').val(),  // Keep original value, don't trim to preserve empty strings
+        condition_column: $('#conditionColumn').val().trim(),
+        condition_operator: $('#conditionOperator').val().trim(),
+        condition_value: $('#conditionValue').val().trim(),
+        notes: $('#notes').val().trim()
+    };
+    
+    if (data.rule_type === 'translation') {
+        if (!data.source_column || !data.target_column || data.target_value === null || data.target_value === undefined) {
+            showError('source_column, target_column and target_value are required');
+            return;
+        }
+    } else {
+        if (!data.target_column || data.target_value === null || data.target_value === undefined) {
+            showError('target_column and target_value are required for overwrite');
+            return;
+        }
+    }
+    
+    $.ajax({
+        url: '/rules/add',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(data),
+        success: function(response) {
+            if (response.success) {
+                $('#addRuleModal').modal('hide');
+                $('#addRuleForm')[0].reset();
+                showSuccess('Rule added successfully');
+                loadRules();
+            } else {
+                showError('Failed to add rule: ' + response.error);
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError('Failed to add rule: ' + error);
+        }
+    });
+}
+
+function editRule(id) {
+    // Find the translation in current data
+    $.get('/rules/list', function(response) {
+        if (response.success) {
+            const rule = (response.rules || []).find(t => t.id === id);
+            if (rule) {
+                $('#editRuleId').val(rule.id);
+                $('#editRuleType').val(rule.rule_type);
+                $('#editSourceColumn').val(rule.source_column);
+                $('#editTargetColumn').val(rule.target_column);
+                $('#editSourceValue').val(rule.source_value);
+                $('#editTargetValue').val(rule.target_value);
+                $('#editConditionColumn').val(rule.condition_column || '');
+                $('#editConditionOperator').val(rule.condition_operator || 'contains');
+                $('#editConditionValue').val(rule.condition_value || '');
+                $('#editNotes').val(rule.notes || '');
+                // Disable/enable source fields depending on rule type (overwrite vs translation)
+                const isTranslation = (rule.rule_type || 'translation').toLowerCase() === 'translation';
+                $('#editSourceColumn').prop('disabled', !isTranslation);
+                $('#editSourceValue').prop('disabled', !isTranslation);
+                // Show condition section if the rule has a condition
+                const hasCondition = !!(rule.condition_column && rule.condition_value);
+                $('#editConditionSection').toggle(hasCondition);
+                $('#toggleEditConditionBtn').text(hasCondition ? 'Remove Condition' : 'Add Condition');
+                $('#editRuleModal').modal('show');
+            }
+        }
+    });
+}
+
+function cloneRule(id) {
+    // Find the rule and populate Add modal with its data
+    $.get('/rules/list', function(response) {
+        if (response.success) {
+            const rule = (response.rules || []).find(t => t.id === id);
+            if (rule) {
+                // Populate Add modal with cloned data
+                $('#ruleType').val(rule.rule_type || 'translation').trigger('change');
+                $('#sourceColumn').val(rule.source_column);
+                $('#targetColumn').val(rule.target_column);
+                $('#sourceValue').val(rule.source_value);
+                $('#targetValue').val(rule.target_value);
+                $('#conditionColumn').val(rule.condition_column || '');
+                $('#conditionOperator').val(rule.condition_operator || 'contains');
+                $('#conditionValue').val(rule.condition_value || '');
+                $('#notes').val((rule.notes || '') + ' (cloned)');
+                // Show condition section if the rule has a condition
+                const hasCondition = !!(rule.condition_column && rule.condition_value);
+                $('#conditionSection').toggle(hasCondition);
+                $('#toggleConditionBtn').text(hasCondition ? 'Remove Condition' : 'Add Condition');
+                $('#addRuleModal').modal('show');
+            }
+        }
+    });
+}
+
+function updateRule() {
+    const id = $('#editRuleId').val();
+    const data = {
+        target_value: $('#editTargetValue').val(),  // Keep original value, don't trim to preserve empty strings
+        condition_column: $('#editConditionColumn').val().trim(),
+        condition_operator: $('#editConditionOperator').val().trim(),
+        condition_value: $('#editConditionValue').val().trim(),
+        notes: $('#editNotes').val().trim()
+    };
+    
+    if (data.target_value === null || data.target_value === undefined) {
+        showError('Target value is required');
+        return;
+    }
+    
+    $.ajax({
+        url: `/rules/${id}/update`,
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(data),
+        success: function(response) {
+            if (response.success) {
+                $('#editRuleModal').modal('hide');
+                showSuccess('Rule updated successfully');
+                loadRules();
+            } else {
+                showError('Failed to update rule: ' + response.error);
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError('Failed to update rule: ' + error);
+        }
+    });
+}
+
+function deleteRule(id) {
+    if (!confirm('Are you sure you want to delete this migration rule?')) {
+        return;
+    }
+    
+    $.ajax({
+        url: `/rules/${id}/delete`,
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                showSuccess('Rule deleted successfully');
+                loadRules();
+            } else {
+                showError('Failed to delete rule: ' + response.error);
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError('Failed to delete rule: ' + error);
+        }
+    });
+}
+
+function moveRuleUp(id) {
+    $.ajax({
+        url: `/rules/${id}/move_up`,
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                loadRules();
+            } else {
+                showError(response.error || 'Failed to move rule up');
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError('Failed to move rule up: ' + error);
+        }
+    });
+}
+
+function moveRuleDown(id) {
+    $.ajax({
+        url: `/rules/${id}/move_down`,
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                loadRules();
+            } else {
+                showError(response.error || 'Failed to move rule down');
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError('Failed to move rule down: ' + error);
+        }
+    });
+}
+
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return String(text || '').replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
+function showSuccess(message) {
+    alert(message);
+}
+
+function showError(message) {
+    alert('Error: ' + message);
+}
+</script>
+{% endblock %}

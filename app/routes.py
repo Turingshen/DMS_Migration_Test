@@ -48,7 +48,9 @@ def get_template_context():
         'source_system': read_sap_system,
         'source_system_label': cfg.get(read_sap_system, 'system_label') if read_sap_system else 'Unknown',
         'target_system': write_sap_system,
-        'target_system_label': cfg.get(write_sap_system, 'system_label') if write_sap_system else 'Unknown'
+        'target_system_label': cfg.get(write_sap_system, 'system_label') if write_sap_system else 'Unknown',
+        'max_workers': session.get('max_workers', DEFAULT_SETTINGS.get('max_workers', 2)),
+        'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS.get('pacing_seconds', 0))
     }
 
 

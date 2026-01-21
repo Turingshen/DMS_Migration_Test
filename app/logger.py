@@ -17,22 +17,29 @@ class MigrationLogger:
     
     LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
     
+    # Minimal console logging: Only show WARNING+ on console, store all in DB
+    # Set to 'DEBUG' for verbose output, 'WARNING' for minimal, 'ERROR' for errors only
+    CONSOLE_MIN_LEVEL = 'WARNING'
+    
     def __init__(self, batch_id=None, staging_id=None, console_output=True):
         self.batch_id = batch_id
         self.staging_id = staging_id
         self.console_output = console_output
     
+    def _should_print(self, level):
+        """Check if level should be printed to console."""
+        level_order = {'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3, 'CRITICAL': 4}
+        return level_order.get(level, 0) >= level_order.get(self.CONSOLE_MIN_LEVEL, 2)
+    
     def _log(self, level, message, category=None, details=None):
         """Write log entry to database and optionally console."""
         try:
-            # Console output
-            if self.console_output:
+            # Console output - only for WARNING+ by default
+            if self.console_output and self._should_print(level):
                 timestamp = dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 prefix = f"[{timestamp}] [{level}]"
                 if category:
                     prefix += f" [{category}]"
-                if self.batch_id:
-                    prefix += f" [Batch:{self.batch_id}]"
                 if self.staging_id:
                     prefix += f" [Record:{self.staging_id}]"
                 print(f"{prefix} {message}")

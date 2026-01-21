@@ -532,7 +532,12 @@ function updateBatchStatistics(records) {
     const runtimeLarge = (buckets.large.size / (1024 * 1024) * transferRate) + (buckets.large.count * buckets.large.pacing);
     const runtimeUnknown = buckets.unknown.count * buckets.unknown.pacing;
     
-    const totalRuntime = runtimeTiny + runtimeSmall + runtimeMedium + runtimeLarge + runtimeUnknown;
+    // Total runtime without parallelization
+    const totalSerialRuntime = runtimeTiny + runtimeSmall + runtimeMedium + runtimeLarge + runtimeUnknown;
+    
+    // Divide by number of workers for parallel execution
+    const maxWorkers = {{ max_workers | default(2) }};
+    const totalRuntime = totalSerialRuntime / maxWorkers;
     
     // Update statistics display - show pending count and success count
     document.getElementById('statRecords').innerHTML = pendingRecords.length > 0 
@@ -555,7 +560,7 @@ function updateBatchStatistics(records) {
     if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}×${buckets.unknown.pacing}s`);
     
     const detailText = pendingRecords.length > 0 
-        ? breakdown.join(' + ') + ` + ${formatFileSize(totalSize)}@1s/MB`
+        ? `(${breakdown.join(' + ')} + ${formatFileSize(totalSize)}@1s/MB) ÷ ${maxWorkers} workers`
         : 'Keine ausstehenden Dokumente';
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
@@ -564,6 +569,8 @@ function updateBatchStatistics(records) {
         buckets: buckets,
         totalSize: totalSize,
         totalRuntime: totalRuntime,
+        totalSerialRuntime: totalSerialRuntime,
+        maxWorkers: maxWorkers,
         transferRate: transferRate
     };
 }
@@ -605,9 +612,13 @@ function showRuntimeDetails() {
 📊 CALCULATION:
 • Transfer Time = Total Size × ${stats.transferRate} sec/MB
 • Pacing Time = Documents × Pacing per Package
-• Total = Transfer + Pacing
+• Serial Runtime (1 Worker) = ${formatDuration(stats.totalSerialRuntime)}
 
-⏱️ TOTAL ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)}
+🚀 PARALLEL EXECUTION:
+• Workers: ${stats.maxWorkers}
+• Parallel Runtime = Serial / Workers = ${formatDuration(stats.totalSerialRuntime)} ÷ ${stats.maxWorkers}
+
+⏱️ ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)} (with ${stats.maxWorkers} workers)
 
 💡 PACING EXPLANATION:
 • ⚡ ≤1MB: Fast batch mode (${b.tiny.pacing}s) - minimal API overhead

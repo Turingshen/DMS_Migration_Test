@@ -969,14 +969,20 @@ def execute_migration(batch_id, record_ids=None):
         cumulative_failed = cumulative[2] or 0
         cumulative_partial = cumulative[3] or 0
         total_bytes = float(cumulative[4] or 0)  # Convert Decimal to float
-        # Total execution time is sum of individual document execution times
-        batch_duration = float(cumulative[5] or this_run_duration)  # Convert Decimal to float
+        cumulative_execution_time = float(cumulative[5] or 0)  # Sum of all individual execution times
+        
+        # IMPORTANT: Use REAL elapsed time (this_run_duration), not cumulative execution time
+        # With parallel workers, real time is shorter than sum of individual times
+        # cumulative_execution_time is useful for avg_time_per_doc calculation
+        real_duration = this_run_duration  # Actual wall-clock time for this run
         
         # Calculate statistics based on actual execution data
         total_mb = total_bytes / 1024 / 1024
-        avg_time_per_doc = batch_duration / total_executed if total_executed > 0 else 0
-        avg_time_per_mb = batch_duration / total_mb if total_mb > 0 else 0
-        throughput_mb_per_min = (total_mb / batch_duration * 60) if batch_duration > 0 else 0
+        # avg_time_per_doc uses cumulative time (actual CPU time spent)
+        avg_time_per_doc = cumulative_execution_time / total_executed if total_executed > 0 else 0
+        # Throughput uses REAL duration (what user experiences with parallel workers)
+        avg_time_per_mb = real_duration / total_mb if total_mb > 0 else 0
+        throughput_mb_per_min = (total_mb / real_duration * 60) if real_duration > 0 else 0
         total_files = total_executed  # Approximation - 1 file per document on average
         
         # Update batch with CUMULATIVE statistics
@@ -990,24 +996,26 @@ def execute_migration(batch_id, record_ids=None):
                 WHERE batch_id = '{batch_id}'
             """))
         
-        # Format duration with hours if needed
-        if batch_duration >= 3600:
-            duration_formatted = f"{int(batch_duration // 3600)}h {int((batch_duration % 3600) // 60)}m {int(batch_duration % 60)}s"
+        # Format REAL duration with hours if needed (what user experiences)
+        if real_duration >= 3600:
+            duration_formatted = f"{int(real_duration // 3600)}h {int((real_duration % 3600) // 60)}m {int(real_duration % 60)}s"
         else:
-            duration_formatted = f"{int(batch_duration // 60)}m {int(batch_duration % 60)}s"
+            duration_formatted = f"{int(real_duration // 60)}m {int(real_duration % 60)}s"
         
-        # Build statistics summary (cumulative from database)
+        # Build statistics summary (using real elapsed time for throughput)
         batch_stats = {
-            'batch_duration_seconds': round(batch_duration, 2),
+            'batch_duration_seconds': round(real_duration, 2),  # Real wall-clock time
             'batch_duration_formatted': duration_formatted,
+            'cumulative_cpu_time_seconds': round(cumulative_execution_time, 2),  # Sum of individual times
             'total_documents': total_executed,
             'total_files': total_files,
             'total_bytes': total_bytes,
             'total_mb': round(total_mb, 2),
-            'avg_time_per_document_seconds': round(avg_time_per_doc, 2),
-            'avg_time_per_mb_seconds': round(avg_time_per_mb, 2),
-            'throughput_mb_per_minute': round(throughput_mb_per_min, 2),
+            'avg_time_per_document_seconds': round(avg_time_per_doc, 2),  # Based on cumulative time
+            'avg_time_per_mb_seconds': round(avg_time_per_mb, 2),  # Based on real time
+            'throughput_mb_per_minute': round(throughput_mb_per_min, 2),  # Based on real time
             'workers': max_workers,
+            'parallel_speedup': round(cumulative_execution_time / real_duration, 2) if real_duration > 0 else 1,
             'pacing_seconds': pacing_seconds,
             'this_run': {
                 'documents': len(results),

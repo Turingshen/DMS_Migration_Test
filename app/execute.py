@@ -48,6 +48,117 @@ PACING_BUCKETS = {
     'unknown': {'pacing': 5}    # Unknown size: Assume small (same as tiny)
 }
 
+# Terminal logging verbosity: True = detailed, False = minimal (progress + errors only)
+VERBOSE_TERMINAL_LOGGING = False
+
+
+def get_historical_pacing_stats():
+    """
+    Analyze historical execution data to calculate pacing recommendations.
+    Returns statistics per size bucket based on actual execution times.
+    """
+    try:
+        query = """
+            SELECT 
+                file_size_bytes,
+                DATEDIFF(MILLISECOND, execution_started_at, execution_completed_at) / 1000.0 as execution_time_sec,
+                execution_status
+            FROM dbo.migration_staging
+            WHERE execution_status IN ('success', 'partial')
+            AND execution_started_at IS NOT NULL
+            AND execution_completed_at IS NOT NULL
+            AND file_size_bytes IS NOT NULL
+            AND file_size_bytes > 0
+        """
+        
+        with misc_engine.begin() as con:
+            result = con.execute(text(query))
+            rows = result.fetchall()
+        
+        if not rows:
+            return {
+                'has_data': False,
+                'message': 'Keine historischen Daten verfügbar',
+                'buckets': PACING_BUCKETS
+            }
+        
+        # Group by size bucket
+        bucket_stats = {
+            'tiny': {'count': 0, 'times': [], 'max_mb': 1},
+            'small': {'count': 0, 'times': [], 'max_mb': 10},
+            'medium': {'count': 0, 'times': [], 'max_mb': 50},
+            'large': {'count': 0, 'times': [], 'max_mb': 999999}  # Use large number instead of inf for JSON compatibility
+        }
+        
+        for row in rows:
+            size_bytes, exec_time, status = row
+            if size_bytes is None or exec_time is None:
+                continue
+            
+            # Convert Decimal to float for division
+            size_bytes = float(size_bytes)
+            exec_time = float(exec_time)
+            size_mb = size_bytes / (1024 * 1024)
+            
+            if size_mb <= 1:
+                bucket = 'tiny'
+            elif size_mb <= 10:
+                bucket = 'small'
+            elif size_mb <= 50:
+                bucket = 'medium'
+            else:
+                bucket = 'large'
+            
+            bucket_stats[bucket]['count'] += 1
+            bucket_stats[bucket]['times'].append(exec_time)
+        
+        # Calculate statistics for each bucket
+        recommendations = {}
+        for bucket_name, stats in bucket_stats.items():
+            if stats['count'] > 0:
+                times = stats['times']
+                avg_time = sum(times) / len(times)
+                max_time = max(times)
+                min_time = min(times)
+                # Recommended pacing = max_time + 20% buffer, rounded up
+                recommended = round(max_time * 1.2, 1)
+                
+                recommendations[bucket_name] = {
+                    'count': stats['count'],
+                    'avg_time': round(avg_time, 2),
+                    'min_time': round(min_time, 2),
+                    'max_time': round(max_time, 2),
+                    'current_pacing': PACING_BUCKETS[bucket_name]['pacing'],
+                    'recommended_pacing': recommended,
+                    'max_mb': stats['max_mb']
+                }
+            else:
+                recommendations[bucket_name] = {
+                    'count': 0,
+                    'avg_time': None,
+                    'min_time': None,
+                    'max_time': None,
+                    'current_pacing': PACING_BUCKETS[bucket_name]['pacing'],
+                    'recommended_pacing': PACING_BUCKETS[bucket_name]['pacing'],
+                    'max_mb': stats['max_mb']
+                }
+        
+        total_records = sum(s['count'] for s in recommendations.values())
+        
+        return {
+            'has_data': True,
+            'total_records': total_records,
+            'buckets': recommendations,
+            'current_pacing': {k: v['pacing'] for k, v in PACING_BUCKETS.items() if k != 'unknown'}
+        }
+        
+    except Exception as e:
+        return {
+            'has_data': False,
+            'error': str(e),
+            'buckets': PACING_BUCKETS
+        }
+
 
 def get_dynamic_pacing(file_size_bytes):
     """
@@ -173,6 +284,19 @@ def update_execution_status(staging_id, status, error=None):
         print(f"[UPDATE_ERROR] Failed to update staging_id={staging_id}: {e}")
 
 
+def mark_execution_started(staging_id):
+    """Mark execution as started by setting execution_started_at."""
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                UPDATE dbo.migration_staging
+                SET execution_started_at = GETUTCDATE()
+                WHERE id = :staging_id
+            """), {'staging_id': staging_id})
+    except Exception as e:
+        print(f"[UPDATE_ERROR] Failed to mark started staging_id={staging_id}: {e}")
+
+
 def update_metadata_fields(staging_id, loioid=None, description=None, filename=None, file_size=None, mime_type=None):
     """Update metadata fields for a staging record after successful read."""
     try:
@@ -244,6 +368,9 @@ def execute_single_document(server_session, staging_record, session_snapshot):
     batch_id = staging_record.get('batch_id')
     logger = get_logger(batch_id=batch_id, staging_id=staging_id)
     start_time = time.time()
+    
+    # Mark execution as started in database
+    mark_execution_started(staging_id)
     
     logger.info(f"Starting migration for document {staging_record['source_documentnumber']}", category="EXECUTE")
     
@@ -587,16 +714,6 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         time_taken = time.time() - start_time
         if time_taken < pacing_seconds:
             sleep_time = pacing_seconds - time_taken
-            # Log pacing for transparency
-            try:
-                import math
-                if file_size and not math.isnan(float(file_size)):
-                    size_mb = file_size / (1024*1024)
-                else:
-                    size_mb = 0
-            except (TypeError, ValueError):
-                size_mb = 0
-            print(f"[PACING] ID={staging_id} Size={size_mb:.1f}MB Pacing={pacing_seconds}s (took {time_taken:.1f}s, sleeping {sleep_time:.1f}s)")
             time.sleep(sleep_time)
 
 
@@ -609,7 +726,8 @@ def is_migration_running(batch_id):
         if batch_id in _active_migrations:
             start_time = _active_migrations[batch_id]
             elapsed_minutes = (time.time() - start_time) / 60
-            print(f"[LOCK] Batch {batch_id} has been running for {elapsed_minutes:.1f} minutes")
+            if VERBOSE_TERMINAL_LOGGING:
+                print(f"[LOCK] Batch {batch_id} has been running for {elapsed_minutes:.1f} minutes")
             return True, f"Migration already running since {elapsed_minutes:.1f} minutes"
     
     # Also check database status as fallback (in case of crash/restart)
@@ -630,7 +748,8 @@ def is_migration_running(batch_id):
             """)).fetchone().cnt
             
             if executing_count > 0:
-                print(f"[LOCK] Found {executing_count} records still in 'executing' status - likely orphaned")
+                if VERBOSE_TERMINAL_LOGGING:
+                    print(f"[LOCK] Found {executing_count} records still in 'executing' status - likely orphaned")
                 return False, f"Found {executing_count} orphaned 'executing' records (will be reset)"
             
     return False, None
@@ -642,7 +761,8 @@ def clear_migration_lock(batch_id):
     with _migration_lock:
         if batch_id in _active_migrations:
             del _active_migrations[batch_id]
-            print(f"[LOCK] Released lock for batch {batch_id}")
+            if VERBOSE_TERMINAL_LOGGING:
+                print(f"[LOCK] Released lock for batch {batch_id}")
 
 
 def set_migration_lock(batch_id):
@@ -650,7 +770,8 @@ def set_migration_lock(batch_id):
     global _active_migrations
     with _migration_lock:
         _active_migrations[batch_id] = time.time()
-        print(f"[LOCK] Acquired lock for batch {batch_id}")
+        if VERBOSE_TERMINAL_LOGGING:
+            print(f"[LOCK] Acquired lock for batch {batch_id}")
 
 
 def reset_orphaned_records(batch_id):
@@ -662,7 +783,8 @@ def reset_orphaned_records(batch_id):
             WHERE batch_id = '{batch_id}' AND execution_status = 'executing'
         """))
         if result.rowcount > 0:
-            print(f"[CLEANUP] Reset {result.rowcount} orphaned 'executing' records to 'pending'")
+            if VERBOSE_TERMINAL_LOGGING:
+                print(f"[CLEANUP] Reset {result.rowcount} orphaned 'executing' records to 'pending'")
         return result.rowcount
 
 
@@ -720,10 +842,9 @@ def execute_migration(batch_id, record_ids=None):
                 'error': 'No records found for execution'
             }
         
-        # Log pacing mode
-        pacing_mode = f"fixed={pacing_seconds}s" if pacing_seconds > 0 else "dynamic (5-45s based on file size)"
-        print(f"[EXECUTE] Starting migration for {len(records_df)} records in batch {batch_id}")
-        print(f"[EXECUTE] Settings: workers={max_workers}, pacing={pacing_mode}")
+        # Log pacing mode - always show start message
+        pacing_mode = f"fixed={pacing_seconds}s" if pacing_seconds > 0 else "dynamic (5-45s)"
+        print(f"[START] Batch {batch_id}: {len(records_df)} records, {max_workers} workers, pacing={pacing_mode}")
         
         # Track batch timing
         batch_start_time = time.time()
@@ -792,10 +913,12 @@ def execute_migration(batch_id, record_ids=None):
                     eta_seconds = (total_records - completed_count) / rate if rate > 0 else 0
                     eta_str = f"{int(eta_seconds//60)}m {int(eta_seconds%60)}s" if eta_seconds > 0 else "-"
                     
-                    print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.1f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}")
+                    # Print progress every 10 records or at 25%, 50%, 75%, 100%
+                    if completed_count % 10 == 0 or pct in [25, 50, 75, 100] or completed_count == total_records:
+                        print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.0f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}")
                     
-                    # Update DB every 2 records or at end for live progress
-                    if completed_count % 2 == 0 or completed_count == total_records:
+                    # Update DB every 5 records or at end for live progress
+                    if completed_count % 5 == 0 or completed_count == total_records:
                         update_progress()
                         
                 except Exception as e:
@@ -809,41 +932,75 @@ def execute_migration(batch_id, record_ids=None):
         # Final progress update
         update_progress()
         
-        # Calculate batch timing
+        # Calculate batch timing from THIS execution run
         batch_end_time = time.time()
-        batch_duration = batch_end_time - batch_start_time
+        this_run_duration = batch_end_time - batch_start_time
         
-        # Update batch statistics
+        # Update batch statistics - count from this run's results
         success_count = len([r for r in results if r.get('status') == 'success'])
         failed_count = len([r for r in results if r.get('status') == 'failed'])
         partial_count = len([r for r in results if r.get('status') == 'partial'])
         
         # Calculate aggregate statistics from individual results
-        total_bytes = sum(r.get('stats', {}).get('total_bytes', 0) for r in results)
-        total_files = sum(r.get('stats', {}).get('file_count', 0) for r in results)
-        doc_times = [r.get('stats', {}).get('execution_time', 0) for r in results if r.get('stats')]
+        total_bytes_this_run = sum(r.get('stats', {}).get('total_bytes', 0) for r in results)
+        total_files_this_run = sum(r.get('stats', {}).get('file_count', 0) for r in results)
         
-        # Calculate statistics
-        avg_time_per_doc = batch_duration / len(results) if results else 0
-        avg_time_per_mb = batch_duration / (total_bytes / 1024 / 1024) if total_bytes > 0 else 0
+        # Now calculate CUMULATIVE statistics from database (all executed records)
+        with misc_engine.begin() as con:
+            # Get cumulative stats from all executed records in this batch
+            cumulative = con.execute(text("""
+                SELECT 
+                    COUNT(*) as total_executed,
+                    SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                    SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+                    SUM(COALESCE(file_size_bytes, 0)) as total_bytes,
+                    SUM(DATEDIFF(MILLISECOND, execution_started_at, execution_completed_at)) / 1000.0 as total_execution_time
+                FROM dbo.migration_staging 
+                WHERE batch_id = :batch_id 
+                AND execution_status IN ('success', 'failed', 'partial')
+                AND execution_started_at IS NOT NULL
+                AND execution_completed_at IS NOT NULL
+            """), {'batch_id': batch_id}).fetchone()
+        
+        # Use cumulative stats from database
+        total_executed = cumulative[0] or 0
+        cumulative_success = cumulative[1] or 0
+        cumulative_failed = cumulative[2] or 0
+        cumulative_partial = cumulative[3] or 0
+        total_bytes = float(cumulative[4] or 0)  # Convert Decimal to float
+        # Total execution time is sum of individual document execution times
+        batch_duration = float(cumulative[5] or this_run_duration)  # Convert Decimal to float
+        
+        # Calculate statistics based on actual execution data
         total_mb = total_bytes / 1024 / 1024
+        avg_time_per_doc = batch_duration / total_executed if total_executed > 0 else 0
+        avg_time_per_mb = batch_duration / total_mb if total_mb > 0 else 0
         throughput_mb_per_min = (total_mb / batch_duration * 60) if batch_duration > 0 else 0
+        total_files = total_executed  # Approximation - 1 file per document on average
         
+        # Update batch with CUMULATIVE statistics
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_batch
                 SET status = 'completed',
-                    executed_records = {completed_count},
-                    successful_records = {success_count},
-                    failed_records = {failed_count + partial_count}
+                    executed_records = {total_executed},
+                    successful_records = {cumulative_success},
+                    failed_records = {cumulative_failed + cumulative_partial}
                 WHERE batch_id = '{batch_id}'
             """))
         
-        # Build statistics summary
+        # Format duration with hours if needed
+        if batch_duration >= 3600:
+            duration_formatted = f"{int(batch_duration // 3600)}h {int((batch_duration % 3600) // 60)}m {int(batch_duration % 60)}s"
+        else:
+            duration_formatted = f"{int(batch_duration // 60)}m {int(batch_duration % 60)}s"
+        
+        # Build statistics summary (cumulative from database)
         batch_stats = {
             'batch_duration_seconds': round(batch_duration, 2),
-            'batch_duration_formatted': f"{int(batch_duration // 60)}m {int(batch_duration % 60)}s",
-            'total_documents': len(results),
+            'batch_duration_formatted': duration_formatted,
+            'total_documents': total_executed,
             'total_files': total_files,
             'total_bytes': total_bytes,
             'total_mb': round(total_mb, 2),
@@ -851,7 +1008,14 @@ def execute_migration(batch_id, record_ids=None):
             'avg_time_per_mb_seconds': round(avg_time_per_mb, 2),
             'throughput_mb_per_minute': round(throughput_mb_per_min, 2),
             'workers': max_workers,
-            'pacing_seconds': pacing_seconds
+            'pacing_seconds': pacing_seconds,
+            'this_run': {
+                'documents': len(results),
+                'success': success_count,
+                'failed': failed_count,
+                'partial': partial_count,
+                'duration_seconds': round(this_run_duration, 2)
+            }
         }
         
         # Analyze file size errors
@@ -1002,10 +1166,7 @@ def execute_migration(batch_id, record_ids=None):
                 WHERE batch_id = '{batch_id}'
             """))
         
-        print(f"[EXECUTE] Completed batch {batch_id}: {success_count} success, {failed_count} failed, {partial_count} partial")
-        print(f"[EXECUTE] Statistics: Duration={batch_stats['batch_duration_formatted']}, "
-              f"Total={total_mb:.2f}MB, Throughput={throughput_mb_per_min:.2f}MB/min, "
-              f"Avg/Doc={avg_time_per_doc:.2f}s, Avg/MB={avg_time_per_mb:.2f}s")
+        print(f"[DONE] Batch {batch_id}: ✓{cumulative_success} ✗{cumulative_failed} ⚠{cumulative_partial} | {batch_stats['batch_duration_formatted']} | {throughput_mb_per_min:.1f}MB/min")
         
         # Release the lock
         clear_migration_lock(batch_id)

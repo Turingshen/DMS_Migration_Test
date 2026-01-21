@@ -211,6 +211,18 @@ def settings():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@migrate_bp.route('/pacing_stats', methods=['GET'])
+def pacing_stats():
+    """Get historical pacing statistics for optimization."""
+    try:
+        from app.execute import get_historical_pacing_stats
+        stats = get_historical_pacing_stats()
+        # Return stats directly for frontend consumption
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'has_data': False, 'error': str(e)}), 500
+
+
 @migrate_bp.route('/')
 def index():
     """Main migration dashboard - shows batches and status."""

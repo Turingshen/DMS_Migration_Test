@@ -126,11 +126,65 @@
             </div>
         </div>
     </div>
+
+    <!-- Dynamic Pacing Analysis -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-chart-line"></i> Dynamisches Pacing - Historische Analyse
+                        <button class="btn btn-sm btn-light float-right" onclick="loadPacingStats()">
+                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                        </button>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div id="pacingStatsLoading" class="text-center py-3">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p class="mt-2">Lade historische Daten...</p>
+                    </div>
+                    <div id="pacingStatsContent" style="display: none;">
+                        <div class="alert alert-info" id="pacingNoData" style="display: none;">
+                            <i class="fas fa-info-circle"></i> Keine historischen Ausführungsdaten verfügbar. 
+                            Führe zuerst einige Migrationen aus, um Optimierungsempfehlungen zu erhalten.
+                        </div>
+                        <div id="pacingHasData" style="display: none;">
+                            <p><strong>Basierend auf <span id="totalRecords">0</span> ausgeführten Dokumenten:</strong></p>
+                            <table class="table table-bordered table-hover" id="pacingTable">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th>Größen-Bucket</th>
+                                        <th>Dateigröße</th>
+                                        <th>Anzahl</th>
+                                        <th>Ø Zeit (s)</th>
+                                        <th>Min (s)</th>
+                                        <th>Max (s)</th>
+                                        <th>Aktuell (s)</th>
+                                        <th>Empfohlen (s)</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pacingTableBody">
+                                </tbody>
+                            </table>
+                            <div class="alert alert-secondary">
+                                <i class="fas fa-lightbulb"></i> <strong>Empfehlung:</strong> 
+                                Das empfohlene Pacing ist die maximale Ausführungszeit + 20% Buffer. 
+                                Wenn das empfohlene Pacing niedriger ist als das aktuelle, läuft die Migration schneller.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     updateThroughput();
+    loadPacingStats();
     
     document.getElementById('maxWorkers').addEventListener('input', updateThroughput);
     document.getElementById('pacingSeconds').addEventListener('input', updateThroughput);
@@ -153,6 +207,91 @@ function updateThroughput() {
         const throughput = (workers * (60 / pacing)).toFixed(1);
         document.getElementById('throughputValue').textContent = throughput;
     }
+}
+
+function loadPacingStats() {
+    document.getElementById('pacingStatsLoading').style.display = 'block';
+    document.getElementById('pacingStatsContent').style.display = 'none';
+    
+    fetch('/pacing_stats')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('pacingStatsLoading').style.display = 'none';
+            document.getElementById('pacingStatsContent').style.display = 'block';
+            
+            if (!data.has_data) {
+                document.getElementById('pacingNoData').style.display = 'block';
+                document.getElementById('pacingHasData').style.display = 'none';
+                return;
+            }
+            
+            document.getElementById('pacingNoData').style.display = 'none';
+            document.getElementById('pacingHasData').style.display = 'block';
+            document.getElementById('totalRecords').textContent = data.total_records;
+            
+            const tbody = document.getElementById('pacingTableBody');
+            tbody.innerHTML = '';
+            
+            const bucketNames = {
+                'tiny': { name: 'Winzig', icon: '📄', size_range: '≤ 1 MB' },
+                'small': { name: 'Klein', icon: '📁', size_range: '1 - 10 MB' },
+                'medium': { name: 'Mittel', icon: '📦', size_range: '10 - 50 MB' },
+                'large': { name: 'Groß', icon: '📚', size_range: '> 50 MB' },
+                'unknown': { name: 'Unbekannt', icon: '❓', size_range: 'Keine Größe' }
+            };
+            
+            const bucketOrder = ['tiny', 'small', 'medium', 'large'];
+            
+            for (const bucket of bucketOrder) {
+                const stats = data.buckets[bucket];
+                if (!stats) continue;
+                
+                const bucketInfo = bucketNames[bucket] || { name: bucket, icon: '❓', size_range: '-' };
+                const row = document.createElement('tr');
+                
+                // Determine status - use correct field names from Python
+                const currentPacing = stats.current_pacing || 0;
+                const recommendedPacing = stats.recommended_pacing || 0;
+                
+                let statusBadge, statusClass;
+                if (stats.count === 0) {
+                    statusBadge = '<span class="badge badge-secondary">Keine Daten</span>';
+                    statusClass = '';
+                } else if (recommendedPacing <= currentPacing * 0.8) {
+                    statusBadge = '<span class="badge badge-success">Schneller möglich</span>';
+                    statusClass = 'table-success';
+                } else if (recommendedPacing > currentPacing) {
+                    statusBadge = '<span class="badge badge-warning">Erhöhen empfohlen</span>';
+                    statusClass = 'table-warning';
+                } else {
+                    statusBadge = '<span class="badge badge-info">OK</span>';
+                    statusClass = '';
+                }
+                
+                row.className = statusClass;
+                row.innerHTML = `
+                    <td><strong>${bucketInfo.icon} ${bucketInfo.name}</strong></td>
+                    <td>${bucketInfo.size_range}</td>
+                    <td>${stats.count}</td>
+                    <td>${stats.count > 0 && stats.avg_time ? stats.avg_time.toFixed(1) : '-'}</td>
+                    <td>${stats.count > 0 && stats.min_time ? stats.min_time.toFixed(1) : '-'}</td>
+                    <td>${stats.count > 0 && stats.max_time ? stats.max_time.toFixed(1) : '-'}</td>
+                    <td><strong>${currentPacing}s</strong></td>
+                    <td>${stats.count > 0 ? recommendedPacing.toFixed(0) + 's' : '-'}</td>
+                    <td>${statusBadge}</td>
+                `;
+                tbody.appendChild(row);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading pacing stats:', error);
+            document.getElementById('pacingStatsLoading').style.display = 'none';
+            document.getElementById('pacingStatsContent').style.display = 'block';
+            document.getElementById('pacingNoData').style.display = 'block';
+            document.getElementById('pacingNoData').innerHTML = 
+                '<i class="fas fa-exclamation-circle"></i> Fehler beim Laden der Statistiken: ' + error;
+            document.getElementById('pacingHasData').style.display = 'none';
+        });
 }
 
 document.getElementById('settingsForm').addEventListener('submit', function(e) {

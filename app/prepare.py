@@ -354,8 +354,21 @@ def enrich_with_metadata(data_df):
     cols = set(data_df.columns)
     has_required = all(k in cols for k in ['documentnumber', 'documenttype', 'documentversion', 'documentpart'])
     
+    # Check if Excel already has authorization_group column with values
+    excel_has_auth_group = 'authorization_group' in cols
+    excel_auth_filled = False
+    if excel_has_auth_group:
+        # Check if any values are non-empty (not NaN, not empty string)
+        excel_auth_filled = data_df['authorization_group'].notna().any() and \
+                            (data_df['authorization_group'].astype(str).str.strip() != '').any()
+    
     # Build query for authorization groups only when required columns exist
-    if has_required:
+    # and Excel doesn't already have auth_group filled
+    if has_required and not excel_auth_filled:
+        # Remove existing empty authorization_group column to avoid duplicates
+        if excel_has_auth_group:
+            data_df.drop(columns=['authorization_group'], errors='ignore', inplace=True)
+        
         conditions = []
         for _, row in data_df.iterrows():
             doknr = str(row.get('documentnumber', '')).replace("'", "''")
@@ -389,9 +402,10 @@ def enrich_with_metadata(data_df):
                 data_df['authorization_group'] = None
         else:
             data_df['authorization_group'] = None
-    else:
-        # Excel might not have SAP keys; initialize auth group to None
+    elif not excel_has_auth_group:
+        # No required columns and no existing auth_group - initialize to None
         data_df['authorization_group'] = None
+    # else: Keep Excel authorization_group values as-is
     
     # Apply translation rules
     translation_map = load_translations()
@@ -421,6 +435,12 @@ def enrich_with_metadata(data_df):
         data_df['target_documentnumber'] = data_df['documentnumber'].apply(compute_target)
     else:
         data_df['target_documentnumber'] = None
+    
+    # Clean up any duplicate columns (can occur from multiple merges)
+    if data_df.columns.duplicated().any():
+        # Keep only first occurrence of each column
+        data_df = data_df.loc[:, ~data_df.columns.duplicated()]
+        print(f"[PREPARE] Removed duplicate columns")
     
     return data_df
 

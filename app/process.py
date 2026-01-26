@@ -784,10 +784,20 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
     except:
         data = response.content
 
-    if response.status_code == 200 and response.content != b'':
+    # Handle empty response body (document not found in source system)
+    if response.status_code == 200 and response.content == b'':
+        print(f'[WARN] Document not found in source: {Documentnumber} - API returned empty body')
+        return 200, 'NOT_FOUND_EMPTY', []  # Return empty list, not None
+    
+    if response.status_code == 200:
         # keep full raw for potential description lookup
         full_raw = data
-        data = full_raw['d']['DocumentfilesSet']['results']
+        try:
+            data = full_raw['d']['DocumentfilesSet']['results']
+        except (KeyError, TypeError) as e:
+            print(f'[WARN] Unexpected response structure for {Documentnumber}: {e}')
+            print(f'Response content: {response.content[:500]}...' if len(response.content) > 500 else f'Response content: {response.content}')
+            return 200, 'PARSE_ERROR', []
         
         # list of documents
         for item in data:
@@ -812,7 +822,7 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
             print('Error detail:', json.dumps(data['error']['innererror']['errordetails'], indent=4))
         except:
             print('Error detail:', data)
-        return 'Error during getinfo:', 'unexpexted ' + response.reason, None
+        return response.status_code, f'API_ERROR_{response.status_code}', None
 
 
 def start_worker(input_data):

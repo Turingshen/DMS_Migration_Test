@@ -26,11 +26,11 @@
                             <thead>
                                 <tr>
                                     <th>Batch ID</th>
+                                    <th>Description</th>
                                     <th>Created</th>
                                     <th>Created By</th>
                                     <th>Source</th>
                                     <th>Total</th>
-                                    <th>Approved</th>
                                     <th>Executed</th>
                                     <th>Success</th>
                                     <th>Failed</th>
@@ -89,15 +89,18 @@ function displayBatches(batches) {
     tbody.innerHTML = batches.map(batch => {
         const statusBadge = getStatusBadge(batch.status);
         const actions = getActionButtons(batch);
+        const descriptionDisplay = batch.description 
+            ? `<span title="${escapeHtml(batch.notes || '')}">${escapeHtml(batch.description)}</span>` 
+            : '<span class="text-muted">-</span>';
         
         return `
-            <tr>
+            <tr data-batch='${JSON.stringify(batch).replace(/'/g, "&#39;")}'>
                 <td><code>${batch.batch_id}</code></td>
+                <td>${descriptionDisplay}</td>
                 <td>${formatDateTime(batch.created_at)}</td>
                 <td>${batch.created_by || '-'}</td>
-                <td>${batch.source_file || '-'}</td>
+                <td title="${batch.source_file || ''}">${truncate(batch.source_file, 15) || '-'}</td>
                 <td>${batch.total_records || 0}</td>
-                <td>${batch.approved_records || 0}</td>
                 <td>${batch.executed_records || 0}</td>
                 <td class="text-success">${batch.successful_records || 0}</td>
                 <td class="text-danger">${batch.failed_records || 0}</td>
@@ -137,6 +140,9 @@ function getActionButtons(batch) {
         buttons.push(`<button onclick="viewResults('${batch.batch_id}')" class="btn btn-sm btn-info" title="View Results">
             <i class="fas fa-eye"></i> Results
         </button>`);
+        buttons.push(`<a href="/file-report?batch_id=${batch.batch_id}" class="btn btn-sm btn-secondary" title="File Details Report">
+            <i class="fas fa-file-alt"></i> Files
+        </a>`);
         buttons.push(`<button onclick="viewStatistics('${batch.batch_id}')" class="btn btn-sm btn-warning" title="View Statistics">
             <i class="fas fa-chart-bar"></i> Stats
         </button>`);
@@ -145,6 +151,18 @@ function getActionButtons(batch) {
     buttons.push(`<button onclick="viewDetails('${batch.batch_id}')" class="btn btn-sm btn-secondary" title="View Details">
         <i class="fas fa-info-circle"></i> Detail
     </button>`);
+    
+    // Edit button - always available
+    buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="Edit Description">
+        <i class="fas fa-edit"></i>
+    </button>`);
+    
+    // Delete button - not during execution
+    if (batch.status !== 'executing') {
+        buttons.push(`<button onclick="deleteBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-danger" title="Delete Batch">
+            <i class="fas fa-trash"></i>
+        </button>`);
+    }
     
     return buttons.join(' ');
 }
@@ -451,6 +469,133 @@ function showStatisticsModal(batchId, stats) {
     `;
     
     $(modal).modal('show');
+}
+
+function truncate(str, len) {
+    if (!str) return '';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function editBatch(batchId) {
+    // Find batch data from table row
+    const row = document.querySelector(`tr[data-batch*="${batchId}"]`);
+    let batch = {};
+    try {
+        batch = JSON.parse(row.getAttribute('data-batch'));
+    } catch(e) {
+        console.error('Could not parse batch data', e);
+    }
+    
+    // Create modal if it doesn't exist
+    let modal = document.getElementById('editBatchModal');
+    if (!modal) {
+        const modalHtml = `
+        <div class="modal fade" id="editBatchModal" tabindex="-1" role="dialog">
+            <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                    <div class="modal-header bg-primary text-white py-2">
+                        <h5 class="modal-title"><i class="fas fa-edit"></i> Edit Batch</h5>
+                        <button type="button" class="close text-white" data-dismiss="modal">
+                            <span>&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="hidden" id="editBatchId">
+                        <div class="form-group">
+                            <label for="editDescription">Description (max 40 characters)</label>
+                            <input type="text" class="form-control" id="editDescription" maxlength="40" placeholder="Short description...">
+                            <small class="form-text text-muted"><span id="descCharCount">0</span>/40 characters</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="editNotes">Notes</label>
+                            <textarea class="form-control" id="editNotes" rows="5" placeholder="Detailed notes..."></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="saveBatch()">
+                            <i class="fas fa-save"></i> Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        modal = document.getElementById('editBatchModal');
+        
+        // Character counter
+        document.getElementById('editDescription').addEventListener('input', function() {
+            document.getElementById('descCharCount').textContent = this.value.length;
+        });
+    }
+    
+    // Fill form with current values
+    document.getElementById('editBatchId').value = batchId;
+    document.getElementById('editDescription').value = batch.description || '';
+    document.getElementById('editNotes').value = batch.notes || '';
+    document.getElementById('descCharCount').textContent = (batch.description || '').length;
+    
+    $(modal).modal('show');
+}
+
+function saveBatch() {
+    const batchId = document.getElementById('editBatchId').value;
+    const description = document.getElementById('editDescription').value;
+    const notes = document.getElementById('editNotes').value;
+    
+    fetch(`/batch/${batchId}`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ description, notes })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            $('#editBatchModal').modal('hide');
+            loadBatches();
+        } else {
+            alert('Error saving batch: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Error saving batch: ' + error);
+    });
+}
+
+function deleteBatch(batchId) {
+    if (!confirm(`Are you sure you want to delete batch ${batchId}?\n\nThis will permanently delete:\n- All staging records\n- All file details\n- The batch itself\n\nThis action cannot be undone!`)) {
+        return;
+    }
+    
+    // Double confirm for safety
+    if (!confirm('Are you REALLY sure? This is permanent!')) {
+        return;
+    }
+    
+    fetch(`/batch/${batchId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Batch deleted successfully');
+            loadBatches();
+        } else {
+            alert('Error deleting batch: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Error deleting batch: ' + error);
+    });
 }
 </script>
 {% endblock %}

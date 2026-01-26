@@ -38,8 +38,15 @@ misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
 
 
-# Dynamic pacing based on file size (in seconds)
-# Matches frontend calculation in preview.html
+# Pacing mode: 'response' = wait for API response, 'time' = time-based delays
+# Time-based pacing is more reliable for APIs with rate limiting
+PACING_MODE = 'time'  # 'response' or 'time'
+
+# Minimum delay between containers (seconds) - prevents rate limiting
+# Only applies in response mode; set to 0 for maximum throughput
+MIN_CONTAINER_DELAY = 0.5
+
+# Time-based pacing buckets (used when PACING_MODE = 'time')
 PACING_BUCKETS = {
     'tiny':    {'max_mb': 1,    'pacing': 5},   # ≤1MB: Fast batch processing
     'small':   {'max_mb': 10,   'pacing': 10},  # 1-10MB: Normal processing
@@ -50,6 +57,98 @@ PACING_BUCKETS = {
 
 # Terminal logging verbosity: True = detailed, False = minimal (progress + errors only)
 VERBOSE_TERMINAL_LOGGING = False
+
+# API Warmup settings
+WARMUP_ENABLED = True
+WARMUP_REQUESTS = 3  # Number of warmup pings
+WARMUP_DELAY = 0.5   # Delay between warmup requests (seconds)
+
+
+def warmup_api(session_snapshot, first_loio_id=None):
+    """
+    Send warmup requests to wake up the API before starting migration.
+    This helps avoid initial 401/403/500 errors due to cold API instances.
+    
+    Args:
+        session_snapshot: Dict with bearer_token and other auth info
+        first_loio_id: Optional LOIO ID to use for warmup (from first record)
+    
+    Returns:
+        dict with warmup results
+    """
+    if not WARMUP_ENABLED:
+        return {'skipped': True}
+    
+    print(f"[WARMUP] Waking up API with {WARMUP_REQUESTS} requests...")
+    
+    results = []
+    start_time = time.time()
+    
+    for i in range(WARMUP_REQUESTS):
+        try:
+            # Prepare headers with auth
+            headers = {
+                'Authorization': f"Bearer {session_snapshot.get('bearer_token')}",
+                'Accept': 'application/json',
+            }
+            
+            # Add CSRF token if available
+            if session_snapshot.get('x_csrf_token'):
+                headers['x-csrf-token'] = session_snapshot['x_csrf_token']
+            
+            # Use cookies if available
+            cookies = session_snapshot.get('cookies', {})
+            
+            # Get target API base URL from config
+            sap_system = session_snapshot.get('sap_system', 'P')
+            target_base_url = cfg.get('sap', {}).get(sap_system, {}).get('sdm', {}).get('url', '')
+            
+            if target_base_url:
+                # Warmup request to target API (simple GET to root or health endpoint)
+                warmup_url = f"{target_base_url}"
+                response = requests.get(
+                    warmup_url, 
+                    headers=headers, 
+                    cookies=cookies,
+                    timeout=10
+                )
+                results.append({
+                    'target': 'target_api',
+                    'status': response.status_code,
+                    'ok': response.status_code in [200, 401, 403]  # Even auth errors mean API is awake
+                })
+            
+            # Optional: warmup source API if we have a LOIO
+            if first_loio_id and i == 0:
+                # Just try to get info - even if it fails, it wakes up the API
+                try:
+                    info_result = get_info(first_loio_id, session_snapshot)
+                    results.append({
+                        'target': 'source_api',
+                        'status': 'ok' if info_result else 'error',
+                        'ok': True  # Any response means API is awake
+                    })
+                except Exception:
+                    results.append({'target': 'source_api', 'status': 'error', 'ok': True})
+            
+            if i < WARMUP_REQUESTS - 1:
+                time.sleep(WARMUP_DELAY)
+                
+        except requests.exceptions.Timeout:
+            results.append({'target': 'warmup', 'status': 'timeout', 'ok': False})
+        except Exception as e:
+            results.append({'target': 'warmup', 'status': str(e)[:50], 'ok': False})
+    
+    elapsed = time.time() - start_time
+    success_count = sum(1 for r in results if r.get('ok'))
+    
+    print(f"[WARMUP] Completed in {elapsed:.1f}s - {success_count}/{len(results)} successful")
+    
+    return {
+        'elapsed': elapsed,
+        'results': results,
+        'success': success_count > 0
+    }
 
 
 def get_historical_pacing_stats():
@@ -200,6 +299,7 @@ def load_approved_records(batch_id):
     query = f"""
         SELECT 
             id,
+            batch_id,
             source_documentnumber,
             source_documentpart,
             source_documenttype,
@@ -236,6 +336,7 @@ def load_specific_records(batch_id, record_ids):
     query = f"""
         SELECT 
             id,
+            batch_id,
             source_documentnumber,
             source_documentpart,
             source_documenttype,
@@ -332,6 +433,83 @@ def update_metadata_fields(staging_id, loioid=None, description=None, filename=N
         print(f"[UPDATE_METADATA_ERROR] Failed to update metadata for staging_id={staging_id}: {e}")
 
 
+def save_file_details(staging_id, batch_id, file_index, file_result, loio_id=None):
+    """
+    Save detailed file-level results to migration_file_details table.
+    
+    Args:
+        staging_id: Parent staging record ID
+        batch_id: Batch ID for filtering
+        file_index: 0-based index of file in container
+        file_result: Dict with upload result (status, error_detail, file_size, etc.)
+        loio_id: LOIO ID of the file (optional)
+    """
+    import json
+    
+    try:
+        # Extract error information
+        error_detail = file_result.get('error_detail', {}) or {}
+        error_messages = error_detail.get('messages') or error_detail.get('errordetails')
+        
+        # Get raw status and clean it for the status field
+        raw_status = file_result.get('status', 'UNKNOWN')
+        # Extract just the status code (e.g., "UPLOAD_FAIL_500: xyz" -> "UPLOAD_FAIL_500")
+        if ':' in raw_status:
+            clean_status = raw_status.split(':')[0].strip()
+            # Store the extra info in error_detail if not already set
+            extra_info = raw_status.split(':', 1)[1].strip() if len(raw_status.split(':')) > 1 else None
+        else:
+            clean_status = raw_status
+            extra_info = None
+        
+        # Truncate status to 50 chars max (DB limit)
+        clean_status = clean_status[:50] if clean_status else 'UNKNOWN'
+        
+        # Combine error details
+        combined_error_detail = error_detail.get('detail') if error_detail else None
+        if not combined_error_detail and extra_info:
+            combined_error_detail = extra_info
+        
+        params = {
+            'staging_id': staging_id,
+            'batch_id': batch_id,
+            'file_index': file_index,
+            'filename': file_result.get('file'),
+            'loio_id': loio_id,
+            'file_size_bytes': file_result.get('file_size'),
+            'file_size_mb': file_result.get('file_size_mb'),
+            'mime_type': file_result.get('mime_type'),
+            'upload_status': clean_status,
+            'http_status_code': error_detail.get('status_code') if error_detail else (200 if file_result.get('status') == 'SUCCESS' else None),
+            'upload_time_seconds': file_result.get('actual_time_seconds'),
+            'error_category': file_result.get('error_category'),
+            'error_code': error_detail.get('code') if error_detail else None,
+            'error_detail': combined_error_detail,
+            'error_messages': json.dumps(error_messages) if error_messages else None,
+            'is_size_error': 1 if file_result.get('is_size_error') else 0
+        }
+        
+        insert_query = """
+            INSERT INTO dbo.migration_file_details (
+                staging_id, batch_id, file_index, filename, loio_id,
+                file_size_bytes, file_size_mb, mime_type,
+                upload_status, http_status_code, upload_time_seconds,
+                error_category, error_code, error_detail, error_messages, is_size_error
+            ) VALUES (
+                :staging_id, :batch_id, :file_index, :filename, :loio_id,
+                :file_size_bytes, :file_size_mb, :mime_type,
+                :upload_status, :http_status_code, :upload_time_seconds,
+                :error_category, :error_code, :error_detail, :error_messages, :is_size_error
+            )
+        """
+        
+        with misc_engine.begin() as con:
+            con.execute(text(insert_query), params)
+            
+    except Exception as e:
+        print(f"[SAVE_FILE_DETAILS_ERROR] Failed to save file details for staging_id={staging_id}, file_index={file_index}: {e}")
+
+
 def is_auto_generated_id(doc_number):
     """Check if document number is auto-generated by SAP.
     
@@ -417,8 +595,9 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         doc_created = False
         results = []
         metadata_updated = False
+        # batch_id already set at function start from staging_record
         
-        for document in documents[2]:
+        for file_index, document in enumerate(documents[2]):
             # Fetch document content
             selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
             document_args = {k: document[k] for k in selected_keys}
@@ -431,24 +610,44 @@ def execute_single_document(server_session, staging_record, session_snapshot):
             except Exception as read_ex:
                 error_msg = f'READ_TIMEOUT: {str(read_ex)}'
                 logger.error(f"File read timeout/error: {error_msg}", category="READ")
-                results.append({
+                file_result = {
                     'file': document.get('LOIOID'), 
                     'status': error_msg,
                     'error_detail': {'status_code': 0, 'detail': str(read_ex)},
                     'error_category': 'TIMEOUT'
-                })
+                }
+                results.append(file_result)
+                save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue
             
             if response.status_code != 200:
                 error_info = _extract_error_fields(response)
                 error_msg = f'READ_FAIL_{response.status_code}'
+                
+                # For 401/403 errors, add extra context about the authentication issue
+                if response.status_code in (401, 403):
+                    # Check for WWW-Authenticate header which often contains useful info
+                    www_auth = response.headers.get('WWW-Authenticate', '')
+                    if www_auth:
+                        error_info['www_authenticate'] = www_auth[:200]
+                    
+                    # Check response body (often empty for 401, but sometimes has info)
+                    body_preview = (response.text or '')[:500]
+                    if body_preview:
+                        error_info['body_preview'] = body_preview
+                    
+                    # Add hint about likely cause
+                    error_info['hint'] = 'Token may have expired or API requires re-authentication. Try refreshing login.'
+                
                 logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
-                results.append({
+                file_result = {
                     'file': document.get('LOIOID'), 
                     'status': error_msg,
                     'error_detail': error_info,
                     'error_category': _classify_error(error_info)
-                })
+                }
+                results.append(file_result)
+                save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue
             
             filename = _sanitize_filename(document.get('Docpath', '').split('/')[-1] or 'unnamed')
@@ -604,19 +803,50 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                 content = response.content or b' '  # Pad empty files
                 file_size = len(content)
                 file_size_mb = file_size / 1024 / 1024
+                
+                # Get MIME type for file details
+                import mimetypes
+                current_mime_type, _ = mimetypes.guess_type(filename)
+                if not current_mime_type:
+                    current_mime_type = 'application/octet-stream'
+                
                 logger.info(f"Uploading file: {filename} ({file_size} bytes / {file_size_mb:.2f} MB)", category="UPLOAD")
-                upload_resp = server_session.post(attachment_url, data=content)
+                
+                # Upload mit Timeout: 60s base + 10s pro MB (für große Dateien)
+                upload_timeout = max(60, 60 + int(file_size_mb * 10))
+                try:
+                    upload_resp = server_session.post(attachment_url, data=content, timeout=upload_timeout)
+                except requests.exceptions.Timeout as timeout_ex:
+                    upload_time = time.time() - start_time
+                    error_msg = f'UPLOAD_TIMEOUT after {upload_timeout}s'
+                    logger.error(f"Upload timeout: {filename} ({file_size_mb:.2f} MB) - {error_msg}", category="UPLOAD")
+                    file_result = {
+                        'file': filename,
+                        'status': error_msg,
+                        'error_detail': {'status_code': 0, 'detail': str(timeout_ex)},
+                        'error_category': 'TIMEOUT',
+                        'file_size': file_size,
+                        'file_size_mb': round(file_size_mb, 2),
+                        'mime_type': current_mime_type,
+                        'actual_time_seconds': round(upload_time, 2)
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                    continue
                 
                 if upload_resp.status_code in (200, 201):
                     upload_time = time.time() - start_time  # Actual processing time (no pacing)
                     logger.info(f"File uploaded successfully: {filename} (status {upload_resp.status_code})", category="UPLOAD")
-                    results.append({
+                    file_result = {
                         'file': filename, 
                         'status': 'SUCCESS', 
                         'file_size': file_size,
                         'file_size_mb': round(file_size_mb, 2),
+                        'mime_type': current_mime_type,
                         'actual_time_seconds': round(upload_time, 2)
-                    })
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 else:
                     upload_time = time.time() - start_time
                     error_info = _extract_error_fields(upload_resp)
@@ -635,22 +865,27 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                             error_msg += f": {error_info['detail'][:100]}"
                         logger.error(f"Upload failed: {filename} - {error_msg}", category="UPLOAD", details=error_info)
                     
-                    results.append({
+                    file_result = {
                         'file': filename, 
                         'status': error_msg,
                         'error_detail': error_info,
                         'error_category': _classify_error(error_info),
                         'file_size': file_size,
                         'file_size_mb': round(file_size_mb, 2),
+                        'mime_type': current_mime_type,
                         'is_size_error': is_size_error,
                         'actual_time_seconds': round(upload_time, 2)
-                    })
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
         
         # Calculate timing and size statistics
         execution_time = time.time() - start_time
         total_bytes = sum(r.get('file_size', 0) for r in results)
         
         # Determine overall status
+        success_count = len([r for r in results if r['status'] == 'SUCCESS'])
+        
         if all(r['status'] == 'SUCCESS' for r in results):
             logger.info(f"Migration completed successfully for all {len(results)} files in {execution_time:.2f}s ({total_bytes/1024/1024:.2f} MB)", category="EXECUTE")
             update_execution_status(staging_id, 'success')
@@ -664,11 +899,35 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                     'file_count': len(results)
                 }
             }
+        elif success_count == 0 and not doc_created:
+            # No container created and no files uploaded -> this is a complete failure, not partial
+            import json
+            error_details = [r.get('error_detail') for r in results if r.get('error_detail')]
+            error_summary = f"FAILED 0/{len(results)} files - no container created"
+            
+            logger.error(f"Migration failed completely: 0 of {len(results)} files, no container created in {execution_time:.2f}s", category="EXECUTE")
+            
+            if error_details:
+                error_json = json.dumps({'summary': error_summary, 'errors': error_details})
+                update_execution_status(staging_id, 'failed', error_json)
+            else:
+                update_execution_status(staging_id, 'failed', error_summary)
+            
+            return {
+                'staging_id': staging_id, 
+                'status': 'failed', 
+                'results': results,
+                'stats': {
+                    'execution_time': execution_time,
+                    'total_bytes': total_bytes,
+                    'file_count': len(results)
+                }
+            }
         else:
+            # Container created but not all files uploaded -> partial success
             import json
             # Collect all errors from results
             error_details = [r.get('error_detail') for r in results if r.get('error_detail')]
-            success_count = len([r for r in results if r['status'] == 'SUCCESS'])
             error_summary = f"PARTIAL_SUCCESS {success_count}/{len(results)} files"
             
             logger.warning(f"Partial success: {success_count} of {len(results)} files migrated in {execution_time:.2f}s", category="EXECUTE")
@@ -698,23 +957,28 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         return {'staging_id': staging_id, 'status': 'failed', 'error': str(e)}
     
     finally:
-        # Dynamic pacing based on file size
-        file_size = staging_record.get('file_size_bytes')
-        dynamic_pacing = get_dynamic_pacing(file_size)
-        
-        # Use session setting if explicitly set, otherwise use dynamic pacing
+        # Pacing between containers
         session_pacing = session_snapshot.get('pacing_seconds')
-        if session_pacing and session_pacing > 0:
-            # Manual override - use fixed pacing
-            pacing_seconds = session_pacing
-        else:
-            # Auto mode - use dynamic pacing based on file size
-            pacing_seconds = dynamic_pacing
         
-        time_taken = time.time() - start_time
-        if time_taken < pacing_seconds:
-            sleep_time = pacing_seconds - time_taken
-            time.sleep(sleep_time)
+        if session_pacing and session_pacing > 0:
+            # Manual override - use fixed pacing (legacy mode)
+            time_taken = time.time() - start_time
+            if time_taken < session_pacing:
+                sleep_time = session_pacing - time_taken
+                time.sleep(sleep_time)
+        elif PACING_MODE == 'response':
+            # Response-based pacing: API response already received, just add minimal delay
+            # This prevents rate limiting while maximizing throughput
+            if MIN_CONTAINER_DELAY > 0:
+                time.sleep(MIN_CONTAINER_DELAY)
+        else:
+            # Legacy time-based pacing
+            file_size = staging_record.get('file_size_bytes')
+            dynamic_pacing = get_dynamic_pacing(file_size)
+            time_taken = time.time() - start_time
+            if time_taken < dynamic_pacing:
+                sleep_time = dynamic_pacing - time_taken
+                time.sleep(sleep_time)
 
 
 def is_migration_running(batch_id):
@@ -842,6 +1106,12 @@ def execute_migration(batch_id, record_ids=None):
                 'error': 'No records found for execution'
             }
         
+        # API Warmup - wake up APIs before starting migration
+        first_loio = None
+        if len(records_df) > 0 and 'source_loioid' in records_df.columns:
+            first_loio = records_df.iloc[0].get('source_loioid')
+        warmup_result = warmup_api(session_snapshot, first_loio_id=first_loio)
+        
         # Log pacing mode - always show start message
         pacing_mode = f"fixed={pacing_seconds}s" if pacing_seconds > 0 else "dynamic (5-45s)"
         print(f"[START] Batch {batch_id}: {len(records_df)} records, {max_workers} workers, pacing={pacing_mode}")
@@ -876,7 +1146,7 @@ def execute_migration(batch_id, record_ids=None):
                     UPDATE dbo.migration_batch
                     SET executed_records = {completed_count},
                         successful_records = {success_count},
-                        failed_records = {failed_count}
+                        failed_records = {failed_count + partial_count}
                     WHERE batch_id = '{batch_id}'
                 """))
         

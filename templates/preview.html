@@ -98,6 +98,9 @@
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
                             <i class="fas fa-redo"></i> Retry Failed
                         </button>
+                        <button onclick="fetchMetadata()" class="btn btn-info" id="fetchMetadataBtn" title="Fetch file sizes and metadata from SAP API">
+                            <i class="fas fa-download"></i> Fetch Metadata
+                        </button>
                     </div>
                 </div>
                 <div class="card-body">
@@ -457,9 +460,9 @@ function updatePacingDisplay() {
     if (!pacingEl) return;
     
     if (currentPacingSeconds === 0) {
-        pacingEl.innerHTML = '<span class="badge badge-success" title="5s für ≤1MB, 10s für 1-10MB, 20s für 10-50MB, 45s für >50MB">Dynamisch</span>';
+        pacingEl.innerHTML = '<span class="badge badge-success" title="Response-basiert: Nächster Upload startet sofort nach API-Antwort">Response</span>';
     } else {
-        pacingEl.innerHTML = `<span class="badge badge-secondary" title="Gleiches Pacing für alle Dokumente">Fixiert: ${currentPacingSeconds}s</span>`;
+        pacingEl.innerHTML = `<span class="badge badge-secondary" title="Fixierte Wartezeit zwischen Uploads">Fixiert: ${currentPacingSeconds}s</span>`;
     }
 }
 
@@ -485,14 +488,13 @@ function updateBatchStatistics(records) {
     const pendingRecords = records.filter(r => r.execution_status !== 'success');
     const successCount = records.filter(r => r.execution_status === 'success').length;
     
-    // Size buckets with dynamic pacing
-    // Pacing = API call overhead + transfer time + processing
+    // Size buckets for statistics display
     const buckets = {
-        tiny:    { max: 1,   count: 0, size: 0, pacing: 5,  label: '⚡ ≤1MB' },      // Fast batch processing
-        small:   { max: 10,  count: 0, size: 0, pacing: 10, label: '🟢 1-10MB' },    // Normal processing
-        medium:  { max: 50,  count: 0, size: 0, pacing: 20, label: '🟡 10-50MB' },   // Slower, larger files
-        large:   { max: Infinity, count: 0, size: 0, pacing: 45, label: '🔴 >50MB' }, // Very large files
-        unknown: { count: 0, pacing: 5 }   // Unknown size - assume small (same as tiny)
+        tiny:    { max: 1,   count: 0, size: 0, label: '⚡ ≤1MB' },
+        small:   { max: 10,  count: 0, size: 0, label: '🟢 1-10MB' },
+        medium:  { max: 50,  count: 0, size: 0, label: '🟡 10-50MB' },
+        large:   { max: Infinity, count: 0, size: 0, label: '🔴 >50MB' },
+        unknown: { count: 0 }
     };
     
     let totalSize = 0;
@@ -521,19 +523,16 @@ function updateBatchStatistics(records) {
         }
     });
     
-    // Calculate runtime per bucket
-    // Formula: (bucket_size_MB * transfer_rate) + (count * pacing)
+    // Calculate runtime based on response-based pacing
     // Transfer rate: ~0.5 sec/MB (download) + ~0.5 sec/MB (upload) = 1 sec/MB
+    // Plus minimal container delay (0.5s) + API overhead (~1s per container)
     const transferRate = 1.0;  // seconds per MB
+    const containerOverhead = 1.5;  // API overhead + minimal delay per container
     
-    const runtimeTiny = (buckets.tiny.size / (1024 * 1024) * transferRate) + (buckets.tiny.count * buckets.tiny.pacing);
-    const runtimeSmall = (buckets.small.size / (1024 * 1024) * transferRate) + (buckets.small.count * buckets.small.pacing);
-    const runtimeMedium = (buckets.medium.size / (1024 * 1024) * transferRate) + (buckets.medium.count * buckets.medium.pacing);
-    const runtimeLarge = (buckets.large.size / (1024 * 1024) * transferRate) + (buckets.large.count * buckets.large.pacing);
-    const runtimeUnknown = buckets.unknown.count * buckets.unknown.pacing;
-    
-    // Total runtime without parallelization
-    const totalSerialRuntime = runtimeTiny + runtimeSmall + runtimeMedium + runtimeLarge + runtimeUnknown;
+    // Total runtime = transfer time + overhead per container
+    const totalSizeMB = totalSize / (1024 * 1024);
+    const containerCount = pendingRecords.length;
+    const totalSerialRuntime = (totalSizeMB * transferRate) + (containerCount * containerOverhead);
     
     // Divide by number of workers for parallel execution
     const maxWorkers = {{ max_workers | default(2) }};
@@ -553,14 +552,14 @@ function updateBatchStatistics(records) {
     
     // Build runtime breakdown
     const breakdown = [];
-    if (buckets.tiny.count > 0) breakdown.push(`⚡${buckets.tiny.count}×${buckets.tiny.pacing}s`);
-    if (buckets.small.count > 0) breakdown.push(`🟢${buckets.small.count}×${buckets.small.pacing}s`);
-    if (buckets.medium.count > 0) breakdown.push(`🟡${buckets.medium.count}×${buckets.medium.pacing}s`);
-    if (buckets.large.count > 0) breakdown.push(`🔴${buckets.large.count}×${buckets.large.pacing}s`);
-    if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}×${buckets.unknown.pacing}s`);
+    if (buckets.tiny.count > 0) breakdown.push(`⚡${buckets.tiny.count}`);
+    if (buckets.small.count > 0) breakdown.push(`🟢${buckets.small.count}`);
+    if (buckets.medium.count > 0) breakdown.push(`🟡${buckets.medium.count}`);
+    if (buckets.large.count > 0) breakdown.push(`🔴${buckets.large.count}`);
+    if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}`);
     
     const detailText = pendingRecords.length > 0 
-        ? `(${breakdown.join(' + ')} + ${formatFileSize(totalSize)}@1s/MB) ÷ ${maxWorkers} workers`
+        ? `(${formatFileSize(totalSize)}@1s/MB + ${containerCount}×1.5s) ÷ ${maxWorkers} workers`
         : 'Keine ausstehenden Dokumente';
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
@@ -571,7 +570,9 @@ function updateBatchStatistics(records) {
         totalRuntime: totalRuntime,
         totalSerialRuntime: totalSerialRuntime,
         maxWorkers: maxWorkers,
-        transferRate: transferRate
+        transferRate: transferRate,
+        containerOverhead: containerOverhead,
+        containerCount: containerCount
     };
 }
 
@@ -581,51 +582,37 @@ function showRuntimeDetails() {
     const stats = window.runtimeStats;
     const b = stats.buckets;
     
-    // Calculate individual runtimes
-    const calcTime = (bucket) => {
-        if (!bucket.size) bucket.size = 0;
-        const transfer = bucket.size / (1024 * 1024) * stats.transferRate;
-        const pacing = bucket.count * bucket.pacing;
-        return { transfer, pacing, total: transfer + pacing };
-    };
-    
-    const tiny = calcTime(b.tiny);
-    const small = calcTime(b.small);
-    const medium = calcTime(b.medium);
-    const large = calcTime(b.large);
-    const unknown = { transfer: 0, pacing: b.unknown.count * b.unknown.pacing, total: b.unknown.count * b.unknown.pacing };
-    
     const details = `
-═══ Runtime Calculation Details ═══
+═══ Runtime Calculation (Response-Based) ═══
 
 📦 PACKAGE BREAKDOWN:
-┌─────────────┬───────┬──────────┬─────────┬──────────┬──────────┐
-│ Package     │ Count │ Size     │ Pacing  │ Transfer │ Subtotal │
-├─────────────┼───────┼──────────┼─────────┼──────────┼──────────┤
-│ ⚡ ≤1MB     │ ${b.tiny.count.toString().padStart(5)} │ ${formatFileSize(b.tiny.size).padStart(8)} │ ${b.tiny.pacing.toString().padStart(4)}s/doc │ ${formatDuration(tiny.transfer).padStart(8)} │ ${formatDuration(tiny.total).padStart(8)} │
-│ 🟢 1-10MB   │ ${b.small.count.toString().padStart(5)} │ ${formatFileSize(b.small.size).padStart(8)} │ ${b.small.pacing.toString().padStart(4)}s/doc │ ${formatDuration(small.transfer).padStart(8)} │ ${formatDuration(small.total).padStart(8)} │
-│ 🟡 10-50MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size).padStart(8)} │ ${b.medium.pacing.toString().padStart(4)}s/doc │ ${formatDuration(medium.transfer).padStart(8)} │ ${formatDuration(medium.total).padStart(8)} │
-│ 🔴 >50MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size).padStart(8)} │ ${b.large.pacing.toString().padStart(4)}s/doc │ ${formatDuration(large.transfer).padStart(8)} │ ${formatDuration(large.total).padStart(8)} │
-│ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │ ${b.unknown.pacing.toString().padStart(4)}s/doc │        - │ ${formatDuration(unknown.total).padStart(8)} │
-└─────────────┴───────┴──────────┴─────────┴──────────┴──────────┘
+┌─────────────┬───────┬──────────┐
+│ Package     │ Count │ Size     │
+├─────────────┼───────┼──────────┤
+│ ⚡ ≤1MB     │ ${b.tiny.count.toString().padStart(5)} │ ${formatFileSize(b.tiny.size || 0).padStart(8)} │
+│ 🟢 1-10MB   │ ${b.small.count.toString().padStart(5)} │ ${formatFileSize(b.small.size || 0).padStart(8)} │
+│ 🟡 10-50MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size || 0).padStart(8)} │
+│ 🔴 >50MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size || 0).padStart(8)} │
+│ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │
+└─────────────┴───────┴──────────┘
 
-📊 CALCULATION:
-• Transfer Time = Total Size × ${stats.transferRate} sec/MB
-• Pacing Time = Documents × Pacing per Package
-• Serial Runtime (1 Worker) = ${formatDuration(stats.totalSerialRuntime)}
+📊 CALCULATION (Response-Based Pacing):
+• Total Size: ${formatFileSize(stats.totalSize)}
+• Transfer Time = Size × ${stats.transferRate} sec/MB = ${formatDuration(stats.totalSize / (1024*1024) * stats.transferRate)}
+• Container Overhead = ${stats.containerCount} × ${stats.containerOverhead}s = ${formatDuration(stats.containerCount * stats.containerOverhead)}
+• Serial Runtime = ${formatDuration(stats.totalSerialRuntime)}
 
 🚀 PARALLEL EXECUTION:
 • Workers: ${stats.maxWorkers}
-• Parallel Runtime = Serial / Workers = ${formatDuration(stats.totalSerialRuntime)} ÷ ${stats.maxWorkers}
+• Parallel Runtime = ${formatDuration(stats.totalSerialRuntime)} ÷ ${stats.maxWorkers} = ${formatDuration(stats.totalRuntime)}
 
-⏱️ ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)} (with ${stats.maxWorkers} workers)
+⏱️ ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)}
 
-💡 PACING EXPLANATION:
-• ⚡ ≤1MB: Fast batch mode (${b.tiny.pacing}s) - minimal API overhead
-• 🟢 1-10MB: Normal processing (${b.small.pacing}s) - standard workflow
-• 🟡 10-50MB: Careful processing (${b.medium.pacing}s) - larger file handling
-• 🔴 >50MB: Slow mode (${b.large.pacing}s) - avoid timeouts, careful upload
-• ❓ Unknown: Conservative estimate (${b.unknown.pacing}s) - no size data
+💡 RESPONSE-BASED PACING:
+• Nächster Upload startet sofort nach API-Response
+• Kein Zeit-basiertes Warten mehr
+• Overhead = 0.5s Delay + ~1s API-Roundtrip pro Container
+• Schneller als zeit-basiertes Pacing!
     `.trim();
     
     alert(details);
@@ -830,7 +817,14 @@ function updateProgressDisplay(data) {
     else bar.classList.add('bg-success');
     
     stats.textContent = `${data.executed} / ${data.total}`;
-    details.innerHTML = `<span class="text-success">✓ ${data.success}</span> | <span class="text-danger">✗ ${data.failed}</span> | Remaining: ${data.remaining}`;
+    
+    // Build details with optional partial count
+    let detailsHtml = `<span class="text-success">✓ ${data.success}</span>`;
+    if (data.partial && data.partial > 0) {
+        detailsHtml += ` | <span class="text-warning">⚠ ${data.partial}</span>`;
+    }
+    detailsHtml += ` | <span class="text-danger">✗ ${data.failed}</span> | Remaining: ${data.remaining}`;
+    details.innerHTML = detailsHtml;
     
     // Calculate ETA
     if (data.executed > 0 && executionStartTime) {
@@ -853,9 +847,17 @@ function pollProgress() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Only update display when migration is actively executing
-                if (data.status === 'executing' && data.total > 0) {
+                // Update display for any status that has progress data
+                if (data.total > 0) {
                     updateProgressDisplay(data);
+                }
+                
+                // Show waiting message if not yet executing
+                if (data.status !== 'executing' && data.status !== 'completed') {
+                    const details = document.getElementById('progressDetails');
+                    if (details) {
+                        details.textContent = `Warte auf Start... (Status: ${data.status})`;
+                    }
                 }
                 
                 // Stop polling when done
@@ -1147,6 +1149,68 @@ function resetFailed() {
     });
 }
 
+function fetchMetadata() {
+    if (!confirm('Fetch file metadata (LOIO, size) from DIL database for all records?\n\nThis is fast and does not require SAP login.')) {
+        return;
+    }
+    
+    const btn = document.getElementById('fetchMetadataBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Fetching...';
+    
+    fetch(`/batch/${batchId}/fetch-metadata`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
+        
+        if (data.success) {
+            let message = `Metadata Fetch Complete!\n\n`;
+            
+            // Handle both old and new response formats
+            if (data.updated_loio !== undefined) {
+                message += `✓ LOIO_IDs updated: ${data.updated_loio}\n`;
+                message += `✓ File sizes updated: ${data.updated_size || 0}\n`;
+            } else {
+                message += `✓ Updated: ${data.updated || 0}\n`;
+                message += `✗ Errors: ${data.errors || 0}\n`;
+                message += `ℹ Already had metadata: ${data.already_had_metadata || 0}\n`;
+            }
+            
+            if (data.total_size_mb) {
+                message += `\n📊 Total size: ${data.total_size_mb} MB\n`;
+                message += `📊 Max file: ${data.max_file_mb} MB\n`;
+            }
+            
+            if (data.info) {
+                message += `\nℹ️ ${data.info}`;
+            }
+            
+            if (data.error_details && data.error_details.length > 0) {
+                message += `\nFirst errors:\n${data.error_details.join('\n')}`;
+            }
+            
+            alert(message);
+            loadRecords();  // Reload to show updated data
+        } else if (data.login_required) {
+            alert('⚠️ Not logged in!\n\nPlease login to SAP first.');
+            window.location.href = '/';
+        } else {
+            alert('Fetch failed: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error fetching metadata: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
+    });
+}
+
 function retryFailed() {
     if (!confirm('Re-execute all failed records in this batch?')) {
         return;
@@ -1154,9 +1218,10 @@ function retryFailed() {
     
     const btn = document.getElementById('retryBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Retrying...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Resetting...';
     
-    fetch('/retry_failed', {
+    // Step 1: Reset failed records to pending
+    fetch('/reset_failed', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1165,9 +1230,55 @@ function retryFailed() {
     })
     .then(response => response.json())
     .then(data => {
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to reset records');
+        }
+        
+        const resetCount = data.reset_count;
+        if (resetCount === 0) {
+            alert('No failed records to retry.');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
+            return;
+        }
+        
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Retrying ' + resetCount + '...';
+        
+        // Step 2: Show progress bar and start polling
+        showProgressBar();
+        document.getElementById('progressStats').textContent = `Starte ${resetCount} fehlgeschlagene Dokumente...`;
+        document.getElementById('progressBar').style.width = '0%';
+        document.getElementById('progressBar').textContent = '0%';
+        document.getElementById('progressDetails').textContent = 'Initialisiere Retry...';
+        document.getElementById('progressETA').textContent = 'ETA: berechne...';
+        startProgressPolling();
+        
+        // Step 3: Execute the pending (reset) records
+        return fetch('/execute', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ batch_id: batchId })
+        });
+    })
+    .then(response => {
+        if (response) return response.json();
+    })
+    .then(data => {
+        if (!data) return; // No reset happened
+        
+        stopProgressPolling();
+        hideProgressBar();
+        
         if (data.success) {
-            alert(`Retry completed!\n\nRetried: ${data.retried}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
+            alert(`Retry completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
             loadRecords();
+        } else if (data.login_required) {
+            alert('⚠️ Not logged in!\n\nPlease login to SAP first before executing the migration.');
+            window.location.href = '/';
+        } else if (data.already_running) {
+            alert('⚠️ Migration already running!\n\n' + data.error);
         } else {
             alert('Retry failed: ' + data.error);
         }
@@ -1175,6 +1286,8 @@ function retryFailed() {
         btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
     })
     .catch(error => {
+        stopProgressPolling();
+        hideProgressBar();
         alert('Error retrying failed records: ' + error);
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-redo"></i> Retry Failed';
@@ -1206,6 +1319,9 @@ function applyFilters() {
     });
     
     displayRecords(filtered);
+    
+    // Update statistics to reflect filtered records
+    updateBatchStatistics(filtered);
     
     // Update filter info on the left side
     const filterInfo = document.getElementById('filterInfo');

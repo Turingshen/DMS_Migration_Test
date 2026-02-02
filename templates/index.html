@@ -124,33 +124,24 @@ function getStatusBadge(status) {
 function getActionButtons(batch) {
     let buttons = [];
     
-    if (batch.status === 'prepared') {
-        buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Preview & Execute">
-            <i class="fas fa-eye"></i> Preview
-        </a>`);
-    }
+    // 1. Migration - immer verfügbar (zum Batch bearbeiten/ausführen)
+    buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Batch bearbeiten und Migration ausführen">
+        <i class="fas fa-play-circle"></i> Migration
+    </a>`);
     
-    if (batch.status === 'prepared' && batch.approved_records > 0) {
-        buttons.push(`<button onclick="executeBatch('${batch.batch_id}')" class="btn btn-sm btn-success" title="Execute Migration">
-            <i class="fas fa-play"></i> Execute
-        </button>`);
-    }
-    
+    // 2. Log - nach Ausführung verfügbar
     if (batch.status === 'completed' || batch.executed_records > 0) {
-        buttons.push(`<button onclick="viewResults('${batch.batch_id}')" class="btn btn-sm btn-info" title="View Results">
-            <i class="fas fa-eye"></i> Results
-        </button>`);
-        buttons.push(`<a href="/file-report?batch_id=${batch.batch_id}" class="btn btn-sm btn-secondary" title="File Details Report">
-            <i class="fas fa-file-alt"></i> Files
+        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="Migration Log anzeigen">
+            <i class="fas fa-list-alt"></i> Log
         </a>`);
-        buttons.push(`<button onclick="viewStatistics('${batch.batch_id}')" class="btn btn-sm btn-warning" title="View Statistics">
-            <i class="fas fa-chart-bar"></i> Stats
-        </button>`);
     }
     
-    buttons.push(`<button onclick="viewDetails('${batch.batch_id}')" class="btn btn-sm btn-secondary" title="View Details">
-        <i class="fas fa-info-circle"></i> Detail
-    </button>`);
+    // 3. Statistik - nach Ausführung verfügbar
+    if (batch.status === 'completed' || batch.executed_records > 0) {
+        buttons.push(`<button onclick="viewStatistics('${batch.batch_id}')" class="btn btn-sm btn-warning" title="Statistiken anzeigen">
+            <i class="fas fa-chart-bar"></i> Statistik
+        </button>`);
+    }
     
     // Edit button - always available
     buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="Edit Description">
@@ -202,7 +193,7 @@ function executeBatch(batchId) {
 }
 
 function viewResults(batchId) {
-    window.location.href = `/logs?batch_id=${batchId}`;
+    window.location.href = `/details?batch_id=${batchId}`;
 }
 
 function viewDetails(batchId) {
@@ -509,13 +500,27 @@ function editBatch(batchId) {
                     <div class="modal-body">
                         <input type="hidden" id="editBatchId">
                         <div class="form-group">
+                            <label for="editWave">Wave</label>
+                            <select class="form-control" id="editWave">
+                                <option value="">-- Select Wave --</option>
+                                <option value="Wave 0">Wave 0</option>
+                                <option value="Wave 1">Wave 1</option>
+                                <option value="Wave 2">Wave 2</option>
+                                <option value="Wave 3">Wave 3</option>
+                                <option value="Wave 4">Wave 4</option>
+                                <option value="Wave 5">Wave 5</option>
+                                <option value="Wave 6">Wave 6</option>
+                                <option value="Wave 7">Wave 7</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="editDescription">Description (max 40 characters)</label>
                             <input type="text" class="form-control" id="editDescription" maxlength="40" placeholder="Short description...">
                             <small class="form-text text-muted"><span id="descCharCount">0</span>/40 characters</small>
                         </div>
                         <div class="form-group">
                             <label for="editNotes">Notes</label>
-                            <textarea class="form-control" id="editNotes" rows="5" placeholder="Detailed notes..."></textarea>
+                            <textarea class="form-control" id="editNotes" rows="3" placeholder="Detailed notes..."></textarea>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -538,6 +543,7 @@ function editBatch(batchId) {
     
     // Fill form with current values
     document.getElementById('editBatchId').value = batchId;
+    document.getElementById('editWave').value = batch.wave || '';
     document.getElementById('editDescription').value = batch.description || '';
     document.getElementById('editNotes').value = batch.notes || '';
     document.getElementById('descCharCount').textContent = (batch.description || '').length;
@@ -547,6 +553,7 @@ function editBatch(batchId) {
 
 function saveBatch() {
     const batchId = document.getElementById('editBatchId').value;
+    const wave = document.getElementById('editWave').value;
     const description = document.getElementById('editDescription').value;
     const notes = document.getElementById('editNotes').value;
     
@@ -555,7 +562,7 @@ function saveBatch() {
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ description, notes })
+        body: JSON.stringify({ wave, description, notes })
     })
     .then(response => response.json())
     .then(data => {

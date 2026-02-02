@@ -19,6 +19,8 @@ CREATE TABLE dbo.migration_staging (
     source_documentversion VARCHAR(2),
     source_loioid VARCHAR(100),
     source_description NVARCHAR(255),
+    source_dokob VARCHAR(10),
+    source_objky VARCHAR(100),
     
     -- Target document identifiers (computed from source)
     target_documentnumber VARCHAR(25),
@@ -67,7 +69,9 @@ CREATE TABLE dbo.migration_batch (
     successful_records INT DEFAULT 0,
     failed_records INT DEFAULT 0,
     status VARCHAR(50) DEFAULT 'prepared',
+    description NVARCHAR(40),
     notes NVARCHAR(MAX),
+    wave VARCHAR(10),
     
     INDEX idx_status (status),
     INDEX idx_created_at (created_at)
@@ -121,6 +125,49 @@ CREATE TABLE dbo.migration_logs (
     INDEX idx_staging_id (staging_id),
     INDEX idx_log_level (log_level),
     INDEX idx_created_at (created_at)
+);
+"""
+
+CREATE_FILE_DETAILS_TABLE = """
+CREATE TABLE dbo.migration_file_details (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    staging_id INT NOT NULL,
+    batch_id VARCHAR(50) NOT NULL,
+    
+    -- File identification
+    file_index INT NOT NULL,
+    filename NVARCHAR(255),
+    loio_id VARCHAR(100),
+    
+    -- File metadata
+    file_size_bytes BIGINT,
+    file_size_mb DECIMAL(10, 2),
+    mime_type VARCHAR(100),
+    
+    -- Upload result
+    upload_status VARCHAR(50) NOT NULL,  -- SUCCESS, UPLOAD_FAIL_xxx, SIZE_LIMIT_EXCEEDED_xxx
+    http_status_code INT,
+    upload_time_seconds DECIMAL(10, 2),
+    
+    -- Error details (from API response)
+    error_category VARCHAR(50),        -- AUTH_ERROR, RATE_LIMIT, PAYLOAD_TOO_LARGE, etc.
+    error_code VARCHAR(50),            -- SAP error code
+    error_detail NVARCHAR(MAX),        -- Detailed error message
+    error_messages NVARCHAR(MAX),      -- JSON array of SAP messages
+    is_size_error BIT DEFAULT 0,
+    
+    -- Timestamps
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    
+    -- Foreign key constraint
+    CONSTRAINT FK_file_details_staging FOREIGN KEY (staging_id) 
+        REFERENCES dbo.migration_staging(id) ON DELETE CASCADE,
+    
+    INDEX idx_staging_id (staging_id),
+    INDEX idx_batch_id (batch_id),
+    INDEX idx_upload_status (upload_status),
+    INDEX idx_error_category (error_category),
+    INDEX idx_filename (filename)
 );
 """
 
@@ -205,3 +252,16 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_logs table")
         else:
             print("[DB_INIT] migration_logs table already exists")
+        
+        # Check and create file_details table
+        check_file_details = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_file_details'
+        """)
+        result = con.execute(check_file_details).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_FILE_DETAILS_TABLE))
+            print("[DB_INIT] Created migration_file_details table")
+        else:
+            print("[DB_INIT] migration_file_details table already exists")

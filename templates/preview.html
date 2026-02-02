@@ -73,8 +73,8 @@
                         <small id="selectionInfo" class="text-muted">0 records selected</small>
                     </div>
                     <div class="btn-group">
-                        <button onclick="window.location.href='/logs?batch_id={{ batch_id }}'" class="btn btn-secondary" title="View detailed logs">
-                            <i class="fas fa-file-alt"></i> View Logs
+                        <button onclick="window.location.href='/details?batch_id={{ batch_id }}'" class="btn btn-secondary" title="View migration details">
+                            <i class="fas fa-list-alt"></i> View Details
                         </button>
                         
                         <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Show/hide columns">
@@ -133,6 +133,8 @@
                                     <th data-column="batch_id">Batch ID</th>
                                     <th data-column="source_doc">Source Doc</th>
                                     <th data-column="source_loioid">Source LOIO</th>
+                                    <th data-column="dokob">DOKOB</th>
+                                    <th data-column="objky">OBJKY</th>
                                     <th data-column="target_doc">Target Doc</th>
                                     <th data-column="type_info">Type/Ver/Part</th>
                                     <th data-column="description">Description</th>
@@ -238,6 +240,14 @@
                     <label class="form-check-label" for="col_source_loioid">Source LOIO ID</label>
                 </div>
                 <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_dokob" value="dokob" checked>
+                    <label class="form-check-label" for="col_dokob">DOKOB</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_objky" value="objky" checked>
+                    <label class="form-check-label" for="col_objky">OBJKY</label>
+                </div>
+                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename">
                     <label class="form-check-label" for="col_filename">Filename</label>
                 </div>
@@ -289,6 +299,8 @@ let visibleColumns = {
     'batch_id': false,
     'source_doc': true,
     'source_loioid': false,
+    'dokob': true,
+    'objky': true,
     'target_doc': true,
     'type_info': true,
     'description': true,
@@ -656,6 +668,8 @@ function displayRecords(records) {
                 <td data-column="batch_id"><small>${record.batch_id || '-'}</small></td>
                 <td data-column="source_doc"><code>${record.source_documentnumber}</code></td>
                 <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
+                <td data-column="dokob"><small>${record.source_dokob || '-'}</small></td>
+                <td data-column="objky"><small>${truncate(record.source_objky, 25) || '-'}</small></td>
                 <td data-column="target_doc"><code>${record.target_documentnumber || '-'}</code></td>
                 <td data-column="type_info"><small>${typeInfo}</small></td>
                 <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>

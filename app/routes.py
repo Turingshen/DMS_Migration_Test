@@ -244,6 +244,7 @@ def get_batches():
                 b.source_file,
                 b.description,
                 b.notes,
+                b.wave,
                 COALESCE(s.total_count, b.total_records) as total_records,
                 b.approved_records,
                 COALESCE(s.executed_count, b.executed_records) as executed_records,
@@ -363,6 +364,11 @@ def prepare():
         # Check if file upload or database query
         use_file = request.form.get('use_file', 'false') == 'true'
         
+        # Get batch metadata
+        wave = request.form.get('wave', '').strip() or None
+        description = request.form.get('description', '').strip()[:40] or None
+        notes = request.form.get('notes', '').strip() or None
+        
         if use_file:
             # Handle file upload
             if 'file' not in request.files:
@@ -382,12 +388,12 @@ def prepare():
             file.save(filepath)
             
             # Prepare migration from file
-            result = prepare_migration(filepath)
+            result = prepare_migration(filepath, wave=wave, description=description, notes=notes)
         else:
             # Prepare migration from database query
             custom_query = request.form.get('custom_query', '').strip()
             query_source = request.form.get('query_source', 'dil')  # 'dil' or 'datastore'
-            result = prepare_migration(custom_query=custom_query if custom_query else None, query_source=query_source)
+            result = prepare_migration(custom_query=custom_query if custom_query else None, query_source=query_source, wave=wave, description=description, notes=notes)
         
         if result['success']:
             return jsonify(result)
@@ -400,19 +406,21 @@ def prepare():
 
 @migrate_bp.route('/batch/<batch_id>', methods=['PUT'])
 def update_batch(batch_id):
-    """Update batch description and notes."""
+    """Update batch description, notes and wave."""
     try:
         data = request.get_json()
         description = data.get('description', '').strip()[:40] if data.get('description') else None
         notes = data.get('notes', '').strip() if data.get('notes') else None
+        wave = data.get('wave', '').strip() if data.get('wave') else None
         
         with misc_engine.begin() as con:
             con.execute(text("""
                 UPDATE dbo.migration_batch
                 SET description = :description,
-                    notes = :notes
+                    notes = :notes,
+                    wave = :wave
                 WHERE batch_id = :batch_id
-            """), {'description': description, 'notes': notes, 'batch_id': batch_id})
+            """), {'description': description, 'notes': notes, 'wave': wave, 'batch_id': batch_id})
         
         return jsonify({'success': True, 'message': 'Batch updated successfully'})
         
@@ -759,6 +767,8 @@ def get_batch_records(batch_id):
                 source_documentversion,
                 source_loioid,
                 source_description,
+                source_dokob,
+                source_objky,
                 target_documentnumber,
                 target_documentpart,
                 target_documenttype,
@@ -1406,23 +1416,31 @@ def get_batch_logs(batch_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@migrate_bp.route('/details')
+def details_page():
+    """Migration details page - combined document and file view."""
+    batch_id = request.args.get('batch_id')
+    return render_template('migration_details.html', batch_id=batch_id, **get_template_context())
+
+
+# Legacy routes - redirect to new details page
 @migrate_bp.route('/logs')
 def logs_page():
-    """Log viewer page."""
+    """Redirect to new details page."""
     batch_id = request.args.get('batch_id')
-    return render_template('logs.html', batch_id=batch_id, **get_template_context())
+    return redirect(f'/details?batch_id={batch_id}' if batch_id else '/details')
 
-
-# =============================================================================
-# FILE DETAILS REPORT
-# =============================================================================
 
 @migrate_bp.route('/file-report')
 def file_report_page():
-    """File details report page - shows per-file migration results."""
+    """Redirect to new details page."""
     batch_id = request.args.get('batch_id')
-    return render_template('file_report.html', batch_id=batch_id, **get_template_context())
+    return redirect(f'/details?batch_id={batch_id}' if batch_id else '/details')
 
+
+# =============================================================================
+# FILE DETAILS API
+# =============================================================================
 
 @migrate_bp.route('/batch/<batch_id>/file-details', methods=['GET'])
 def get_batch_file_details(batch_id):

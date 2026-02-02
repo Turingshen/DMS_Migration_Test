@@ -92,6 +92,43 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                             </div>
                         </div>
 
+                        <!-- Batch Metadata -->
+                        <hr class="my-4">
+                        <h6 class="text-muted mb-3"><i class="fas fa-tags"></i> Batch Metadata</h6>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="batchWave">Wave</label>
+                                    <select class="form-control" id="batchWave" name="wave">
+                                        <option value="">-- Select Wave --</option>
+                                        <option value="Wave 0">Wave 0</option>
+                                        <option value="Wave 1">Wave 1</option>
+                                        <option value="Wave 2">Wave 2</option>
+                                        <option value="Wave 3">Wave 3</option>
+                                        <option value="Wave 4">Wave 4</option>
+                                        <option value="Wave 5">Wave 5</option>
+                                        <option value="Wave 6">Wave 6</option>
+                                        <option value="Wave 7">Wave 7</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="batchDescription">Description (max 40 characters)</label>
+                                    <input type="text" class="form-control" id="batchDescription" name="description" 
+                                           maxlength="40" placeholder="Short description...">
+                                    <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="batchNotes">Notes</label>
+                            <textarea class="form-control" id="batchNotes" name="notes" rows="3" 
+                                      placeholder="Detailed notes..."></textarea>
+                        </div>
+
                         <div class="alert alert-info">
                             <i class="fas fa-info-circle"></i> 
                             <strong>What happens next?</strong>
@@ -153,6 +190,11 @@ function prepareMigration() {
         formData.append('custom_query', customQuery);
         formData.append('query_source', dataSource); // 'dil' or 'datastore'
     }
+    
+    // Add batch metadata
+    formData.append('wave', document.getElementById('batchWave').value);
+    formData.append('description', document.getElementById('batchDescription').value);
+    formData.append('notes', document.getElementById('batchNotes').value);
 
     // Show progress
     document.getElementById('prepareForm').style.display = 'none';
@@ -326,6 +368,11 @@ FROM dbo.migration_selection;`;
         const label = this.nextElementSibling;
         const fileName = this.files[0] ? this.files[0].name : 'Choose file...';
         label.textContent = fileName;
+    });
+    
+    // Character counter for description
+    document.getElementById('batchDescription').addEventListener('input', function() {
+        document.getElementById('descCharCount').textContent = this.value.length;
     });
 
     // Handle form submission

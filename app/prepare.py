@@ -76,6 +76,107 @@ def load_translations():
         return []
 
 
+def enrich_drad_data(data_df):
+    """
+    Enrich dataframe with DOKOB and OBJKY from DIL.DRAD table.
+    Uses document keys (documentnumber, documenttype, documentversion, documentpart) to lookup object links.
+    
+    DOKOB = Object Type (e.g., IFLOT, PMQMEL, PMAUFK)
+    OBJKY = Object Key (e.g., Functional Location, Notification Number, Order Number)
+    
+    Returns dataframe with added 'dokob' and 'objky' columns.
+    """
+    required_cols = ['documentnumber', 'documenttype', 'documentversion', 'documentpart']
+    cols = [c.lower() for c in data_df.columns]
+    
+    if not all(k in cols for k in required_cols):
+        print("[PREPARE] Missing document key columns for DRAD lookup")
+        if 'dokob' not in data_df.columns:
+            data_df['dokob'] = None
+        if 'objky' not in data_df.columns:
+            data_df['objky'] = None
+        return data_df
+    
+    if len(data_df) == 0:
+        data_df['dokob'] = None
+        data_df['objky'] = None
+        return data_df
+    
+    print(f"[PREPARE] Looking up DRAD data (DOKOB, OBJKY) for {len(data_df)} documents...")
+    
+    try:
+        # Build WHERE clause conditions for batch lookup
+        conditions = []
+        for _, row in data_df.iterrows():
+            doknr = str(row.get('documentnumber', '')).replace("'", "''")
+            dokar = str(row.get('documenttype', '')).replace("'", "''")
+            dokvr = str(row.get('documentversion', '')).replace("'", "''").zfill(2)
+            doktl = str(row.get('documentpart', '')).replace("'", "''").zfill(3)
+            conditions.append(
+                f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
+            )
+        
+        # Query in chunks to avoid SQL statement size limits
+        chunk_size = 200
+        all_drad = []
+        
+        for i in range(0, len(conditions), chunk_size):
+            chunk = conditions[i:i + chunk_size]
+            where_clause = " OR ".join(chunk)
+            query = f"""
+                SELECT DOKNR, DOKAR, DOKVR, DOKTL, DOKOB, OBJKY
+                FROM DIL.DRAD
+                WHERE ({where_clause})
+            """
+            with dil_engine.begin() as con:
+                chunk_df = pd.read_sql(query, con)
+            all_drad.append(chunk_df)
+        
+        if all_drad:
+            drad_df = pd.concat(all_drad, ignore_index=True)
+            drad_df.columns = [c.lower() for c in drad_df.columns]
+            
+            # A document can be linked to multiple objects - take the first one for now
+            drad_df = drad_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+            
+            # Prepare data_df columns for merge
+            data_df['_doknr'] = data_df['documentnumber'].astype(str)
+            data_df['_dokar'] = data_df['documenttype'].astype(str)
+            data_df['_dokvr'] = data_df['documentversion'].astype(str).str.zfill(2)
+            data_df['_doktl'] = data_df['documentpart'].astype(str).str.zfill(3)
+            
+            # Only select the columns we need from drad_df for merge
+            drad_merge = drad_df[['doknr', 'dokar', 'dokvr', 'doktl', 'dokob', 'objky']].copy()
+            drad_merge = drad_merge.rename(columns={'dokob': 'source_dokob', 'objky': 'source_objky'})
+            
+            # Merge to get DOKOB and OBJKY
+            data_df = data_df.merge(
+                drad_merge,
+                how='left',
+                left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
+                right_on=['doknr', 'dokar', 'dokvr', 'doktl']
+            )
+            
+            # Clean up temporary columns
+            data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl', 
+                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
+            
+            found_count = data_df['source_dokob'].notna().sum()
+            print(f"[PREPARE] Found DRAD data for {found_count}/{len(data_df)} documents")
+        else:
+            data_df['source_dokob'] = None
+            data_df['source_objky'] = None
+            
+    except Exception as e:
+        print(f"[WARN] Failed to enrich DRAD data: {e}")
+        if 'source_dokob' not in data_df.columns:
+            data_df['source_dokob'] = None
+        if 'source_objky' not in data_df.columns:
+            data_df['source_objky'] = None
+    
+    return data_df
+
+
 def enrich_loio_ids(data_df):
     """
     Enrich dataframe with LOIO_IDs from DIL.DMS_DOC2LOIO table.
@@ -412,6 +513,9 @@ def enrich_with_metadata(data_df):
     if translation_map:
         data_df = apply_translations(data_df, translation_map)
     
+    # Enrich with DOKOB and OBJKY from DIL.DRAD
+    data_df = enrich_drad_data(data_df)
+    
     # Enrich with LOIO_IDs from DIL.DMS_DOC2LOIO (required for file size lookup)
     data_df = enrich_loio_ids(data_df)
     
@@ -461,6 +565,8 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'source_documentversion': row.get('documentversion', '00'),
             'source_loioid': row.get('loioid'),
             'source_description': row.get('description') or row.get('documentdescription'),
+            'source_dokob': row.get('dokob'),
+            'source_objky': row.get('objky'),
             'target_documentnumber': row.get('target_documentnumber'),
             'target_documentpart': row.get('documentpart', '000'),
             'target_documenttype': row.get('documenttype', 'IY1'),
@@ -477,7 +583,7 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
     return pd.DataFrame(staging_records)
 
 
-def save_to_staging(staging_df, batch_id, source_file_name=None):
+def save_to_staging(staging_df, batch_id, source_file_name=None, wave=None, description=None, notes=None):
     """Save prepared records to staging database."""
     # Ensure tables exist
     init_staging_tables(misc_engine)
@@ -508,7 +614,10 @@ def save_to_staging(staging_df, batch_id, source_file_name=None):
             'created_by': current_user,
             'source_file': source_file_name or 'database_query',
             'total_records': len(staging_df),
-            'status': 'prepared'
+            'status': 'prepared',
+            'wave': wave,
+            'description': description,
+            'notes': notes
         }])
         
         batch_record.to_sql(
@@ -523,7 +632,7 @@ def save_to_staging(staging_df, batch_id, source_file_name=None):
     return batch_id
 
 
-def prepare_migration(source_file_path=None, custom_query=None, query_source='dil'):
+def prepare_migration(source_file_path=None, custom_query=None, query_source='dil', wave=None, description=None, notes=None):
     """
     Main entry point for Step 1: Data Preparation
     
@@ -555,7 +664,7 @@ def prepare_migration(source_file_path=None, custom_query=None, query_source='di
         
         # Save to database
         print(f"[PREPARE] Saving to staging database...")
-        batch_id = save_to_staging(staging_df, batch_id, source_file_path)
+        batch_id = save_to_staging(staging_df, batch_id, source_file_path, wave=wave, description=description, notes=notes)
         
         return {
             'success': True,

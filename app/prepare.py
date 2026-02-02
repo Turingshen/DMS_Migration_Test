@@ -177,6 +177,85 @@ def enrich_drad_data(data_df):
     return data_df
 
 
+def load_object_mappings(batch_id):
+    """
+    Load active object mappings for a specific batch from database.
+    Returns a dict keyed by (source_dokob, source_objky) -> (target_dokob, target_objky)
+    
+    Args:
+        batch_id: The batch ID to load mappings for
+    """
+    try:
+        query = """
+            SELECT source_dokob, source_objky, target_dokob, target_objky
+            FROM dbo.migration_object_mapping
+            WHERE batch_id = :batch_id AND active = 1
+        """
+        with misc_engine.begin() as con:
+            df = pd.read_sql(query, con, params={'batch_id': batch_id})
+        
+        if len(df) == 0:
+            print(f"[PREPARE] No object mappings configured for batch {batch_id}")
+            return {}
+        
+        # Build lookup dict
+        mappings = {}
+        for _, row in df.iterrows():
+            key = (str(row['source_dokob']).upper(), str(row['source_objky']))
+            mappings[key] = (str(row['target_dokob']).upper(), str(row['target_objky']))
+        
+        print(f"[PREPARE] Loaded {len(mappings)} object mappings for batch {batch_id}")
+        return mappings
+    except Exception as e:
+        print(f"[WARN] Failed to load object mappings: {e}")
+        return {}
+
+
+def apply_object_mappings_for_batch(batch_id):
+    """
+    Apply object mappings to staging records for a specific batch.
+    This should be called AFTER mappings have been uploaded for the batch.
+    Updates target_dokob and target_objky in the staging table.
+    
+    Args:
+        batch_id: The batch ID to apply mappings for
+    """
+    try:
+        # Load mappings for this batch
+        mappings = load_object_mappings(batch_id)
+        
+        if not mappings:
+            print(f"[PREPARE] No mappings to apply for batch {batch_id}")
+            return 0
+        
+        # Update staging records with target values
+        updated = 0
+        with misc_engine.begin() as con:
+            for (source_dokob, source_objky), (target_dokob, target_objky) in mappings.items():
+                result = con.execute(text("""
+                    UPDATE dbo.migration_staging
+                    SET target_dokob = :target_dokob, target_objky = :target_objky
+                    WHERE batch_id = :batch_id 
+                    AND source_dokob = :source_dokob 
+                    AND source_objky = :source_objky
+                """), {
+                    'batch_id': batch_id,
+                    'source_dokob': source_dokob,
+                    'source_objky': source_objky,
+                    'target_dokob': target_dokob,
+                    'target_objky': target_objky
+                })
+                updated += result.rowcount
+        
+        print(f"[PREPARE] Applied mappings to {updated} staging records for batch {batch_id}")
+        return updated
+    except Exception as e:
+        print(f"[WARN] Failed to apply object mappings: {e}")
+        return 0
+    
+    return data_df
+
+
 def enrich_loio_ids(data_df):
     """
     Enrich dataframe with LOIO_IDs from DIL.DMS_DOC2LOIO table.
@@ -516,6 +595,10 @@ def enrich_with_metadata(data_df):
     # Enrich with DOKOB and OBJKY from DIL.DRAD
     data_df = enrich_drad_data(data_df)
     
+    # Initialize target DOKOB/OBJKY columns (will be filled when mappings are uploaded for this batch)
+    data_df['target_dokob'] = None
+    data_df['target_objky'] = None
+    
     # Enrich with LOIO_IDs from DIL.DMS_DOC2LOIO (required for file size lookup)
     data_df = enrich_loio_ids(data_df)
     
@@ -565,12 +648,14 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'source_documentversion': row.get('documentversion', '00'),
             'source_loioid': row.get('loioid'),
             'source_description': row.get('description') or row.get('documentdescription'),
-            'source_dokob': row.get('dokob'),
-            'source_objky': row.get('objky'),
+            'source_dokob': row.get('source_dokob'),
+            'source_objky': row.get('source_objky'),
             'target_documentnumber': row.get('target_documentnumber'),
             'target_documentpart': row.get('documentpart', '000'),
             'target_documenttype': row.get('documenttype', 'IY1'),
             'target_documentversion': row.get('documentversion', '00'),
+            'target_dokob': row.get('target_dokob'),
+            'target_objky': row.get('target_objky'),
             'authorization_group': row.get('authorization_group'),
             'file_size_bytes': row.get('file_size_bytes'),
             'validation_status': 'pending',

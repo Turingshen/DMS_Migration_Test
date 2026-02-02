@@ -76,6 +76,9 @@
                         <button onclick="window.location.href='/details?batch_id={{ batch_id }}'" class="btn btn-secondary" title="View migration details">
                             <i class="fas fa-list-alt"></i> View Details
                         </button>
+                        <button onclick="window.location.href='/batch/{{ batch_id }}/object-mapping'" class="btn btn-info" title="Object Mapping for this batch">
+                            <i class="fas fa-link"></i> Object Mapping
+                        </button>
                         
                         <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Show/hide columns">
                             <i class="fas fa-columns"></i> Columns

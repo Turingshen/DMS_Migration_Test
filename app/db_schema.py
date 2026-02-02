@@ -171,6 +171,35 @@ CREATE TABLE dbo.migration_file_details (
 );
 """
 
+CREATE_OBJECT_MAPPING_TABLE = """
+CREATE TABLE dbo.migration_object_mapping (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    
+    -- Batch reference (mapping belongs to a specific batch)
+    batch_id VARCHAR(50) NOT NULL,
+    
+    -- Source object identification (from R/3)
+    source_dokob VARCHAR(10) NOT NULL,       -- Object Type: IFLOT, PMQMEL, PMAUFK, etc.
+    source_objky VARCHAR(100) NOT NULL,      -- Object Key in source system
+    
+    -- Target object identification (for S/4HANA)
+    target_dokob VARCHAR(10) NOT NULL,       -- Target Object Type (usually same as source)
+    target_objky VARCHAR(100) NOT NULL,      -- Object Key in target system
+    
+    -- Metadata
+    description NVARCHAR(255),               -- Optional description
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    created_by VARCHAR(100),
+    active BIT DEFAULT 1,
+    
+    -- Constraints and indexes
+    INDEX idx_batch_id (batch_id),
+    INDEX idx_source_lookup (batch_id, source_dokob, source_objky),
+    INDEX idx_target_lookup (target_dokob, target_objky),
+    INDEX idx_active (active)
+);
+"""
+
 def init_staging_tables(engine):
     """Initialize migration staging tables if they don't exist."""
     with engine.begin() as con:
@@ -265,3 +294,46 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_file_details table")
         else:
             print("[DB_INIT] migration_file_details table already exists")
+        
+        # Check and create object_mapping table
+        check_object_mapping = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_object_mapping'
+        """)
+        result = con.execute(check_object_mapping).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_OBJECT_MAPPING_TABLE))
+            print("[DB_INIT] Created migration_object_mapping table")
+        else:
+            print("[DB_INIT] migration_object_mapping table already exists")
+            # Ensure batch_id column exists (migration from global to batch-specific)
+            check_batch_id = text("""
+                SELECT COL_LENGTH('dbo.migration_object_mapping', 'batch_id')
+            """)
+            col_exists = con.execute(check_batch_id).fetchone()[0]
+            if col_exists is None:
+                try:
+                    # Add column as nullable first
+                    con.execute(text("ALTER TABLE dbo.migration_object_mapping ADD batch_id VARCHAR(50) NULL"))
+                    # Set default for existing rows
+                    con.execute(text("UPDATE dbo.migration_object_mapping SET batch_id = 'LEGACY' WHERE batch_id IS NULL"))
+                    # Make NOT NULL after setting defaults
+                    con.execute(text("ALTER TABLE dbo.migration_object_mapping ALTER COLUMN batch_id VARCHAR(50) NOT NULL"))
+                    print("[DB_INIT] Added batch_id column to migration_object_mapping")
+                except Exception as e:
+                    print(f"[DB_INIT_WARN] Could not add batch_id column: {e}")
+            else:
+                print("[DB_INIT] migration_object_mapping already has batch_id column")
+        
+        # Ensure target_dokob and target_objky columns exist in staging table
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'target_dokob') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_dokob VARCHAR(10) NULL;
+                IF COL_LENGTH('dbo.migration_staging', 'target_objky') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_objky VARCHAR(100) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has target_dokob/target_objky columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add target object columns: {e}")

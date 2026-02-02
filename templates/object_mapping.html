@@ -1,0 +1,1026 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Object Mapping - Batch {{ batch_id }}{% endblock %}
+
+{% block content %}
+<style>
+    .mapping-container {
+        padding: 20px;
+    }
+    .batch-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+    .batch-header h2 {
+        margin: 0 0 10px 0;
+    }
+    .batch-info {
+        display: flex;
+        gap: 30px;
+        font-size: 14px;
+        opacity: 0.9;
+    }
+    .batch-info span {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .header-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .btn-group {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s;
+        text-decoration: none;
+    }
+    .btn-primary {
+        background: #4CAF50;
+        color: white;
+    }
+    .btn-primary:hover {
+        background: #45a049;
+    }
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+    }
+    .btn-secondary:hover {
+        background: #5a6268;
+        color: white;
+    }
+    .btn-info {
+        background: #17a2b8;
+        color: white;
+    }
+    .btn-info:hover {
+        background: #138496;
+    }
+    .btn-warning {
+        background: #ffc107;
+        color: #212529;
+    }
+    .btn-warning:hover {
+        background: #e0a800;
+    }
+    .btn-danger {
+        background: #dc3545;
+        color: white;
+    }
+    .btn-danger:hover {
+        background: #c82333;
+    }
+    .btn-apply {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    .btn-apply:hover {
+        opacity: 0.9;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    .stat-card {
+        background: white;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        text-align: center;
+    }
+    .stat-value {
+        font-size: 32px;
+        font-weight: bold;
+        color: #333;
+    }
+    .stat-label {
+        color: #666;
+        margin-top: 5px;
+    }
+    .stat-card.success .stat-value { color: #4CAF50; }
+    .stat-card.warning .stat-value { color: #ff9800; }
+    .stat-card.info .stat-value { color: #2196F3; }
+    
+    .card {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    .card-header {
+        padding: 15px 20px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .card-header h3 {
+        margin: 0;
+        font-size: 18px;
+    }
+    .card-body {
+        padding: 20px;
+    }
+    
+    .table-container {
+        overflow-x: auto;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    th, td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+    }
+    th {
+        background: #f8f9fa;
+        font-weight: 600;
+        color: #333;
+    }
+    tr:hover {
+        background: #f8f9fa;
+    }
+    
+    .form-group {
+        margin-bottom: 15px;
+    }
+    .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 500;
+    }
+    .form-control {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+    .form-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+    }
+    
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    }
+    .modal.active {
+        display: flex;
+    }
+    .modal-content {
+        background: white;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 600px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+    .modal-header {
+        padding: 15px 20px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .modal-header h3 {
+        margin: 0;
+    }
+    .modal-close {
+        background: none;
+        border: none;
+        font-size: 24px;
+        cursor: pointer;
+        color: #666;
+    }
+    .modal-body {
+        padding: 20px;
+    }
+    .modal-footer {
+        padding: 15px 20px;
+        border-top: 1px solid #eee;
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+    }
+    
+    .upload-area {
+        border: 2px dashed #ddd;
+        border-radius: 8px;
+        padding: 40px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .upload-area:hover {
+        border-color: #4CAF50;
+        background: #f8fff8;
+    }
+    .upload-area.dragover {
+        border-color: #4CAF50;
+        background: #e8f5e9;
+    }
+    .upload-icon {
+        font-size: 48px;
+        color: #ccc;
+        margin-bottom: 10px;
+    }
+    
+    .badge {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    .badge-success { background: #e8f5e9; color: #4CAF50; }
+    .badge-warning { background: #fff3e0; color: #ff9800; }
+    .badge-info { background: #e3f2fd; color: #2196F3; }
+    
+    .action-btn {
+        padding: 6px 12px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        margin-right: 5px;
+    }
+    .action-btn.edit {
+        background: #e3f2fd;
+        color: #2196F3;
+    }
+    .action-btn.delete {
+        background: #ffebee;
+        color: #f44336;
+    }
+    
+    .search-box {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+    .search-box input {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    
+    .alert {
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 15px;
+    }
+    .alert-info {
+        background: #e3f2fd;
+        color: #1976D2;
+        border: 1px solid #90caf9;
+    }
+    .alert-success {
+        background: #e8f5e9;
+        color: #388E3C;
+        border: 1px solid #a5d6a7;
+    }
+    .alert-warning {
+        background: #fff3e0;
+        color: #F57C00;
+        border: 1px solid #ffcc80;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #666;
+    }
+    .empty-state-icon {
+        font-size: 64px;
+        color: #ddd;
+        margin-bottom: 20px;
+    }
+    
+    .tabs {
+        display: flex;
+        border-bottom: 2px solid #eee;
+        margin-bottom: 20px;
+    }
+    .tab {
+        padding: 12px 24px;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        color: #666;
+        transition: all 0.2s;
+    }
+    .tab:hover {
+        color: #333;
+    }
+    .tab.active {
+        color: #4CAF50;
+        border-bottom-color: #4CAF50;
+    }
+    .tab-content {
+        display: none;
+    }
+    .tab-content.active {
+        display: block;
+    }
+    
+    .loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px;
+        color: #666;
+    }
+    .spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid #eee;
+        border-top-color: #4CAF50;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+
+<div class="mapping-container">
+    <!-- Batch Header -->
+    <div class="batch-header">
+        <h2>📦 Object Mapping - Batch {{ batch_id }}</h2>
+        <div class="batch-info">
+            <span>📋 Wave: <strong id="batchWave">-</strong></span>
+            <span>📝 <span id="batchDescription">Loading...</span></span>
+            <span>📊 Records: <strong id="batchRecordCount">-</strong></span>
+        </div>
+    </div>
+
+    <!-- Header Actions -->
+    <div class="header-actions">
+        <div class="btn-group">
+            <a href="/preview?batch_id={{ batch_id }}" class="btn btn-secondary">
+                ← Back to Batch
+            </a>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-info" onclick="downloadTemplate()">
+                📥 Download Template
+            </button>
+            <button class="btn btn-primary" onclick="showUploadModal()">
+                📤 Upload Excel
+            </button>
+            <button class="btn btn-warning" onclick="downloadMappings()">
+                💾 Export Mappings
+            </button>
+            <button class="btn btn-apply" onclick="applyMappings()">
+                ✨ Apply to Staging
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+        <div class="stat-card success">
+            <div class="stat-value" id="statTotalMappings">0</div>
+            <div class="stat-label">Total Mappings</div>
+        </div>
+        <div class="stat-card info">
+            <div class="stat-value" id="statUniqueSources">0</div>
+            <div class="stat-label">Unique Sources</div>
+        </div>
+        <div class="stat-card info">
+            <div class="stat-value" id="statUniqueTargets">0</div>
+            <div class="stat-label">Unique Targets</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-value" id="statUnmapped">0</div>
+            <div class="stat-label">Unmapped Objects</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" data-tab="mappings">Mappings</div>
+        <div class="tab" data-tab="unmapped">Unmapped Objects</div>
+        <div class="tab" data-tab="add">Add Mapping</div>
+    </div>
+
+    <!-- Tab: Mappings List -->
+    <div id="tab-mappings" class="tab-content active">
+        <div class="card">
+            <div class="card-header">
+                <h3>Object Mappings</h3>
+                <span class="badge badge-info" id="mappingCount">0 mappings</span>
+            </div>
+            <div class="card-body">
+                <div class="search-box">
+                    <input type="text" id="searchMappings" placeholder="Search mappings..." onkeyup="filterMappings()">
+                </div>
+                <div class="table-container">
+                    <table id="mappingsTable">
+                        <thead>
+                            <tr>
+                                <th>Source DOKOB</th>
+                                <th>Source OBJKY</th>
+                                <th>→</th>
+                                <th>Target DOKOB</th>
+                                <th>Target OBJKY</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappingsBody">
+                            <tr>
+                                <td colspan="7" class="loading">
+                                    <div class="spinner"></div> Loading mappings...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Unmapped Objects -->
+    <div id="tab-unmapped" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <h3>Unmapped Objects in this Batch</h3>
+                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 Refresh</button>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    These are DOKOB/OBJKY combinations in this batch that don't have a mapping defined.
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>DOKOB</th>
+                                <th>OBJKY</th>
+                                <th>Count</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="unmappedBody">
+                            <tr>
+                                <td colspan="4" class="loading">
+                                    <div class="spinner"></div> Loading...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Add Mapping -->
+    <div id="tab-add" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <h3>Add New Mapping</h3>
+            </div>
+            <div class="card-body">
+                <form id="addMappingForm" onsubmit="addMapping(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Source DOKOB</label>
+                            <input type="text" class="form-control" id="addSourceDokob" required maxlength="10">
+                        </div>
+                        <div class="form-group">
+                            <label>Source OBJKY</label>
+                            <input type="text" class="form-control" id="addSourceObjky" required maxlength="100">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Target DOKOB</label>
+                            <input type="text" class="form-control" id="addTargetDokob" required maxlength="10">
+                        </div>
+                        <div class="form-group">
+                            <label>Target OBJKY</label>
+                            <input type="text" class="form-control" id="addTargetObjky" required maxlength="100">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">➕ Add Mapping</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div id="uploadModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Upload Object Mapping Excel</h3>
+            <button class="modal-close" onclick="closeUploadModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="alert alert-info">
+                Upload an Excel file with columns: <strong>source_dokob, source_objky, target_dokob, target_objky</strong>
+            </div>
+            <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon">📁</div>
+                <div>Click or drag Excel file here</div>
+                <div style="color: #999; font-size: 12px; margin-top: 10px;">Supports .xlsx and .xls files</div>
+            </div>
+            <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none" onchange="handleFileSelect(event)">
+            <div id="uploadStatus" style="margin-top: 15px;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
+            <button class="btn btn-primary" id="uploadBtn" onclick="uploadFile()" disabled>Upload</button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="editModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Edit Mapping</h3>
+            <button class="modal-close" onclick="closeEditModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editId">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Source DOKOB</label>
+                    <input type="text" class="form-control" id="editSourceDokob" required maxlength="10">
+                </div>
+                <div class="form-group">
+                    <label>Source OBJKY</label>
+                    <input type="text" class="form-control" id="editSourceObjky" required maxlength="100">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Target DOKOB</label>
+                    <input type="text" class="form-control" id="editTargetDokob" required maxlength="10">
+                </div>
+                <div class="form-group">
+                    <label>Target OBJKY</label>
+                    <input type="text" class="form-control" id="editTargetObjky" required maxlength="100">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveEdit()">Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const BATCH_ID = "{{ batch_id }}";
+    let allMappings = [];
+    let selectedFile = null;
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        loadBatchInfo();
+        loadMappings();
+        loadStats();
+        setupTabs();
+        setupDragDrop();
+    });
+
+    // Load batch info
+    function loadBatchInfo() {
+        fetch(`/api/batch/${BATCH_ID}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.batch) {
+                    document.getElementById('batchWave').textContent = data.batch.wave || '-';
+                    document.getElementById('batchDescription').textContent = data.batch.description || 'No description';
+                    document.getElementById('batchRecordCount').textContent = data.batch.total_records || '0';
+                }
+            })
+            .catch(err => console.error('Error loading batch info:', err));
+    }
+
+    // Setup tabs
+    function setupTabs() {
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const tabId = this.dataset.tab;
+                
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                this.classList.add('active');
+                document.getElementById('tab-' + tabId).classList.add('active');
+                
+                if (tabId === 'unmapped') {
+                    loadUnmapped();
+                }
+            });
+        });
+    }
+
+    // Load mappings
+    function loadMappings() {
+        fetch(`/batch/${BATCH_ID}/object-mapping/list`)
+            .then(r => r.json())
+            .then(data => {
+                allMappings = data.mappings || [];
+                renderMappings(allMappings);
+                document.getElementById('mappingCount').textContent = allMappings.length + ' mappings';
+            })
+            .catch(err => {
+                console.error('Error loading mappings:', err);
+                document.getElementById('mappingsBody').innerHTML = 
+                    '<tr><td colspan="7" class="empty-state">Error loading mappings</td></tr>';
+            });
+    }
+
+    // Render mappings table
+    function renderMappings(mappings) {
+        const tbody = document.getElementById('mappingsBody');
+        
+        if (mappings.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📋</div>
+                            <div>No mappings defined for this batch yet</div>
+                            <div style="margin-top: 10px; color: #999;">Upload an Excel file or add mappings manually</div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        tbody.innerHTML = mappings.map(m => `
+            <tr>
+                <td><code>${escapeHtml(m.source_dokob)}</code></td>
+                <td><code>${escapeHtml(m.source_objky)}</code></td>
+                <td style="color: #4CAF50; font-weight: bold;">→</td>
+                <td><code>${escapeHtml(m.target_dokob)}</code></td>
+                <td><code>${escapeHtml(m.target_objky)}</code></td>
+                <td>${formatDate(m.created_at)}</td>
+                <td>
+                    <button class="action-btn edit" onclick="editMapping(${m.id}, '${escapeJs(m.source_dokob)}', '${escapeJs(m.source_objky)}', '${escapeJs(m.target_dokob)}', '${escapeJs(m.target_objky)}')">Edit</button>
+                    <button class="action-btn delete" onclick="deleteMapping(${m.id})">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    // Filter mappings
+    function filterMappings() {
+        const search = document.getElementById('searchMappings').value.toLowerCase();
+        const filtered = allMappings.filter(m => 
+            m.source_dokob.toLowerCase().includes(search) ||
+            m.source_objky.toLowerCase().includes(search) ||
+            m.target_dokob.toLowerCase().includes(search) ||
+            m.target_objky.toLowerCase().includes(search)
+        );
+        renderMappings(filtered);
+    }
+
+    // Load stats
+    function loadStats() {
+        fetch(`/batch/${BATCH_ID}/object-mapping/stats`)
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('statTotalMappings').textContent = data.total_mappings || 0;
+                document.getElementById('statUniqueSources').textContent = data.unique_sources || 0;
+                document.getElementById('statUniqueTargets').textContent = data.unique_targets || 0;
+                document.getElementById('statUnmapped').textContent = data.unmapped_count || 0;
+            })
+            .catch(err => console.error('Error loading stats:', err));
+    }
+
+    // Load unmapped objects
+    function loadUnmapped() {
+        const tbody = document.getElementById('unmappedBody');
+        tbody.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div> Loading...</td></tr>';
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/unmapped`)
+            .then(r => r.json())
+            .then(data => {
+                const unmapped = data.unmapped || [];
+                
+                if (unmapped.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="4">
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">✅</div>
+                                    <div>All objects in this batch are mapped!</div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = unmapped.map(u => `
+                    <tr>
+                        <td><code>${escapeHtml(u.dokob)}</code></td>
+                        <td><code>${escapeHtml(u.objky)}</code></td>
+                        <td><span class="badge badge-warning">${u.count}</span></td>
+                        <td>
+                            <button class="action-btn edit" onclick="quickAddMapping('${escapeJs(u.dokob)}', '${escapeJs(u.objky)}')">
+                                Add Mapping
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            })
+            .catch(err => {
+                console.error('Error loading unmapped:', err);
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Error loading unmapped objects</td></tr>';
+            });
+    }
+
+    function refreshUnmapped() {
+        loadUnmapped();
+        loadStats();
+    }
+
+    // Quick add mapping from unmapped
+    function quickAddMapping(dokob, objky) {
+        document.getElementById('addSourceDokob').value = dokob;
+        document.getElementById('addSourceObjky').value = objky;
+        document.getElementById('addTargetDokob').value = dokob;
+        document.getElementById('addTargetObjky').value = '';
+        
+        // Switch to add tab
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.querySelector('.tab[data-tab="add"]').classList.add('active');
+        document.getElementById('tab-add').classList.add('active');
+        
+        document.getElementById('addTargetObjky').focus();
+    }
+
+    // Add mapping
+    function addMapping(event) {
+        event.preventDefault();
+        
+        const data = {
+            source_dokob: document.getElementById('addSourceDokob').value,
+            source_objky: document.getElementById('addSourceObjky').value,
+            target_dokob: document.getElementById('addTargetDokob').value,
+            target_objky: document.getElementById('addTargetObjky').value
+        };
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                alert('Mapping added successfully!');
+                document.getElementById('addMappingForm').reset();
+                loadMappings();
+                loadStats();
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error adding mapping: ' + err));
+    }
+
+    // Edit mapping
+    function editMapping(id, sourceDokob, sourceObjky, targetDokob, targetObjky) {
+        document.getElementById('editId').value = id;
+        document.getElementById('editSourceDokob').value = sourceDokob;
+        document.getElementById('editSourceObjky').value = sourceObjky;
+        document.getElementById('editTargetDokob').value = targetDokob;
+        document.getElementById('editTargetObjky').value = targetObjky;
+        document.getElementById('editModal').classList.add('active');
+    }
+
+    function closeEditModal() {
+        document.getElementById('editModal').classList.remove('active');
+    }
+
+    function saveEdit() {
+        const id = document.getElementById('editId').value;
+        const data = {
+            source_dokob: document.getElementById('editSourceDokob').value,
+            source_objky: document.getElementById('editSourceObjky').value,
+            target_dokob: document.getElementById('editTargetDokob').value,
+            target_objky: document.getElementById('editTargetObjky').value
+        };
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/${id}/update`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                closeEditModal();
+                loadMappings();
+                loadStats();
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error updating mapping: ' + err));
+    }
+
+    // Delete mapping
+    function deleteMapping(id) {
+        if (!confirm('Are you sure you want to delete this mapping?')) return;
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/${id}/delete`, {
+            method: 'DELETE'
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                loadMappings();
+                loadStats();
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error deleting mapping: ' + err));
+    }
+
+    // Upload functionality
+    function showUploadModal() {
+        document.getElementById('uploadModal').classList.add('active');
+        selectedFile = null;
+        document.getElementById('uploadStatus').innerHTML = '';
+        document.getElementById('uploadBtn').disabled = true;
+    }
+
+    function closeUploadModal() {
+        document.getElementById('uploadModal').classList.remove('active');
+        document.getElementById('fileInput').value = '';
+    }
+
+    function setupDragDrop() {
+        const area = document.getElementById('uploadArea');
+        
+        area.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            area.classList.add('dragover');
+        });
+        
+        area.addEventListener('dragleave', () => {
+            area.classList.remove('dragover');
+        });
+        
+        area.addEventListener('drop', (e) => {
+            e.preventDefault();
+            area.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                selectedFile = file;
+                document.getElementById('uploadStatus').innerHTML = 
+                    `<div class="alert alert-success">Selected: ${file.name}</div>`;
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        });
+    }
+
+    function handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (file) {
+            selectedFile = file;
+            document.getElementById('uploadStatus').innerHTML = 
+                `<div class="alert alert-success">Selected: ${file.name}</div>`;
+            document.getElementById('uploadBtn').disabled = false;
+        }
+    }
+
+    function uploadFile() {
+        if (!selectedFile) return;
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        document.getElementById('uploadBtn').disabled = true;
+        document.getElementById('uploadStatus').innerHTML = 
+            '<div class="loading"><div class="spinner"></div> Uploading...</div>';
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/upload`, {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                document.getElementById('uploadStatus').innerHTML = 
+                    `<div class="alert alert-success">✅ Uploaded ${result.count} mappings!</div>`;
+                setTimeout(() => {
+                    closeUploadModal();
+                    loadMappings();
+                    loadStats();
+                }, 1500);
+            } else {
+                document.getElementById('uploadStatus').innerHTML = 
+                    `<div class="alert alert-warning">❌ Error: ${result.error}</div>`;
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        })
+        .catch(err => {
+            document.getElementById('uploadStatus').innerHTML = 
+                `<div class="alert alert-warning">❌ Upload failed: ${err}</div>`;
+            document.getElementById('uploadBtn').disabled = false;
+        });
+    }
+
+    // Download functions
+    function downloadTemplate() {
+        window.location.href = '/object-mapping/download-template';
+    }
+
+    function downloadMappings() {
+        window.location.href = `/batch/${BATCH_ID}/object-mapping/download`;
+    }
+
+    // Apply mappings to staging
+    function applyMappings() {
+        if (!confirm('Apply all mappings to staging records in this batch?\n\nThis will update target_dokob and target_objky fields.')) return;
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/apply`, {
+            method: 'POST'
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                alert(`✅ Applied mappings!\n\nUpdated: ${result.updated_count} records`);
+                loadStats();
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error applying mappings: ' + err));
+    }
+
+    // Utility functions
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function escapeJs(text) {
+        if (!text) return '';
+        return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+    }
+
+    function formatDate(dateStr) {
+        if (!dateStr) return '-';
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('de-DE', { 
+            year: 'numeric', 
+            month: '2-digit', 
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+</script>
+{% endblock %}

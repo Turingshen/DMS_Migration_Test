@@ -3,7 +3,7 @@ Flask routes for document migration workflow.
 Implements two-step migration: prepare -> validate -> execute
 """
 
-from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
+from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, Response
 import pandas as pd
 import os
 import json
@@ -1724,4 +1724,567 @@ def export_file_details(batch_id):
         
     except Exception as e:
         print(f"[EXPORT_ERROR] {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# OBJECT MAPPING API (per Batch)
+# =============================================================================
+
+@migrate_bp.route('/api/batch/<batch_id>')
+def get_batch_info_api(batch_id):
+    """Get batch info for API calls."""
+    try:
+        with misc_engine.begin() as con:
+            batch_query = """
+                SELECT batch_id, wave, description, total_records, status, created_at
+                FROM dbo.migration_batch
+                WHERE batch_id = :batch_id
+            """
+            batch_row = con.execute(text(batch_query), {'batch_id': batch_id}).fetchone()
+            if batch_row:
+                batch_info = {
+                    'batch_id': batch_row[0],
+                    'wave': batch_row[1],
+                    'description': batch_row[2],
+                    'total_records': batch_row[3],
+                    'status': batch_row[4],
+                    'created_at': str(batch_row[5]) if batch_row[5] else None
+                }
+                return jsonify({'success': True, 'batch': batch_info})
+            else:
+                return jsonify({'success': False, 'error': 'Batch not found'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping')
+def batch_object_mapping_page(batch_id):
+    """Object mapping management page for a specific batch."""
+    return render_template('object_mapping.html', batch_id=batch_id, **get_template_context())
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/list', methods=['GET'])
+def list_batch_object_mappings(batch_id):
+    """Get all object mappings for a specific batch."""
+    try:
+        init_staging_tables(misc_engine)
+        
+        with misc_engine.begin() as con:
+            # Get batch info
+            batch_query = """
+                SELECT batch_id, wave, description, total_records, status
+                FROM dbo.migration_batch
+                WHERE batch_id = :batch_id
+            """
+            batch_row = con.execute(text(batch_query), {'batch_id': batch_id}).fetchone()
+            batch_info = None
+            if batch_row:
+                batch_info = {
+                    'batch_id': batch_row[0],
+                    'wave': batch_row[1],
+                    'description': batch_row[2],
+                    'total_records': batch_row[3],
+                    'status': batch_row[4]
+                }
+            
+            # Get mappings for this batch
+            query = """
+                SELECT 
+                    id,
+                    batch_id,
+                    source_dokob,
+                    source_objky,
+                    target_dokob,
+                    target_objky,
+                    description,
+                    created_at,
+                    created_by,
+                    active
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id AND active = 1
+                ORDER BY source_dokob, source_objky
+            """
+            df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
+        
+        mappings = df.to_dict(orient='records')
+        return jsonify({'success': True, 'mappings': mappings, 'total': len(mappings), 'batch': batch_info})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/add', methods=['POST'])
+def add_batch_object_mapping(batch_id):
+    """Add a new object mapping to a specific batch."""
+    try:
+        init_staging_tables(misc_engine)
+        data = request.get_json()
+        
+        source_dokob = data.get('source_dokob', '').strip().upper()
+        source_objky = data.get('source_objky', '').strip()
+        target_dokob = data.get('target_dokob', '').strip().upper()
+        target_objky = data.get('target_objky', '').strip()
+        description = data.get('description', '').strip()
+        
+        if not source_dokob or not source_objky or not target_dokob or not target_objky:
+            return jsonify({'success': False, 'error': 'All fields are required: source_dokob, source_objky, target_dokob, target_objky'}), 400
+        
+        current_user = session.get('fullName', 'system')
+        
+        with misc_engine.begin() as con:
+            # Check for duplicate in this batch
+            existing = con.execute(text("""
+                SELECT id FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id 
+                AND source_dokob = :source_dokob 
+                AND source_objky = :source_objky 
+                AND active = 1
+            """), {'batch_id': batch_id, 'source_dokob': source_dokob, 'source_objky': source_objky}).fetchone()
+            
+            if existing:
+                return jsonify({'success': False, 'error': f'Mapping for {source_dokob}/{source_objky} already exists in this batch'}), 400
+            
+            con.execute(text("""
+                INSERT INTO dbo.migration_object_mapping 
+                (batch_id, source_dokob, source_objky, target_dokob, target_objky, description, created_by, active)
+                VALUES (:batch_id, :source_dokob, :source_objky, :target_dokob, :target_objky, :description, :created_by, 1)
+            """), {
+                'batch_id': batch_id,
+                'source_dokob': source_dokob,
+                'source_objky': source_objky,
+                'target_dokob': target_dokob,
+                'target_objky': target_objky,
+                'description': description,
+                'created_by': current_user
+            })
+        
+        return jsonify({'success': True, 'message': 'Mapping added successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/<int:mapping_id>/update', methods=['POST', 'PUT'])
+def update_batch_object_mapping(batch_id, mapping_id):
+    """Update an existing object mapping."""
+    try:
+        data = request.get_json()
+        
+        source_dokob = data.get('source_dokob', '').strip().upper()
+        source_objky = data.get('source_objky', '').strip()
+        target_dokob = data.get('target_dokob', '').strip().upper()
+        target_objky = data.get('target_objky', '').strip()
+        description = data.get('description', '').strip()
+        
+        if not source_dokob or not source_objky or not target_dokob or not target_objky:
+            return jsonify({'success': False, 'error': 'All fields are required'}), 400
+        
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                UPDATE dbo.migration_object_mapping
+                SET source_dokob = :source_dokob,
+                    source_objky = :source_objky,
+                    target_dokob = :target_dokob,
+                    target_objky = :target_objky,
+                    description = :description
+                WHERE id = :id AND batch_id = :batch_id
+            """), {
+                'source_dokob': source_dokob,
+                'source_objky': source_objky,
+                'target_dokob': target_dokob,
+                'target_objky': target_objky,
+                'description': description,
+                'id': mapping_id,
+                'batch_id': batch_id
+            })
+        
+        return jsonify({'success': True, 'message': 'Mapping updated successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/<int:mapping_id>/delete', methods=['POST', 'DELETE'])
+def delete_batch_object_mapping(batch_id, mapping_id):
+    """Delete (deactivate) an object mapping."""
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                UPDATE dbo.migration_object_mapping SET active = 0 
+                WHERE id = :id AND batch_id = :batch_id
+            """), {'id': mapping_id, 'batch_id': batch_id})
+        
+        return jsonify({'success': True, 'message': 'Mapping deleted successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/download', methods=['GET'])
+def download_batch_object_mapping(batch_id):
+    """Download object mappings for a batch as Excel file with source values from staging."""
+    try:
+        init_staging_tables(misc_engine)
+        
+        with misc_engine.begin() as con:
+            # Get existing mappings
+            mappings_query = """
+                SELECT 
+                    source_dokob,
+                    source_objky,
+                    target_dokob,
+                    target_objky,
+                    description
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id AND active = 1
+                ORDER BY source_dokob, source_objky
+            """
+            df_mappings = pd.read_sql(text(mappings_query), con, params={'batch_id': batch_id})
+            
+            # Get unique DOKOB/OBJKY values from staging for this batch
+            staging_query = """
+                SELECT 
+                    source_dokob,
+                    source_objky,
+                    COUNT(*) as document_count
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id AND source_dokob IS NOT NULL AND source_objky IS NOT NULL
+                GROUP BY source_dokob, source_objky
+                ORDER BY source_dokob, source_objky
+            """
+            df_staging = pd.read_sql(text(staging_query), con, params={'batch_id': batch_id})
+            
+            # Get batch info
+            batch_query = """
+                SELECT wave, description FROM dbo.migration_batch WHERE batch_id = :batch_id
+            """
+            batch_row = con.execute(text(batch_query), {'batch_id': batch_id}).fetchone()
+            batch_wave = batch_row[0] if batch_row else ''
+            batch_desc = batch_row[1] if batch_row else ''
+        
+        # Create Excel file with multiple sheets
+        from io import BytesIO
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Sheet 1: Existing Mappings
+            df_mappings.to_excel(writer, sheet_name='Mappings', index=False)
+            
+            # Sheet 2: Source values from staging (for reference when creating mappings)
+            # Add empty target columns for convenience
+            if not df_staging.empty:
+                df_staging['target_dokob'] = ''
+                df_staging['target_objky'] = ''
+                df_staging['description'] = ''
+            df_staging.to_excel(writer, sheet_name='Batch Objects', index=False)
+            
+            # Sheet 3: Unmapped objects (objects in staging without a mapping)
+            if not df_staging.empty and not df_mappings.empty:
+                # Find unmapped by comparing (df_staging uses source_dokob/source_objky after renaming)
+                mapped_keys = set(zip(df_mappings['source_dokob'], df_mappings['source_objky']))
+                unmapped_mask = ~df_staging.apply(
+                    lambda row: (row['source_dokob'], row['source_objky']) in mapped_keys, axis=1
+                )
+                df_unmapped = df_staging[unmapped_mask].copy()
+            elif df_mappings.empty and not df_staging.empty:
+                df_unmapped = df_staging.copy()
+            else:
+                df_unmapped = pd.DataFrame()
+            
+            if not df_unmapped.empty:
+                df_unmapped.to_excel(writer, sheet_name='Unmapped Objects', index=False)
+        
+        output.seek(0)
+        
+        filename = f'object_mapping_{batch_id}.xlsx'
+        if batch_wave:
+            filename = f'object_mapping_{batch_wave}_{batch_id[:20]}.xlsx'
+        
+        return Response(
+            output.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/object-mapping/download-template', methods=['GET'])
+def download_object_mapping_template():
+    """Download empty Excel template for object mapping."""
+    try:
+        from io import BytesIO
+        
+        # Create template with headers and example
+        df = pd.DataFrame({
+            'source_dokob': ['IFLOT', 'PMQMEL', 'PMAUFK'],
+            'source_objky': ['DE-LU-E-B211-MA10', '000100012345', '000012345678'],
+            'target_dokob': ['IFLOT', 'PMQMEL', 'PMAUFK'],
+            'target_objky': ['DE-LU-E-B211-MA10', '000100012345', '000012345678'],
+            'description': ['Functional Location', 'Notification', 'Order']
+        })
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Object Mapping', index=False)
+        output.seek(0)
+        
+        return Response(
+            output.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': 'attachment; filename=object_mapping_template.xlsx'}
+        )
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/upload', methods=['POST'])
+def upload_batch_object_mapping(batch_id):
+    """Upload Excel file with object mappings for a specific batch."""
+    try:
+        init_staging_tables(misc_engine)
+        
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file uploaded'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        # Read Excel file
+        df = pd.read_excel(file)
+        
+        # Validate required columns
+        required_cols = ['source_dokob', 'source_objky', 'target_dokob', 'target_objky']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            return jsonify({'success': False, 'error': f'Missing columns: {missing_cols}'}), 400
+        
+        # Get mode: 'replace' = delete all and insert, 'append' = add only new
+        mode = request.form.get('mode', 'append')
+        current_user = session.get('fullName', 'system')
+        
+        added = 0
+        skipped = 0
+        updated = 0
+        
+        with misc_engine.begin() as con:
+            if mode == 'replace':
+                # Deactivate all existing mappings for this batch
+                con.execute(text("UPDATE dbo.migration_object_mapping SET active = 0 WHERE batch_id = :batch_id"), 
+                           {'batch_id': batch_id})
+            
+            for _, row in df.iterrows():
+                source_dokob = str(row['source_dokob']).strip().upper()
+                source_objky = str(row['source_objky']).strip()
+                target_dokob = str(row['target_dokob']).strip().upper()
+                target_objky = str(row['target_objky']).strip()
+                description = str(row.get('description', '') or '').strip()
+                
+                if not source_dokob or not source_objky or not target_dokob or not target_objky:
+                    skipped += 1
+                    continue
+                
+                # Check if mapping exists in this batch
+                existing = con.execute(text("""
+                    SELECT id, active FROM dbo.migration_object_mapping
+                    WHERE batch_id = :batch_id 
+                    AND source_dokob = :source_dokob 
+                    AND source_objky = :source_objky
+                """), {'batch_id': batch_id, 'source_dokob': source_dokob, 'source_objky': source_objky}).fetchone()
+                
+                if existing:
+                    # Update existing mapping
+                    con.execute(text("""
+                        UPDATE dbo.migration_object_mapping
+                        SET target_dokob = :target_dokob, target_objky = :target_objky, 
+                            description = :description, active = 1
+                        WHERE id = :id
+                    """), {
+                        'target_dokob': target_dokob,
+                        'target_objky': target_objky,
+                        'description': description,
+                        'id': existing[0]
+                    })
+                    updated += 1
+                else:
+                    # Insert new mapping
+                    con.execute(text("""
+                        INSERT INTO dbo.migration_object_mapping 
+                        (batch_id, source_dokob, source_objky, target_dokob, target_objky, description, created_by, active)
+                        VALUES (:batch_id, :source_dokob, :source_objky, :target_dokob, :target_objky, :description, :created_by, 1)
+                    """), {
+                        'batch_id': batch_id,
+                        'source_dokob': source_dokob,
+                        'source_objky': source_objky,
+                        'target_dokob': target_dokob,
+                        'target_objky': target_objky,
+                        'description': description,
+                        'created_by': current_user
+                    })
+                    added += 1
+        
+        return jsonify({
+            'success': True,
+            'message': f'Upload complete: {added} added, {updated} updated, {skipped} skipped',
+            'added': added,
+            'updated': updated,
+            'skipped': skipped
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/stats', methods=['GET'])
+def batch_object_mapping_stats(batch_id):
+    """Get statistics about object mappings for a batch."""
+    try:
+        init_staging_tables(misc_engine)
+        
+        with misc_engine.begin() as con:
+            # Count total mappings
+            mapping_count_query = """
+                SELECT COUNT(*) as cnt
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id AND active = 1
+            """
+            total_mappings = con.execute(text(mapping_count_query), {'batch_id': batch_id}).fetchone()[0] or 0
+            
+            # Count unique sources and targets
+            unique_query = """
+                SELECT 
+                    COUNT(DISTINCT source_dokob + '|' + source_objky) as unique_sources,
+                    COUNT(DISTINCT target_dokob + '|' + target_objky) as unique_targets
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id AND active = 1
+            """
+            unique_row = con.execute(text(unique_query), {'batch_id': batch_id}).fetchone()
+            unique_sources = unique_row[0] if unique_row else 0
+            unique_targets = unique_row[1] if unique_row else 0
+            
+            # Count unmapped objects in staging
+            unmapped_query = """
+                SELECT COUNT(DISTINCT s.source_dokob + '|' + s.source_objky) as cnt
+                FROM dbo.migration_staging s
+                LEFT JOIN dbo.migration_object_mapping m 
+                    ON m.batch_id = s.batch_id
+                    AND s.source_dokob = m.source_dokob 
+                    AND s.source_objky = m.source_objky 
+                    AND m.active = 1
+                WHERE s.batch_id = :batch_id
+                AND s.source_dokob IS NOT NULL
+                AND m.id IS NULL
+            """
+            unmapped_count = con.execute(text(unmapped_query), {'batch_id': batch_id}).fetchone()[0] or 0
+        
+        return jsonify({
+            'success': True, 
+            'total_mappings': total_mappings,
+            'unique_sources': unique_sources,
+            'unique_targets': unique_targets,
+            'unmapped_count': unmapped_count
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/unmapped', methods=['GET'])
+def batch_object_mapping_unmapped(batch_id):
+    """
+    Get list of source objects in this batch that have no mapping.
+    """
+    try:
+        init_staging_tables(misc_engine)
+        
+        with misc_engine.begin() as con:
+            query = """
+                SELECT 
+                    s.source_dokob as dokob,
+                    s.source_objky as objky,
+                    COUNT(*) as count
+                FROM dbo.migration_staging s
+                LEFT JOIN dbo.migration_object_mapping m 
+                    ON m.batch_id = s.batch_id
+                    AND s.source_dokob = m.source_dokob 
+                    AND s.source_objky = m.source_objky 
+                    AND m.active = 1
+                WHERE s.batch_id = :batch_id
+                AND s.source_dokob IS NOT NULL
+                AND m.id IS NULL
+                GROUP BY s.source_dokob, s.source_objky
+                ORDER BY s.source_dokob, s.source_objky
+            """
+            df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
+        
+        unmapped = df.to_dict(orient='records')
+        
+        return jsonify({'success': True, 'unmapped': unmapped, 'total': len(unmapped)})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/object-mapping/all-batches', methods=['GET'])
+def object_mapping_all_batches():
+    """
+    Get overview of all batches and their mapping status.
+    """
+    try:
+        init_staging_tables(misc_engine)
+        
+        with misc_engine.begin() as con:
+            query = """
+                SELECT 
+                    b.batch_id,
+                    b.wave,
+                    b.description,
+                    b.total_records,
+                    b.status,
+                    COUNT(DISTINCT m.id) as mapping_count,
+                    COUNT(DISTINCT CASE WHEN s.source_dokob IS NOT NULL AND m.id IS NULL 
+                                        THEN CONCAT(s.source_dokob, '|', s.source_objky) END) as unmapped_count
+                FROM dbo.migration_batch b
+                LEFT JOIN dbo.migration_staging s ON b.batch_id = s.batch_id
+                LEFT JOIN dbo.migration_object_mapping m 
+                    ON m.batch_id = b.batch_id
+                    AND s.source_dokob = m.source_dokob 
+                    AND s.source_objky = m.source_objky 
+                    AND m.active = 1
+                GROUP BY b.batch_id, b.wave, b.description, b.total_records, b.status
+                ORDER BY b.wave, b.batch_id
+            """
+            df = pd.read_sql(query, con)
+        
+        batches = df.to_dict(orient='records')
+        
+        return jsonify({'success': True, 'batches': batches})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/apply', methods=['POST'])
+def apply_batch_object_mappings(batch_id):
+    """
+    Apply object mappings to staging records for a batch.
+    This updates target_dokob and target_objky in the staging table based on mappings.
+    Should be called after uploading mappings and before execution.
+    """
+    try:
+        from app.prepare import apply_object_mappings_for_batch
+        
+        updated = apply_object_mappings_for_batch(batch_id)
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Applied mappings to {updated} staging records',
+            'updated': updated
+        })
+        
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

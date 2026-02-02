@@ -754,6 +754,42 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                     
                     logger.info(f"Document created successfully: {doc_number} (status {create_resp.status_code})", category="CREATE")
                     doc_created = True
+                    
+                    # Create Object Link if target mapping is available
+                    target_dokob = staging_record.get('target_dokob')
+                    target_objky = staging_record.get('target_objky')
+                    
+                    if target_dokob and target_objky:
+                        try:
+                            logger.info(f"Creating object link: {target_dokob}/{target_objky}", category="OBJLINK")
+                            
+                            object_link_url = f"{doc_base_url}/A_DocumentInfoRecordObjLink"
+                            server_session.headers.update({'Content-Type': 'application/json'})
+                            
+                            object_link_payload = {
+                                'DocumentInfoRecordDocType': doc_type,
+                                'DocumentInfoRecordDocNumber': doc_number,
+                                'DocumentInfoRecordDocVersion': doc_version,
+                                'DocumentInfoRecordDocPart': doc_part,
+                                'DocumentInfoRecordToObjLnkObjectType': target_dokob,
+                                'DocumentInfoRecordToObjLnkObjectKey': target_objky
+                            }
+                            
+                            link_resp = server_session.post(object_link_url, json=object_link_payload)
+                            
+                            if link_resp.status_code in (200, 201):
+                                logger.info(f"Object link created successfully: {target_dokob}/{target_objky}", category="OBJLINK")
+                            elif link_resp.status_code in (400, 409) and 'exist' in (link_resp.text.lower() if link_resp.text else ''):
+                                logger.warning(f"Object link already exists: {target_dokob}/{target_objky}", category="OBJLINK")
+                            else:
+                                error_info = _extract_error_fields(link_resp)
+                                logger.warning(f"Object link creation failed ({link_resp.status_code}): {error_info.get('detail', 'Unknown error')}", 
+                                              category="OBJLINK", details=error_info)
+                                # Don't fail the whole migration for object link errors - continue with file upload
+                        except Exception as link_ex:
+                            logger.warning(f"Exception creating object link: {link_ex}", category="OBJLINK")
+                            # Continue with file upload even if object link fails
+                    
                 elif create_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
                     logger.warning(f"Document already exists, continuing: {doc_number}", category="CREATE")
                     doc_created = True  # Tolerate existing

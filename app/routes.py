@@ -2288,3 +2288,473 @@ def apply_batch_object_mappings(batch_id):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==============================================================================
+# DMS OBJEKTE - Routes für die Werksfilterung und DMS-Daten-Ladung aus DIL
+# ==============================================================================
+
+@migrate_bp.route('/dms-objects')
+def dms_objects():
+    """Display DMS Objects page with plant/Werk filter."""
+    context = get_template_context()
+    return render_template('dms_objects.html', **context)
+
+
+@migrate_bp.route('/api/dms/werke', methods=['GET'])
+def get_dms_werke():
+    """
+    Get list of all Werke (plants) from cached JSON file.
+    Run load_werke_cache.py to refresh the cache.
+    """
+    try:
+        cache_file = 'userdata/werke_cache.json'
+        
+        if not os.path.exists(cache_file):
+            return jsonify({
+                'success': False, 
+                'error': 'Werke-Cache nicht gefunden. Bitte load_werke_cache.py ausführen.'
+            }), 404
+        
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        
+        return jsonify({
+            'success': True,
+            'werke': cache_data['werke'],
+            'total_werke': cache_data['total_werke'],
+            'total_objects': cache_data['total_objects'],
+            'generated_at': cache_data.get('generated_at', 'unknown'),
+            'source': cache_data.get('source', 'unknown')
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@migrate_bp.route('/api/dms/load', methods=['POST'])
+def load_dms_objects():
+    """
+    Load DMS objects from DIL for selected Werke.
+    Returns DRAD records with their Werk assignment.
+    Executes queries sequentially per DOKOB for better performance.
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        from app_config import DilEngine
+        import pandas as pd
+        
+        print(f"[DMS Load] Starting load_dms_objects...")
+        
+        data = request.get_json()
+        selected_werke = data.get('werke', [])
+        
+        if not selected_werke:
+            return jsonify({'success': False, 'error': 'Keine Werke ausgewählt'}), 400
+        
+        print(f"[DMS Load] Selected Werke: {selected_werke}")
+        
+        dil_db = DilEngine.load()
+        if dil_db.engine is None:
+            return jsonify({'success': False, 'error': 'DIL database not connected'}), 500
+        
+        # Build the filter for Werke
+        werke_filter = "', '".join(selected_werke)
+        
+        # Define queries per DOKOB - executed sequentially for better performance
+        queries = {
+            'EQUI': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
+                       equz.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
+            """,
+            'IFLOT': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       iflot.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
+            """,
+            'MPLA': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
+                LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                WHERE drad.DOKOB = 'MPLA' 
+                  AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
+            """,
+            'PMPLKO': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       plko.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.PLKO plko ON 
+                    LEFT(drad.OBJKY, 1) = plko.PLNTY AND
+                    SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
+                    RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
+            """,
+            'PMAUFK': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       aufk.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
+            """,
+            'PMAFVC': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       afvc.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.AFVC afvc ON 
+                    SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
+                    SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
+            """,
+            'PMQMEL': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       qmih.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+            """,
+            'STKO_DOC': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       stko.WRKAN as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+            """,
+            'STPO_DOC': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       stko.WRKAN as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
+                JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+            """
+        }
+        
+        all_results = []
+        stats = {}
+        
+        with dil_db.engine.begin() as con:
+            for dokob, query in queries.items():
+                query_start = time.time()
+                print(f"[DMS Load] Querying {dokob}...")
+                try:
+                    df = pd.read_sql(query, con)
+                    count = len(df)
+                    stats[dokob] = count
+                    if count > 0:
+                        all_results.append(df)
+                    query_time = time.time() - query_start
+                    print(f"[DMS Load] {dokob}: {count} records in {query_time:.2f}s")
+                except Exception as e:
+                    print(f"[DMS Load] ERROR in {dokob}: {str(e)}")
+                    stats[dokob] = f"ERROR: {str(e)}"
+        
+        # Combine all results
+        if all_results:
+            combined_df = pd.concat(all_results, ignore_index=True)
+            data_list = combined_df.to_dict(orient='records')
+        else:
+            data_list = []
+        
+        stats['total'] = len(data_list)
+        total_time = time.time() - start_time
+        print(f"[DMS Load] Completed: {len(data_list)} total records in {total_time:.2f}s")
+        
+        # Auto-save to SQLite if requested
+        saved = False
+        if data.get('auto_save', False) and data_list:
+            try:
+                import sqlite3
+                os.makedirs('userdata', exist_ok=True)
+                db_path = 'userdata/dms_objects.db'
+                conn = sqlite3.connect(db_path)
+                df_save = pd.DataFrame(data_list)
+                df_save.to_sql('dms_objects', conn, if_exists='replace', index=False)
+                conn.close()
+                saved = True
+                print(f"[DMS Load] Auto-saved {len(data_list)} records to {db_path}")
+            except Exception as save_error:
+                print(f"[DMS Load] Auto-save failed: {save_error}")
+        
+        return jsonify({
+            'success': True,
+            'data': data_list,
+            'stats': stats,
+            'count': len(data_list),
+            'query_time': f"{total_time:.2f}s",
+            'saved': saved
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@migrate_bp.route('/api/dms/load-stream')
+def load_dms_objects_stream():
+    """
+    Load DMS objects with Server-Sent Events for real-time progress.
+    Query parameters: werke (comma-separated), auto_save (boolean)
+    """
+    from flask import Response
+    import time
+    import json
+    
+    werke_param = request.args.get('werke', '')
+    auto_save = request.args.get('auto_save', 'true').lower() == 'true'
+    selected_werke = [w.strip() for w in werke_param.split(',') if w.strip()]
+    
+    def generate():
+        start_time = time.time()
+        
+        try:
+            from app_config import DilEngine
+            import pandas as pd
+            
+            if not selected_werke:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Keine Werke ausgewählt'})}\n\n"
+                return
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Verbinde mit DIL...', 'percent': 5})}\n\n"
+            
+            dil_db = DilEngine.load()
+            if dil_db.engine is None:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'DIL database not connected'})}\n\n"
+                return
+            
+            werke_filter = "', '".join(selected_werke)
+            
+            # Define queries per DOKOB
+            queries = {
+                'EQUI': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
+                           equz.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                    WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
+                """,
+                'IFLOT': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           iflot.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                    WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
+                """,
+                'MPLA': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
+                    LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                    WHERE drad.DOKOB = 'MPLA' 
+                      AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
+                """,
+                'PMPLKO': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           plko.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.PLKO plko ON 
+                        LEFT(drad.OBJKY, 1) = plko.PLNTY AND
+                        SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
+                        RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                    WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
+                """,
+                'PMAUFK': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           aufk.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                    WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
+                """,
+                'PMAFVC': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           afvc.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.AFVC afvc ON 
+                        SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
+                        SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                    WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
+                """,
+                'PMQMEL': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           qmih.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                """,
+                'STKO_DOC': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           stko.WRKAN as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                    WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                """,
+                'STPO_DOC': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           stko.WRKAN as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                """
+            }
+            
+            all_results = []
+            stats = {}
+            total_queries = len(queries)
+            
+            with dil_db.engine.begin() as con:
+                for idx, (dokob, query) in enumerate(queries.items()):
+                    percent = 10 + int((idx / total_queries) * 80)
+                    yield f"data: {json.dumps({'type': 'progress', 'dokob': dokob, 'message': f'Lade {dokob}...', 'percent': percent, 'step': idx + 1, 'total_steps': total_queries})}\n\n"
+                    
+                    query_start = time.time()
+                    try:
+                        df = pd.read_sql(query, con)
+                        count = len(df)
+                        stats[dokob] = count
+                        if count > 0:
+                            all_results.append(df)
+                        query_time = time.time() - query_start
+                        
+                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
+                        print(f"[DMS Load] {dokob}: {count} records in {query_time:.2f}s")
+                    except Exception as e:
+                        print(f"[DMS Load] ERROR in {dokob}: {str(e)}")
+                        stats[dokob] = 0
+                        yield f"data: {json.dumps({'type': 'step_error', 'dokob': dokob, 'error': str(e)})}\n\n"
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Verarbeite Daten...', 'percent': 95})}\n\n"
+            
+            # Combine all results
+            if all_results:
+                combined_df = pd.concat(all_results, ignore_index=True)
+                data_list = combined_df.to_dict(orient='records')
+            else:
+                data_list = []
+            
+            stats['total'] = len(data_list)
+            total_time = time.time() - start_time
+            
+            # Auto-save to SQLite
+            saved = False
+            if auto_save and data_list:
+                try:
+                    import sqlite3
+                    os.makedirs('userdata', exist_ok=True)
+                    db_path = 'userdata/dms_objects.db'
+                    conn = sqlite3.connect(db_path)
+                    df_save = pd.DataFrame(data_list)
+                    df_save.to_sql('dms_objects', conn, if_exists='replace', index=False)
+                    conn.close()
+                    saved = True
+                    print(f"[DMS Load] Auto-saved {len(data_list)} records to {db_path}")
+                except Exception as save_error:
+                    print(f"[DMS Load] Auto-save failed: {save_error}")
+            
+            # Send final result
+            yield f"data: {json.dumps({'type': 'complete', 'stats': stats, 'count': len(data_list), 'query_time': f'{total_time:.2f}s', 'saved': saved, 'data': data_list})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'traceback': traceback.format_exc()})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    })
+
+
+@migrate_bp.route('/api/dms/save', methods=['POST'])
+def save_dms_objects():
+    """
+    Save loaded DMS objects to local SQLite database.
+    Creates a new table or appends to existing.
+    """
+    try:
+        import sqlite3
+        
+        data = request.get_json()
+        objects = data.get('data', [])
+        
+        if not objects:
+            return jsonify({'success': False, 'error': 'Keine Daten zum Speichern'}), 400
+        
+        # Create userdata folder if needed
+        os.makedirs('userdata', exist_ok=True)
+        
+        # Save to SQLite
+        db_path = 'userdata/dms_objects.db'
+        conn = sqlite3.connect(db_path)
+        
+        # Create DataFrame and save
+        import pandas as pd
+        df = pd.DataFrame(objects)
+        df.to_sql('dms_objects', conn, if_exists='replace', index=False)
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'count': len(objects),
+            'db_path': db_path
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@migrate_bp.route('/api/dms/status', methods=['GET'])
+def get_dms_status():
+    """
+    Get status of local DMS objects database.
+    """
+    try:
+        import sqlite3
+        db_path = 'userdata/dms_objects.db'
+        
+        if not os.path.exists(db_path):
+            return jsonify({'success': True, 'count': 0, 'exists': False})
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM dms_objects")
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'count': count,
+            'exists': True,
+            'db_path': db_path
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'count': 0,
+            'error': str(e)
+        })

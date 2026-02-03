@@ -1,0 +1,602 @@
+{% extends "base_simple.html" %}
+
+{% block title %}DMS Objekte{% endblock %}
+
+{% block head %}
+<style>
+    /* Region Badges */
+    .region-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        margin-right: 5px;
+        font-weight: 600;
+    }
+    .region-EU { background: #007bff; color: white; }
+    .region-NA { background: #28a745; color: white; }
+    .region-SA { background: #ffc107; color: black; }
+    .region-AP { background: #dc3545; color: white; }
+    .region-OTHER { background: #6c757d; color: white; }
+    
+    /* Table */
+    #resultsTable {
+        font-size: 0.85rem;
+    }
+    #resultsTable thead {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .table-container {
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    
+    /* Quick filter buttons */
+    .quick-filter-btn {
+        margin: 2px;
+    }
+    .quick-filter-btn.active {
+        background-color: #28a745 !important;
+        border-color: #28a745 !important;
+    }
+    
+    /* Compact Stats Badges */
+    .dokob-stats-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .dokob-stat-badge {
+        display: inline-flex;
+        align-items: center;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 0.8rem;
+    }
+    .dokob-stat-badge .dokob-name {
+        font-weight: 600;
+        margin-right: 6px;
+        color: #495057;
+    }
+    .dokob-stat-badge .dokob-count {
+        color: #28a745;
+        font-weight: 700;
+    }
+    .dokob-stat-badge .dokob-percent {
+        color: #6c757d;
+        font-size: 0.7rem;
+        margin-left: 4px;
+    }
+    
+    /* Werke Checkbox Grid */
+    .werke-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 6px;
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 10px;
+    }
+    .werke-checkbox {
+        display: flex;
+        align-items: center;
+        padding: 4px 8px;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .werke-checkbox:hover {
+        background: #f8f9fa;
+        border-color: #28a745;
+    }
+    .werke-checkbox.selected {
+        background: #28a745;
+        border-color: #28a745;
+        color: white;
+    }
+    .werke-checkbox input {
+        margin-right: 6px;
+    }
+    .werke-checkbox .werke-count {
+        margin-left: auto;
+        font-size: 0.7rem;
+        color: #6c757d;
+    }
+    .werke-checkbox.selected .werke-count {
+        color: rgba(255,255,255,0.8);
+    }
+    
+    /* Country Group Header */
+    .country-group {
+        margin-bottom: 10px;
+    }
+    .country-header {
+        font-weight: 600;
+        font-size: 0.75rem;
+        color: #6c757d;
+        padding: 4px 0;
+        border-bottom: 1px solid #eee;
+        margin-bottom: 6px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-3">
+    <!-- Header Row -->
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <h4 class="mb-1"><i class="fas fa-database"></i> DMS Objekte für Migration</h4>
+            <small class="text-muted">Wähle Werke aus und lade die DMS-Objekte in die lokale Datenbank</small>
+        </div>
+        <div class="col-md-4 text-right">
+            <span id="dbStatus" class="badge badge-secondary">
+                <i class="fas fa-database"></i> Lokale DB: <span id="dbCount">0</span> Objekte
+            </span>
+        </div>
+    </div>
+
+    <!-- Main Control Row -->
+    <div class="row mb-3">
+        <!-- Werke Selection (full width) -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white py-2">
+                    <i class="fas fa-industry"></i> Werke auswählen
+                    <span class="badge badge-light ml-2" id="selectedCount">0 ausgewählt</span>
+                    <span class="float-right">
+                        <input type="text" id="werkeSearch" class="form-control form-control-sm d-inline-block" 
+                               style="width: 150px;" placeholder="Suchen..." oninput="filterWerke(this.value)">
+                        <button class="btn btn-sm btn-outline-light quick-filter-btn" onclick="selectRegion('EU')">EU</button>
+                        <button class="btn btn-sm btn-outline-light quick-filter-btn" onclick="selectRegion('NA')">NA</button>
+                        <button class="btn btn-sm btn-outline-light quick-filter-btn" onclick="selectRegion('AP')">AP</button>
+                        <button class="btn btn-sm btn-outline-light quick-filter-btn" onclick="selectRegion('SA')">SA</button>
+                        <button class="btn btn-sm btn-outline-warning ml-2" onclick="clearSelection()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                        <button id="btnLoadData" class="btn btn-sm btn-success ml-3" onclick="loadDMSObjects()">
+                            <i class="fas fa-download"></i> Daten laden & speichern
+                        </button>
+                        <button class="btn btn-sm btn-outline-light ml-1" onclick="exportData()">
+                            <i class="fas fa-file-csv"></i> CSV
+                        </button>
+                    </span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="werke-grid" id="werkeContainer">
+                        <!-- Filled dynamically with checkboxes -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Progress Bar -->
+    <div class="row mb-2" id="progressRow" style="display: none;">
+        <div class="col-12">
+            <div class="progress" style="height: 25px;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                     role="progressbar" style="width: 0%">
+                    <span id="progressText">0%</span>
+                </div>
+            </div>
+            <small id="progressLabel" class="text-muted"></small>
+        </div>
+    </div>
+
+    <!-- Stats Row (compact badges only) -->
+    <div class="row mb-3" id="statsRow" style="display: none;">
+        <div class="col-12">
+            <div class="dokob-stats-grid" id="detailedStats">
+                <!-- Filled dynamically with compact badges -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Table -->
+    <div class="row" id="resultsRow" style="display: none;">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-light py-2">
+                    <i class="fas fa-table"></i> Vorschau (max. 100 Einträge)
+                    <span class="float-right text-muted" id="tableInfo"></span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-container">
+                        <table class="table table-sm table-striped table-hover mb-0" id="resultsTable">
+                            <thead class="thead-dark">
+                                <tr>
+                                    <th>DOKAR</th>
+                                    <th>DOKNR</th>
+                                    <th>DOKVR</th>
+                                    <th>DOKTL</th>
+                                    <th>DOKOB</th>
+                                    <th>OBJKY</th>
+                                    <th>WERK</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resultsBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allWerke = [];
+let loadedData = [];
+let countryToRegion = {};
+let werkeData = {}; // Store werk -> {count, country, region}
+
+// Region mapping based on country code
+const regionMap = {
+    'EU': ['DE', 'FR', 'IT', 'ES', 'PT', 'NL', 'BE', 'AT', 'CH', 'PL', 'CZ', 'HU', 'RO', 'BG', 'SK', 'SI', 'HR', 'RS', 'GR', 'FI', 'SE', 'NO', 'DK', 'IE', 'GB', 'UK', 'LU', 'EE', 'LV', 'LT'],
+    'NA': ['US', 'CA', 'MX'],
+    'SA': ['BR', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC'],
+    'AP': ['CN', 'JP', 'KR', 'IN', 'TH', 'MY', 'SG', 'ID', 'PH', 'VN', 'TW', 'AU', 'NZ']
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadWerke();
+    loadDBStatus();
+});
+
+function loadWerke() {
+    fetch('/api/dms/werke')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                allWerke = data.werke;
+                initWerkeGrid(data.werke);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading Werke:', error);
+            showError('Fehler beim Laden der Werke');
+        });
+}
+
+function initWerkeGrid(werke) {
+    const container = $('#werkeContainer');
+    container.empty();
+    werkeData = {};
+    
+    // Process werke and determine regions
+    werke.forEach(w => {
+        const werkCode = w.code || w.werk || '';
+        const country = werkCode.substring(0, 2).toUpperCase() || 'XX';
+        
+        // Determine region
+        let region = 'OTHER';
+        for (const [r, countries] of Object.entries(regionMap)) {
+            if (countries.includes(country)) {
+                region = r;
+                break;
+            }
+        }
+        countryToRegion[country] = region;
+        
+        werkeData[werkCode] = {
+            count: w.count || 0,
+            country: country,
+            region: region
+        };
+    });
+    
+    // Sort werke by code
+    const sortedWerke = Object.keys(werkeData).sort();
+    
+    // Create checkbox for each werk
+    sortedWerke.forEach(werkCode => {
+        const data = werkeData[werkCode];
+        const countStr = data.count >= 1000 ? (data.count / 1000).toFixed(0) + 'k' : data.count;
+        
+        const $checkbox = $(`
+            <label class="werke-checkbox" data-werk="${werkCode}" data-region="${data.region}" data-country="${data.country}">
+                <input type="checkbox" value="${werkCode}">
+                <span class="werke-code">${werkCode}</span>
+                <span class="werke-count">${countStr}</span>
+            </label>
+        `);
+        
+        $checkbox.on('click', function(e) {
+            if (e.target.tagName !== 'INPUT') {
+                const input = $(this).find('input');
+                input.prop('checked', !input.prop('checked'));
+            }
+            $(this).toggleClass('selected', $(this).find('input').prop('checked'));
+            updateSelectedCount();
+        });
+        
+        container.append($checkbox);
+    });
+}
+
+function updateSelectedCount() {
+    const count = $('#werkeContainer input:checked').length;
+    $('#selectedCount').text(`${count} ausgewählt`);
+}
+
+function filterWerke(searchTerm) {
+    const term = searchTerm.toLowerCase();
+    $('#werkeContainer .werke-checkbox').each(function() {
+        const werk = $(this).data('werk').toLowerCase();
+        $(this).toggle(werk.includes(term));
+    });
+}
+
+function getSelectedWerke() {
+    const selected = [];
+    $('#werkeContainer input:checked').each(function() {
+        selected.push($(this).val());
+    });
+    return selected;
+}
+
+function selectRegion(region) {
+    const $checkboxes = $(`#werkeContainer .werke-checkbox[data-region="${region}"]`);
+    
+    // Check if all in region are selected
+    const allSelected = $checkboxes.find('input:checked').length === $checkboxes.length;
+    
+    $checkboxes.each(function() {
+        $(this).find('input').prop('checked', !allSelected);
+        $(this).toggleClass('selected', !allSelected);
+    });
+    
+    $(`.quick-filter-btn:contains('${region}')`).toggleClass('active', !allSelected);
+    updateSelectedCount();
+}
+
+function clearSelection() {
+    $('#werkeContainer input').prop('checked', false);
+    $('#werkeContainer .werke-checkbox').removeClass('selected');
+    $('.quick-filter-btn').removeClass('active');
+    updateSelectedCount();
+}
+
+function loadDMSObjects() {
+    const selected = getSelectedWerke();
+    
+    if (!selected || selected.length === 0) {
+        showError('Bitte mindestens ein Werk auswählen!');
+        return;
+    }
+    
+    // Clear previous results immediately
+    $('#resultsBody').empty();
+    loadedData = [];
+    resetStats();
+    
+    // Show progress
+    $('#progressRow').show();
+    $('#btnLoadData').prop('disabled', true);
+    updateProgress(5, 'Verbinde mit DIL...');
+    
+    // Use Server-Sent Events for real-time progress
+    const params = new URLSearchParams({
+        werke: selected.join(','),
+        auto_save: 'true'
+    });
+    
+    const eventSource = new EventSource(`/api/dms/load-stream?${params}`);
+    let currentStats = {};
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        
+        switch(data.type) {
+            case 'status':
+                updateProgress(data.percent, data.message);
+                break;
+                
+            case 'progress':
+                updateProgress(data.percent, `${data.message} (${data.step}/${data.total_steps})`);
+                break;
+                
+            case 'step_complete':
+                currentStats[data.dokob] = data.count;
+                updateProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()} (${data.time})`);
+                // Update stats in real-time
+                updateStatsPartial(currentStats);
+                break;
+                
+            case 'step_error':
+                console.error(`Error in ${data.dokob}:`, data.error);
+                break;
+                
+            case 'complete':
+                eventSource.close();
+                $('#btnLoadData').prop('disabled', false);
+                loadedData = data.data;
+                updateProgress(100, 'Fertig!');
+                
+                setTimeout(() => {
+                    $('#progressRow').hide();
+                    displayResults({ data: data.data, count: data.count });
+                    updateStats(data.stats);
+                    loadDBStatus();
+                    $('#statsRow').show();
+                    $('#resultsRow').show();
+                }, 500);
+                
+                if (data.saved) {
+                    showSuccess(`${data.count.toLocaleString()} Objekte geladen und in DB gespeichert (${data.query_time})`);
+                } else {
+                    showSuccess(`${data.count.toLocaleString()} Objekte geladen (${data.query_time})`);
+                }
+                break;
+                
+            case 'error':
+                eventSource.close();
+                $('#btnLoadData').prop('disabled', false);
+                $('#progressRow').hide();
+                showError('Fehler: ' + data.message);
+                break;
+        }
+    };
+    
+    eventSource.onerror = function(error) {
+        eventSource.close();
+        $('#btnLoadData').prop('disabled', false);
+        $('#progressRow').hide();
+        showError('Verbindungsfehler zum Server');
+    };
+}
+
+// Update stats partially during loading (live badges)
+function updateStatsPartial(stats) {
+    const container = $('#detailedStats');
+    container.empty();
+    
+    // Calculate total
+    let total = 0;
+    for (const [key, value] of Object.entries(stats)) {
+        if (typeof value === 'number') {
+            total += value;
+        }
+    }
+    
+    // Sort by count descending
+    const entries = Object.entries(stats)
+        .filter(([key, value]) => typeof value === 'number')
+        .sort((a, b) => b[1] - a[1]);
+    
+    entries.forEach(([dokob, count]) => {
+        const percent = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+        container.append(`
+            <div class="dokob-stat-badge">
+                <span class="dokob-name">${dokob}</span>
+                <span class="dokob-count">${count.toLocaleString()}</span>
+                <span class="dokob-percent">(${percent}%)</span>
+            </div>
+        `);
+    });
+    
+    $('#statsRow').show();
+}
+
+function updateProgress(percent, label) {
+    $('#progressBar').css('width', percent + '%');
+    $('#progressText').text(percent + '%');
+    $('#progressLabel').text(label);
+}
+
+function displayResults(data) {
+    const tbody = $('#resultsBody');
+    tbody.empty();
+    
+    if (!data.data || data.data.length === 0) {
+        tbody.append('<tr><td colspan="7" class="text-center">Keine Daten gefunden</td></tr>');
+        return;
+    }
+    
+    // Show only first 100 rows for preview
+    const displayData = data.data.slice(0, 100);
+    
+    displayData.forEach(row => {
+        tbody.append(`
+            <tr>
+                <td>${row.dokar || ''}</td>
+                <td><code>${row.doknr || ''}</code></td>
+                <td>${row.dokvr || ''}</td>
+                <td>${row.doktl || ''}</td>
+                <td><span class="badge badge-info">${row.dokob || ''}</span></td>
+                <td><small>${row.objky || ''}</small></td>
+                <td><span class="badge badge-secondary">${row.werk || ''}</span></td>
+            </tr>
+        `);
+    });
+    
+    const total = data.data.length;
+    $('#tableInfo').html(`Vorschau: 100 von ${total.toLocaleString()} Einträgen`);
+}
+
+function updateStats(stats) {
+    // Update the compact badges directly
+    const container = $('#detailedStats');
+    if (!container.length) return;
+    
+    container.empty();
+    
+    // Sort by count descending (exclude 'total')
+    const entries = Object.entries(stats)
+        .filter(([key, value]) => key !== 'total' && typeof value === 'number')
+        .sort((a, b) => b[1] - a[1]);
+    
+    entries.forEach(([dokob, count]) => {
+        const percent = stats.total > 0 ? ((count / stats.total) * 100).toFixed(1) : 0;
+        container.append(`
+            <div class="dokob-stat-badge">
+                <span class="dokob-name">${dokob}</span>
+                <span class="dokob-count">${count.toLocaleString()}</span>
+                <span class="dokob-percent">(${percent}%)</span>
+            </div>
+        `);
+    });
+}
+
+function resetStats() {
+    $('#detailedStats').empty();
+    $('#statsRow').hide();
+    $('#tableInfo').text('');
+}
+
+function loadDBStatus() {
+    fetch('/api/dms/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                $('#dbCount').text(data.count.toLocaleString());
+                $('#dbStatus').removeClass('badge-secondary').addClass('badge-success');
+            }
+        })
+        .catch(() => {
+            $('#dbStatus').removeClass('badge-success').addClass('badge-secondary');
+        });
+}
+
+function exportData() {
+    if (loadedData.length === 0) {
+        showError('Keine Daten zum Exportieren!');
+        return;
+    }
+    
+    const headers = ['dokar', 'doknr', 'dokvr', 'doktl', 'dokob', 'objky', 'werk'];
+    const displayHeaders = ['DOKAR', 'DOKNR', 'DOKVR', 'DOKTL', 'DOKOB', 'OBJKY', 'WERK'];
+    let csv = displayHeaders.join(';') + '\n';
+    
+    loadedData.forEach(row => {
+        csv += headers.map(h => row[h] || '').join(';') + '\n';
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `dms_objects_${new Date().toISOString().slice(0,10)}.csv`;
+    link.click();
+}
+
+function showError(message) {
+    // Simple alert for now, could be replaced with toast
+    alert('Fehler: ' + message);
+}
+
+function showSuccess(message) {
+    // Could add a toast notification here
+    console.log('Success:', message);
+}
+</script>
+{% endblock %}

@@ -243,6 +243,21 @@
                     </div>
                 </div>
                 
+                <!-- DOKOB Filter (Objekttyp) -->
+                <div class="form-group">
+                    <label><i class="fas fa-filter"></i> Objekttyp-Filter (DOKOB)</label>
+                    <div class="alert alert-light border mb-0" style="max-height: 120px; overflow-y: auto;">
+                        <div id="dokobFilterContainer" class="d-flex flex-wrap gap-2">
+                            <span class="text-muted">Lade Objekttypen...</span>
+                        </div>
+                    </div>
+                    <small class="form-text text-muted">
+                        <span id="selectedDokobInfo">Alle Objekttypen ausgewählt</span>
+                        <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)">Alle</button> |
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)">Keine</button>
+                    </small>
+                </div>
+                
                 <div class="row">
                     <div class="col-md-6">
                         <div class="form-group">
@@ -534,6 +549,8 @@ function showSuccess(message) {
 }
 
 // Migration Batch Functions
+let selectedDokobs = [];  // Store selected DOKOB values
+
 function showMigrationBatchModal() {
     const count = parseInt($('#dbCount').text().replace(/[,.]/g, '')) || 0;
     if (count === 0) {
@@ -554,7 +571,117 @@ function showMigrationBatchModal() {
     $('#migrationDescription').val('');
     $('#migrationNotes').val('');
     $('#descCharCount').text('0');
+    
+    // Load DOKOB statistics
+    loadDokobStats();
+    
     $('#migrationBatchModal').modal('show');
+}
+
+// Load DOKOB statistics for filter
+function loadDokobStats() {
+    fetch('/api/dms/dokob-stats')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.dokobs && data.dokobs.length > 0) {
+                selectedDokobs = data.dokobs.map(d => d.dokob);  // Select all by default
+                renderDokobFilter(data.dokobs);
+                updateDokobInfo();
+            } else {
+                $('#dokobFilterContainer').html('<span class="text-muted">Keine Objekttypen gefunden</span>');
+            }
+        })
+        .catch(err => {
+            $('#dokobFilterContainer').html('<span class="text-danger">Fehler beim Laden</span>');
+        });
+}
+
+function renderDokobFilter(dokobs) {
+    const container = $('#dokobFilterContainer');
+    container.empty();
+    
+    dokobs.forEach(item => {
+        const checked = selectedDokobs.includes(item.dokob) ? 'checked' : '';
+        const badge = $(`
+            <label class="badge badge-${checked ? 'success' : 'secondary'} mr-1 mb-1" style="cursor: pointer; padding: 6px 10px;">
+                <input type="checkbox" class="dokob-checkbox mr-1" value="${item.dokob}" ${checked} style="display: none;">
+                ${item.dokob} <small>(${item.count.toLocaleString()})</small>
+            </label>
+        `);
+        
+        badge.on('click', function(e) {
+            const checkbox = $(this).find('input');
+            const dokob = checkbox.val();
+            
+            if (selectedDokobs.includes(dokob)) {
+                selectedDokobs = selectedDokobs.filter(d => d !== dokob);
+                $(this).removeClass('badge-success').addClass('badge-secondary');
+            } else {
+                selectedDokobs.push(dokob);
+                $(this).removeClass('badge-secondary').addClass('badge-success');
+            }
+            updateDokobInfo();
+        });
+        
+        container.append(badge);
+    });
+}
+
+function selectAllDokob(selectAll) {
+    if (selectAll) {
+        // Select all
+        $('.dokob-checkbox').each(function() {
+            const dokob = $(this).val();
+            if (!selectedDokobs.includes(dokob)) {
+                selectedDokobs.push(dokob);
+            }
+            $(this).closest('label').removeClass('badge-secondary').addClass('badge-success');
+        });
+    } else {
+        // Deselect all
+        selectedDokobs = [];
+        $('.dokob-checkbox').each(function() {
+            $(this).closest('label').removeClass('badge-success').addClass('badge-secondary');
+        });
+    }
+    updateDokobInfo();
+}
+
+function updateDokobInfo() {
+    const total = $('.dokob-checkbox').length;
+    const selected = selectedDokobs.length;
+    
+    if (selected === 0) {
+        $('#selectedDokobInfo').html('<span class="text-danger">⚠️ Keine Objekttypen ausgewählt!</span>');
+    } else if (selected === total) {
+        $('#selectedDokobInfo').text('Alle Objekttypen ausgewählt');
+    } else {
+        $('#selectedDokobInfo').text(`${selected} von ${total} Objekttypen ausgewählt`);
+    }
+    
+    // Update count based on filter
+    updateFilteredCount();
+}
+
+function updateFilteredCount() {
+    // Fetch count with filter applied
+    if (selectedDokobs.length === 0) {
+        $('#migrationObjectCount').text('0');
+        return;
+    }
+    
+    // Quick estimate based on DOKOB badges
+    let total = 0;
+    $('.dokob-checkbox').each(function() {
+        const dokob = $(this).val();
+        if (selectedDokobs.includes(dokob)) {
+            const countText = $(this).closest('label').text().match(/\(([\d,.]+)\)/);
+            if (countText) {
+                total += parseInt(countText[1].replace(/[,.]/g, '')) || 0;
+            }
+        }
+    });
+    $('#migrationObjectCount').text(total.toLocaleString());
 }
 
 // Character counter for description
@@ -572,6 +699,12 @@ function createMigrationBatch() {
         return;
     }
     
+    // Check DOKOB filter
+    if (selectedDokobs.length === 0) {
+        showError('Bitte mindestens einen Objekttyp auswählen!');
+        return;
+    }
+    
     // Show progress in button
     $('#btnCreateMigrationBatch').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> 0%');
     
@@ -583,7 +716,8 @@ function createMigrationBatch() {
     const params = new URLSearchParams({
         wave: wave,
         description: description,
-        notes: notes
+        notes: notes,
+        dokob_filter: selectedDokobs.join(',')  // Pass DOKOB filter
     });
     
     const eventSource = new EventSource(`/api/dms/create-batch-stream?${params}`);

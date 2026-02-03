@@ -95,6 +95,9 @@
                         <button onclick="executeAll()" class="btn btn-primary" id="executeBtn">
                             <i class="fas fa-play"></i> Execute All
                         </button>
+                        <button onclick="cancelMigration()" class="btn btn-danger" id="cancelBtn" style="display: none;">
+                            <i class="fas fa-stop"></i> Cancel Migration
+                        </button>
                         <button onclick="resetFailed()" class="btn btn-warning" id="resetBtn">
                             <i class="fas fa-undo"></i> Reset Failed
                         </button>
@@ -482,20 +485,95 @@ function updatePacingDisplay() {
 }
 
 function loadRecords() {
-    fetch(`/batch/${batchId}/records`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                allRecords = data.records;
-                displayRecords(allRecords);
-                updateBatchStatistics(allRecords);
-            } else {
-                showError('Failed to load records: ' + data.error);
-            }
-        })
-        .catch(error => {
-            showError('Error loading records: ' + error);
-        });
+    // Load statistics from server (aggregated - fast!) and only 100 records for preview
+    Promise.all([
+        fetch(`/batch/${batchId}/preview-stats`).then(r => r.json()),
+        fetch(`/batch/${batchId}/records?per_page=100&page=1`).then(r => r.json())
+    ])
+    .then(([statsData, recordsData]) => {
+        if (!statsData.success) {
+            showError('Failed to load statistics: ' + statsData.error);
+            return;
+        }
+        if (!recordsData.success) {
+            showError('Failed to load records: ' + recordsData.error);
+            return;
+        }
+        
+        // Store preview records (only 100)
+        allRecords = recordsData.records;
+        
+        // Display preview records
+        displayRecords(allRecords);
+        
+        // Update statistics from server-aggregated data
+        updateBatchStatisticsFromServer(statsData.stats, recordsData.pagination?.total || 0);
+    })
+    .catch(error => {
+        showError('Error loading records: ' + error);
+    });
+}
+
+// New function: Update stats from server-aggregated data (FAST - no client-side loop)
+function updateBatchStatisticsFromServer(stats, totalRecords) {
+    const buckets = stats.buckets;
+    const pendingCount = stats.pending || 0;
+    const successCount = stats.success || 0;
+    
+    // Calculate runtime based on response-based pacing
+    const transferRate = 1.0;  // seconds per MB
+    const containerOverhead = 1.5;  // API overhead + minimal delay per container
+    
+    const totalSizeMB = (stats.total_size_bytes || 0) / (1024 * 1024);
+    const totalSerialRuntime = (totalSizeMB * transferRate) + (pendingCount * containerOverhead);
+    
+    const maxWorkers = {{ max_workers | default(2) }};
+    const totalRuntime = totalSerialRuntime / maxWorkers;
+    
+    // Update statistics display
+    document.getElementById('statRecords').innerHTML = pendingCount > 0 
+        ? `${pendingCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
+        : `<span class="text-success">✓ Alle ${stats.total} erledigt</span>`;
+    document.getElementById('statTotalSize').textContent = formatFileSize(stats.total_size_bytes);
+    document.getElementById('statTiny').textContent = buckets.tiny || 0;
+    document.getElementById('statSmall').textContent = buckets.small || 0;
+    document.getElementById('statMedium').textContent = buckets.medium || 0;
+    document.getElementById('statLarge').textContent = (buckets.large || 0) > 0 ? (buckets.large + ' ⚠️') : '0';
+    document.getElementById('statUnknown').textContent = buckets.unknown || 0;
+    document.getElementById('statRuntime').textContent = pendingCount > 0 ? formatDuration(totalRuntime) : '-';
+    
+    // Update selection info to show preview info
+    const selectionInfo = document.getElementById('selectionInfo');
+    if (totalRecords > 100) {
+        selectionInfo.innerHTML = `Vorschau: 100 von ${totalRecords.toLocaleString()} Records <small class="text-muted">(Execute verarbeitet alle)</small>`;
+    } else {
+        selectionInfo.textContent = `${totalRecords} Records`;
+    }
+    
+    // Build runtime breakdown
+    const breakdown = [];
+    if (buckets.tiny > 0) breakdown.push(`⚡${buckets.tiny}`);
+    if (buckets.small > 0) breakdown.push(`🟢${buckets.small}`);
+    if (buckets.medium > 0) breakdown.push(`🟡${buckets.medium}`);
+    if (buckets.large > 0) breakdown.push(`🔴${buckets.large}`);
+    if (buckets.unknown > 0) breakdown.push(`❓${buckets.unknown}`);
+    
+    const detailText = pendingCount > 0 
+        ? `${breakdown.join(' ')} | ${formatFileSize(stats.total_size_bytes)} | ${maxWorkers} Worker`
+        : 'Keine ausstehenden Dokumente';
+    document.getElementById('statRuntimeDetail').textContent = detailText;
+    
+    // Store for modal details
+    window.runtimeStats = {
+        buckets: buckets,
+        totalSize: stats.total_size_bytes,
+        transferRate: transferRate,
+        containerOverhead: containerOverhead,
+        containerCount: pendingCount,
+        totalSerialRuntime: totalSerialRuntime,
+        maxWorkers: maxWorkers,
+        totalRuntime: totalRuntime
+    };
 }
 
 function updateBatchStatistics(records) {
@@ -908,8 +986,12 @@ function executeAll() {
     }
     
     const btn = document.getElementById('executeBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Executing...';
+    
+    // Show cancel button during execution
+    cancelBtn.style.display = 'inline-block';
     
     // Start progress polling
     startProgressPolling();
@@ -925,8 +1007,26 @@ function executeAll() {
     .then(data => {
         stopProgressPolling();
         hideProgressBar();
+        cancelBtn.style.display = 'none';
         
-        if (data.success) {
+        if (data.stopped) {
+            // Migration was stopped (by cancel or circuit breaker)
+            let message = `Migration stopped!\n\n`;
+            message += `Reason: ${data.stop_reason}\n\n`;
+            message += `Processed: ${data.processed}/${data.total}\n`;
+            message += `Successful: ${data.successful}\n`;
+            message += `Failed: ${data.failed}\n`;
+            message += `Remaining: ${data.remaining}\n\n`;
+            
+            if (data.circuit_breaker_tripped) {
+                message += '⚠️ Token may have expired. Please re-login and retry.';
+            } else {
+                message += 'You can continue the migration later by clicking "Execute All" again.';
+            }
+            
+            alert(message);
+            loadRecords();
+        } else if (data.success) {
             alert(`Migration completed!\n\nTotal: ${data.total}\nSuccessful: ${data.successful}\nFailed: ${data.failed}`);
             loadRecords();
         } else if (data.login_required) {
@@ -943,9 +1043,44 @@ function executeAll() {
     .catch(error => {
         stopProgressPolling();
         hideProgressBar();
+        cancelBtn.style.display = 'none';
         alert('Error executing migration: ' + error);
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-play"></i> Execute All';
+    });
+}
+
+function cancelMigration() {
+    if (!confirm('Are you sure you want to cancel the running migration?\n\nAlready processed records will be kept.')) {
+        return;
+    }
+    
+    const cancelBtn = document.getElementById('cancelBtn');
+    cancelBtn.disabled = true;
+    cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Cancelling...';
+    
+    fetch(`/batch/${batchId}/cancel`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Update button to show cancellation is in progress
+            cancelBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Cancel Requested...';
+            // The actual stop will be handled when executeAll returns
+        } else {
+            alert('Cancel failed: ' + data.error);
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Cancel Migration';
+        }
+    })
+    .catch(error => {
+        alert('Error requesting cancel: ' + error);
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Cancel Migration';
     });
 }
 

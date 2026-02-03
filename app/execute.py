@@ -16,6 +16,19 @@ from flask import session as http_session
 # Global migration lock to prevent parallel executions
 _migration_lock = threading.Lock()
 _active_migrations = {}  # batch_id -> start_time
+_cancel_requested = {}   # batch_id -> True/False - for graceful cancellation
+
+# Circuit Breaker settings
+CIRCUIT_BREAKER_THRESHOLD = 3  # Stop after N consecutive auth errors (reduced from 5)
+CIRCUIT_BREAKER_ERRORS = (401, 403)  # HTTP status codes that trigger circuit breaker
+PACKAGE_SIZE = 10  # Process in packages of N records (reduced from 100 for faster error detection)
+
+# Token refresh import (for automatic refresh before packages)
+try:
+    from authentication import ensure_valid_token, get_token_remaining_seconds
+    TOKEN_REFRESH_AVAILABLE = True
+except ImportError:
+    TOKEN_REFRESH_AVAILABLE = False
 
 from app_config import Config, MiscEngine
 from app.process import (
@@ -576,13 +589,13 @@ def execute_single_document(server_session, staging_record, session_snapshot):
             error_json = json.dumps(error_info)
             logger.error(error_msg, category="READ", details=error_info)
             update_execution_status(staging_id, 'failed', error_json)
-            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info, 'status_code': documents[0]}
         
         if not documents[2] or len(documents[2]) == 0:
             error_msg = "READ_EMPTY - No documents found"
             logger.warning(error_msg, category="READ")
             update_execution_status(staging_id, 'failed', error_msg)
-            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'status_code': 404}
         
         logger.info(f"Found {len(documents[2])} files to migrate", category="EXECUTE")
         
@@ -802,7 +815,7 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                     import json
                     error_json = json.dumps(error_info)
                     update_execution_status(staging_id, 'failed', error_json)
-                    return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+                    return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info, 'status_code': create_resp.status_code}
             
             # Upload attachment
             if doc_created:
@@ -990,7 +1003,7 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         error_msg = f"EXCEPTION {e}"
         logger.critical(f"Exception during migration: {str(e)}", category="EXECUTE", details={'exception': str(e)})
         update_execution_status(staging_id, 'failed', error_msg)
-        return {'staging_id': staging_id, 'status': 'failed', 'error': str(e)}
+        return {'staging_id': staging_id, 'status': 'failed', 'error': str(e), 'status_code': 500}
     
     finally:
         # Pacing between containers
@@ -1086,6 +1099,61 @@ def reset_orphaned_records(batch_id):
             if VERBOSE_TERMINAL_LOGGING:
                 print(f"[CLEANUP] Reset {result.rowcount} orphaned 'executing' records to 'pending'")
         return result.rowcount
+
+
+def request_cancel(batch_id):
+    """Request cancellation of a running migration."""
+    global _cancel_requested
+    _cancel_requested[batch_id] = True
+    print(f"[CANCEL] Cancellation requested for batch {batch_id}")
+    return True
+
+
+def is_cancel_requested(batch_id):
+    """Check if cancellation was requested for this batch."""
+    global _cancel_requested
+    return _cancel_requested.get(batch_id, False)
+
+
+def clear_cancel_request(batch_id):
+    """Clear the cancel request flag for a batch."""
+    global _cancel_requested
+    if batch_id in _cancel_requested:
+        del _cancel_requested[batch_id]
+
+
+def check_token_validity(session_snapshot):
+    """
+    Quick check if the bearer token is still valid by making a lightweight API call.
+    Returns (is_valid, error_message)
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {session_snapshot.get('bearer_token')}",
+            'Accept': 'application/json',
+        }
+        if session_snapshot.get('x_csrf_token'):
+            headers['x-csrf-token'] = session_snapshot['x_csrf_token']
+        
+        cookies = session_snapshot.get('cookies', {})
+        
+        # Use the write API base URL for a quick check
+        target_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+        if target_base_url:
+            # Simple metadata request - very lightweight
+            check_url = f"{target_base_url}/$metadata"
+            response = requests.get(check_url, headers=headers, cookies=cookies, timeout=10)
+            
+            if response.status_code in (401, 403):
+                return False, f"Token invalid (HTTP {response.status_code})"
+            return True, None
+        
+        return True, None  # Can't check, assume valid
+        
+    except requests.exceptions.Timeout:
+        return True, None  # Timeout doesn't mean token is invalid
+    except Exception as e:
+        return True, None  # Other errors don't mean token is invalid
 
 
 def execute_migration(batch_id, record_ids=None):
@@ -1186,54 +1254,276 @@ def execute_migration(batch_id, record_ids=None):
                     WHERE batch_id = '{batch_id}'
                 """))
         
-        # Execute in parallel using ThreadPoolExecutor
+        # Execute in parallel using ThreadPoolExecutor with PACKAGE-BASED processing
+        # This allows cancel/circuit-breaker to work between packages
         results = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            server_session = requests.Session()
+        
+        # Circuit breaker and cancel tracking
+        consecutive_auth_errors = 0
+        circuit_breaker_tripped = False
+        cancel_reason = None
+        clear_cancel_request(batch_id)  # Clear any previous cancel request
+        
+        # Convert DataFrame to list of tuples for package processing
+        records_list = list(records_df.iterrows())
+        
+        # Package size = max_workers to ensure only N concurrent requests
+        # This allows circuit breaker to work effectively
+        effective_package_size = max_workers  # Use worker count as package size
+        total_packages = (len(records_list) + effective_package_size - 1) // effective_package_size
+        
+        print(f"[PACKAGES] Processing {total_records} records in {total_packages} packages of {effective_package_size} (= {max_workers} workers)")
+        
+        server_session = requests.Session()
+        token_refresh_failed = False
+        
+        for package_num in range(total_packages):
+            # Check for cancellation BEFORE starting each package
+            if is_cancel_requested(batch_id):
+                cancel_reason = "User requested cancellation"
+                print(f"[CANCEL] Migration cancelled by user before package {package_num + 1}/{total_packages}")
+                break
             
-            futures = {
-                executor.submit(execute_single_document, server_session, row, session_snapshot): idx
-                for idx, (_, row) in enumerate(records_df.iterrows())
-            }
+            # Check circuit breaker before package
+            if circuit_breaker_tripped:
+                break
             
-            from concurrent.futures import as_completed
-            for future in as_completed(futures):
-                idx = futures[future]
+            # Token health check before each package (automatic refresh if possible)
+            if TOKEN_REFRESH_AVAILABLE:
+                remaining = get_token_remaining_seconds()
+                if remaining is not None and remaining < 600:  # Less than 10 min remaining
+                    print(f"[TOKEN] Token expires in {remaining}s, attempting refresh...")
+                    is_valid, error = ensure_valid_token()
+                    if not is_valid:
+                        circuit_breaker_tripped = True
+                        token_refresh_failed = True
+                        cancel_reason = f"Token expired and refresh failed: {error}"
+                        print(f"[TOKEN] {cancel_reason}")
+                        break
+                    else:
+                        # Update session_snapshot with new token
+                        session_snapshot['bearer_token'] = http_session.get('bearer_token')
+                        print(f"[TOKEN] Token refreshed successfully")
+            
+            # Get records for this package
+            start_idx = package_num * effective_package_size
+            end_idx = min(start_idx + effective_package_size, len(records_list))
+            package_records = records_list[start_idx:end_idx]
+            
+            print(f"[PACKAGE {package_num + 1}/{total_packages}] Processing records {start_idx + 1}-{end_idx}")
+            
+            # PROBE MODE: Test first record of first package to detect auth issues early
+            if package_num == 0 and len(package_records) > 0:
+                print(f"[PROBE] Testing first record to verify SAP authentication...")
                 try:
-                    result = future.result()
-                    results.append(result)
+                    _, probe_row = package_records[0]
+                    probe_result = execute_single_document(server_session, probe_row, session_snapshot)
+                    probe_error = str(probe_result.get('error', '')).lower()
+                    probe_status = probe_result.get('status_code', 0)
                     
-                    # Update counters
-                    completed_count += 1
-                    if result.get('status') == 'success':
-                        success_count += 1
-                    elif result.get('status') == 'failed':
+                    is_probe_auth_error = (
+                        probe_status in CIRCUIT_BREAKER_ERRORS or
+                        '403' in probe_error or '401' in probe_error or
+                        'csrf' in probe_error or 'forbidden' in probe_error
+                    )
+                    
+                    if is_probe_auth_error:
+                        circuit_breaker_tripped = True
+                        cancel_reason = f"PROBE FAILED: SAP auth error - {probe_result.get('error', 'Unknown')}"
+                        print(f"[PROBE] {cancel_reason}")
+                        print(f"[PROBE] Stopping migration - please check SAP credentials/CSRF token")
+                        results.append(probe_result)
+                        completed_count += 1
                         failed_count += 1
-                    elif result.get('status') == 'partial':
-                        partial_count += 1
-                    
-                    # Log progress
-                    pct = (completed_count / total_records) * 100
-                    elapsed = time.time() - batch_start_time
-                    rate = completed_count / elapsed if elapsed > 0 else 0
-                    eta_seconds = (total_records - completed_count) / rate if rate > 0 else 0
-                    eta_str = f"{int(eta_seconds//60)}m {int(eta_seconds%60)}s" if eta_seconds > 0 else "-"
-                    
-                    # Print progress every 10 records or at 25%, 50%, 75%, 100%
-                    if completed_count % 10 == 0 or pct in [25, 50, 75, 100] or completed_count == total_records:
-                        print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.0f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}")
-                    
-                    # Update DB every 5 records or at end for live progress
-                    if completed_count % 5 == 0 or completed_count == total_records:
-                        update_progress()
+                        break
+                    else:
+                        print(f"[PROBE] First record OK (status: {probe_result.get('status')}) - continuing with batch")
+                        results.append(probe_result)
+                        completed_count += 1
+                        if probe_result.get('status') == 'success':
+                            success_count += 1
+                        elif probe_result.get('status') == 'failed':
+                            failed_count += 1
+                        # Remove first record from package since we already processed it
+                        package_records = package_records[1:]
                         
-                except Exception as e:
-                    print(f"[EXECUTE_ERROR] {e}")
-                    results.append({'status': 'failed', 'error': str(e)})
-                    completed_count += 1
-                    failed_count += 1
+                except Exception as probe_ex:
+                    probe_error_str = str(probe_ex).lower()
+                    is_auth_exception = (
+                        '403' in probe_error_str or '401' in probe_error_str or
+                        'csrf' in probe_error_str or 'forbidden' in probe_error_str
+                    )
+                    if is_auth_exception:
+                        circuit_breaker_tripped = True
+                        cancel_reason = f"PROBE EXCEPTION: {probe_ex}"
+                        print(f"[PROBE] {cancel_reason}")
+                        print(f"[PROBE] Stopping migration - SAP authentication failed")
+                        results.append({'status': 'failed', 'error': str(probe_ex)})
+                        completed_count += 1
+                        failed_count += 1
+                        break
+                    else:
+                        print(f"[PROBE] Non-auth error: {probe_ex} - continuing")
+                        results.append({'status': 'failed', 'error': str(probe_ex)})
+                        completed_count += 1
+                        failed_count += 1
+                        package_records = package_records[1:]
             
-            server_session.close()
+            # Skip if no more records in package
+            if not package_records:
+                continue
+            
+            # Process this package with ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(execute_single_document, server_session, row, session_snapshot): idx
+                    for idx, (_, row) in enumerate(package_records)
+                }
+                
+                from concurrent.futures import as_completed
+                for future in as_completed(futures):
+                    # Check for cancellation during package processing
+                    if is_cancel_requested(batch_id):
+                        cancel_reason = "User requested cancellation"
+                        print(f"[CANCEL] Migration cancelled during package {package_num + 1}")
+                        executor.shutdown(wait=False)
+                        break
+                    
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        
+                        # Circuit breaker: Track consecutive auth errors
+                        # Check both HTTP status codes AND error messages for auth failures
+                        status_code = result.get('status_code', 0)
+                        error_msg = str(result.get('error', '')).lower()
+                        is_auth_error = (
+                            status_code in CIRCUIT_BREAKER_ERRORS or
+                            '403' in error_msg or
+                            '401' in error_msg or
+                            'csrf' in error_msg or
+                            'forbidden' in error_msg or
+                            'unauthorized' in error_msg
+                        )
+                        
+                        if is_auth_error:
+                            consecutive_auth_errors += 1
+                            print(f"[AUTH_ERROR] Consecutive auth errors: {consecutive_auth_errors}/{CIRCUIT_BREAKER_THRESHOLD}")
+                            if consecutive_auth_errors >= CIRCUIT_BREAKER_THRESHOLD:
+                                circuit_breaker_tripped = True
+                                cancel_reason = f"Circuit breaker: {consecutive_auth_errors} consecutive auth errors"
+                                print(f"[CIRCUIT_BREAKER] {cancel_reason}")
+                                print(f"[CIRCUIT_BREAKER] Token/CSRF likely expired - stopping to prevent wasted API calls")
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                break
+                        else:
+                            # Reset counter on successful response (not auth error)
+                            consecutive_auth_errors = 0
+                        
+                        # Update counters
+                        completed_count += 1
+                        if result.get('status') == 'success':
+                            success_count += 1
+                        elif result.get('status') == 'failed':
+                            failed_count += 1
+                        elif result.get('status') == 'partial':
+                            partial_count += 1
+                        
+                        # Log progress
+                        pct = (completed_count / total_records) * 100
+                        elapsed = time.time() - batch_start_time
+                        rate = completed_count / elapsed if elapsed > 0 else 0
+                        eta_seconds = (total_records - completed_count) / rate if rate > 0 else 0
+                        eta_str = f"{int(eta_seconds//60)}m {int(eta_seconds%60)}s" if eta_seconds > 0 else "-"
+                        
+                        # Print progress every 10 records or at 25%, 50%, 75%, 100%
+                        if completed_count % 10 == 0 or pct in [25, 50, 75, 100] or completed_count == total_records:
+                            auth_warning = f" (auth errors: {consecutive_auth_errors})" if consecutive_auth_errors > 0 else ""
+                            print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.0f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}{auth_warning}")
+                        
+                        # Update DB every 5 records or at end for live progress
+                        if completed_count % 5 == 0 or completed_count == total_records:
+                            update_progress()
+
+                            
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        print(f"[EXECUTE_ERROR] {e}")
+                        results.append({'status': 'failed', 'error': str(e)})
+                        completed_count += 1
+                        failed_count += 1
+                        
+                        # Circuit breaker: Also check exceptions for auth errors
+                        is_auth_exception = (
+                            '403' in error_str or
+                            '401' in error_str or
+                            'csrf' in error_str or
+                            'forbidden' in error_str or
+                            'unauthorized' in error_str
+                        )
+                        if is_auth_exception:
+                            consecutive_auth_errors += 1
+                            print(f"[AUTH_ERROR] Consecutive auth errors: {consecutive_auth_errors}/{CIRCUIT_BREAKER_THRESHOLD}")
+                            if consecutive_auth_errors >= CIRCUIT_BREAKER_THRESHOLD:
+                                circuit_breaker_tripped = True
+                                cancel_reason = f"Circuit breaker: {consecutive_auth_errors} consecutive auth errors (exceptions)"
+                                print(f"[CIRCUIT_BREAKER] {cancel_reason}")
+                                print(f"[CIRCUIT_BREAKER] Token/CSRF likely expired - stopping")
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                break
+                        # Don't reset counter on non-auth exceptions - they could be unrelated errors
+                
+                # Break out of package loop if cancelled or circuit breaker
+                if is_cancel_requested(batch_id) or circuit_breaker_tripped:
+                    break
+        
+        server_session.close()
+        
+        # Handle circuit breaker or cancel situation
+        if circuit_breaker_tripped or is_cancel_requested(batch_id):
+            # Final progress update before setting stopped status
+            update_progress()
+            
+            # Update batch status to reflect stopped state
+            stop_reason = cancel_reason or "Unknown"
+            remaining_records = total_records - completed_count
+            
+            with misc_engine.begin() as con:
+                con.execute(text(f"""
+                    UPDATE dbo.migration_batch
+                    SET status = 'stopped',
+                        executed_records = {completed_count},
+                        successful_records = {success_count},
+                        failed_records = {failed_count + partial_count}
+                    WHERE batch_id = '{batch_id}'
+                """))
+            
+            # Clear migration lock
+            clear_migration_lock(batch_id)
+            clear_cancel_request(batch_id)
+            
+            # Calculate timing
+            batch_end_time = time.time()
+            this_run_duration = batch_end_time - batch_start_time
+            
+            print(f"[STOPPED] Batch {batch_id} stopped after {completed_count}/{total_records} records in {this_run_duration:.1f}s")
+            print(f"[STOPPED] Reason: {stop_reason}")
+            print(f"[STOPPED] Remaining: {remaining_records} records still pending")
+            
+            return {
+                'success': True,
+                'stopped': True,
+                'stop_reason': stop_reason,
+                'circuit_breaker_tripped': circuit_breaker_tripped,
+                'cancelled': is_cancel_requested(batch_id),
+                'processed': completed_count,
+                'total': total_records,
+                'remaining': remaining_records,
+                'successful': success_count,
+                'failed': failed_count + partial_count,
+                'duration_seconds': round(this_run_duration, 2),
+                'message': f"Migration stopped: {stop_reason}. Processed {completed_count}/{total_records} records."
+            }
         
         # Final progress update
         update_progress()

@@ -115,6 +115,85 @@ def groups_required(*groups):
     return decorator
 
 
+def is_token_expiring_soon(buffer_seconds=300):
+    """Check if the token will expire within buffer_seconds (default 5 minutes)."""
+    expires_at = http_session.get('token_expires_at')
+    if not expires_at:
+        return False  # Unknown expiry, assume OK
+    return time.time() + buffer_seconds >= expires_at
+
+
+def get_token_remaining_seconds():
+    """Get remaining seconds until token expires. Returns None if unknown."""
+    expires_at = http_session.get('token_expires_at')
+    if not expires_at:
+        return None
+    remaining = expires_at - time.time()
+    return max(0, int(remaining))
+
+
+def refresh_token():
+    """Attempt to refresh the bearer token using the refresh token.
+    Returns (success, error_message).
+    """
+    refresh_tok = http_session.get('refresh_token')
+    if not refresh_tok:
+        return False, "No refresh token available"
+    
+    try:
+        payload = {
+            'client_id': Oauth_config['payload']['client_id'],
+            'client_secret': Oauth_config['payload'].get('client_secret', ''),
+            'grant_type': 'refresh_token',
+            'refresh_token': refresh_tok,
+        }
+        
+        response = requests.post(Oauth_config['auth_url'] + '/token', data=payload, timeout=30)
+        
+        if response.status_code != 200:
+            return False, f"Refresh failed: HTTP {response.status_code}"
+        
+        data = response.json()
+        
+        # Update session with new tokens
+        http_session['bearer_token'] = data['access_token']
+        
+        if 'refresh_token' in data:
+            http_session['refresh_token'] = data['refresh_token']
+        
+        if 'expires_in' in data:
+            expires_in = int(data['expires_in'])
+            http_session['token_expires_at'] = time.time() + expires_in
+            print(f"[AUTH] Token refreshed, expires in {expires_in}s ({expires_in // 60} minutes)")
+        
+        http_session.modified = True
+        return True, None
+        
+    except Exception as e:
+        return False, f"Refresh error: {str(e)}"
+
+
+def ensure_valid_token():
+    """Ensure the token is valid, refreshing if needed.
+    Returns (is_valid, error_message).
+    """
+    if not http_session.get('bearer_token'):
+        return False, "Not logged in"
+    
+    # Check if token is expiring soon (within 5 minutes)
+    if is_token_expiring_soon(buffer_seconds=300):
+        remaining = get_token_remaining_seconds()
+        print(f"[AUTH] Token expiring in {remaining}s, attempting refresh...")
+        
+        success, error = refresh_token()
+        if not success:
+            return False, f"Token expired and refresh failed: {error}"
+        
+        return True, None
+    
+    return True, None
+
+
 # Step 1: Initiate User Authorization.
 def login():
     """User Authorization.
@@ -334,6 +413,18 @@ def callback():
         try:
             response = response.json()
             http_session['bearer_token'] = response['access_token']
+            
+            # Store refresh token and expiry for automatic token refresh
+            if 'refresh_token' in response:
+                http_session['refresh_token'] = response['refresh_token']
+                print(f"[AUTH] Refresh token saved")
+            
+            # Store token expiry time (expires_in is in seconds)
+            if 'expires_in' in response:
+                expires_in = int(response['expires_in'])
+                http_session['token_expires_at'] = time.time() + expires_in
+                print(f"[AUTH] Token expires in {expires_in}s ({expires_in // 60} minutes)")
+            
             _record('callback_token_ok')
         except Exception as e_tok:
             _record('callback_token_parse_fail', error=str(e_tok))

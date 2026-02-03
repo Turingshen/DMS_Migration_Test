@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 from sqlalchemy import text
 
 from app.prepare import prepare_migration
-from app.execute import execute_migration
+from app.execute import execute_migration, request_cancel, is_cancel_requested, is_migration_running
 from app.process import read_sap_system, write_sap_system
 from app_config import Config, MiscEngine
 from app.db_schema import init_staging_tables
@@ -27,6 +27,28 @@ ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def df_to_json_safe(df):
+    """Convert DataFrame to JSON-safe list of dicts, handling NaN/NaT properly.
+    
+    Standard pd.to_dict('records') can leave NaN values that break JSON serialization.
+    This function ensures all NaN/NaT/None values are converted to Python None.
+    """
+    import math
+    
+    def safe_value(val):
+        """Convert a value to JSON-safe format."""
+        if val is None:
+            return None
+        if pd.isna(val):
+            return None
+        if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+            return None
+        return val
+    
+    records = df.to_dict('records')
+    return [{k: safe_value(v) for k, v in record.items()} for record in records]
 
 
 def get_template_context():
@@ -509,19 +531,23 @@ def fetch_batch_metadata(batch_id):
         # Step 1: Look up LOIO_IDs from DIL.DMS_DOC2LOIO
         print(f"[FETCH-META] Looking up LOIO_IDs for {len(df)} documents...")
         
-        # Build conditions for batch lookup - use vectorized approach
+        # Build conditions for batch lookup - VECTORIZED approach (FAST!)
+        # This replaces slow iterrows() loop with pandas string operations
         df['dokvr_padded'] = df['source_documentversion'].astype(str).str.zfill(2)
         df['doktl_padded'] = df['source_documentpart'].astype(str).str.zfill(3)
+        df['doknr_escaped'] = df['source_documentnumber'].astype(str).str.replace("'", "''", regex=False)
+        df['dokar_escaped'] = df['source_documenttype'].astype(str).str.replace("'", "''", regex=False)
         
-        conditions = []
-        for _, row in df.iterrows():
-            doknr = str(row.get('source_documentnumber', '')).replace("'", "''")
-            dokar = str(row.get('source_documenttype', '')).replace("'", "''")
-            dokvr = row['dokvr_padded']
-            doktl = row['doktl_padded']
-            conditions.append(
-                f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
-            )
+        # Build conditions using vectorized string concatenation (100x faster than iterrows!)
+        conditions = (
+            "(DOKNR='" + df['doknr_escaped'] + 
+            "' AND DOKAR='" + df['dokar_escaped'] + 
+            "' AND DOKVR='" + df['dokvr_padded'] + 
+            "' AND DOKTL='" + df['doktl_padded'] + "')"
+        ).tolist()
+        
+        # Clean up temp columns
+        df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
         
         # Query LOIO_IDs in chunks
         chunk_size = 200
@@ -749,19 +775,23 @@ def fetch_batch_metadata_stream(batch_id):
             # Step 1: Look up LOIO_IDs from DIL.DMS_DOC2LOIO
             yield f"data: {json.dumps({'type': 'status', 'phase': 'loio', 'message': 'Looking up LOIO_IDs from DIL...'})}\n\n"
             
-            # Build conditions for batch lookup - use vectorized approach
+            # Build conditions for batch lookup - VECTORIZED approach (FAST!)
+            # This replaces slow iterrows() loop with pandas string operations
             df['dokvr_padded'] = df['source_documentversion'].astype(str).str.zfill(2)
             df['doktl_padded'] = df['source_documentpart'].astype(str).str.zfill(3)
+            df['doknr_escaped'] = df['source_documentnumber'].astype(str).str.replace("'", "''", regex=False)
+            df['dokar_escaped'] = df['source_documenttype'].astype(str).str.replace("'", "''", regex=False)
             
-            conditions = []
-            for _, row in df.iterrows():
-                doknr = str(row.get('source_documentnumber', '')).replace("'", "''")
-                dokar = str(row.get('source_documenttype', '')).replace("'", "''")
-                dokvr = row['dokvr_padded']
-                doktl = row['doktl_padded']
-                conditions.append(
-                    f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
-                )
+            # Build conditions using vectorized string concatenation (100x faster than iterrows!)
+            conditions = (
+                "(DOKNR='" + df['doknr_escaped'] + 
+                "' AND DOKAR='" + df['dokar_escaped'] + 
+                "' AND DOKVR='" + df['dokvr_padded'] + 
+                "' AND DOKTL='" + df['doktl_padded'] + "')"
+            ).tolist()
+            
+            # Clean up temp columns
+            df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
             
             # Query LOIO_IDs in chunks
             chunk_size = 200
@@ -996,52 +1026,175 @@ def get_batch_progress(batch_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@migrate_bp.route('/batch/<batch_id>/records', methods=['GET'])
-def get_batch_records(batch_id):
-    """Get all staging records for a batch."""
+@migrate_bp.route('/batch/<batch_id>/preview-stats', methods=['GET'])
+def get_batch_preview_stats(batch_id):
+    """Get aggregated statistics for batch preview (computed on DB level for performance).
+    Returns counts and file size buckets without loading all records."""
     try:
-        query = f"""
+        # Aggregate stats in single SQL query - much faster than loading all records
+        # Use CAST to BIGINT for file_size_bytes to avoid integer overflow on large batches
+        query = text("""
             SELECT 
-                id,
-                source_documentnumber,
-                source_documentpart,
-                source_documenttype,
-                source_documentversion,
-                source_loioid,
-                source_description,
-                source_dokob,
-                source_objky,
-                target_documentnumber,
-                target_documentpart,
-                target_documenttype,
-                target_documentversion,
-                filename,
-                file_size_bytes,
-                mime_type,
-                authorization_group,
-                validation_status,
-                validation_notes,
-                execution_status,
-                execution_error,
-                user_approved,
-                skip_migration
+                COUNT(*) as total_records,
+                SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN execution_status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+                SUM(CASE WHEN file_size_bytes IS NULL OR file_size_bytes = 0 THEN 1 ELSE 0 END) as unknown_size_count,
+                SUM(CASE WHEN file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
+                SUM(CASE WHEN file_size_bytes > 1048576 AND file_size_bytes <= 10485760 THEN 1 ELSE 0 END) as small_count,
+                SUM(CASE WHEN file_size_bytes > 10485760 AND file_size_bytes <= 52428800 THEN 1 ELSE 0 END) as medium_count,
+                SUM(CASE WHEN file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
+                SUM(CAST(CASE WHEN file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
+                MAX(file_size_bytes) as max_file_size
             FROM dbo.migration_staging
-            WHERE batch_id = '{batch_id}'
-            ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
-        """
+            WHERE batch_id = :batch_id
+        """)
         
         with misc_engine.begin() as con:
+            result = con.execute(query, {'batch_id': batch_id}).fetchone()
+        
+        if not result or result.total_records == 0:
+            return jsonify({'success': False, 'error': 'Batch not found or empty'}), 404
+        
+        # Calculate pending (non-success) for runtime estimation
+        pending_count = (result.total_records or 0) - (result.success_count or 0)
+        
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total': result.total_records or 0,
+                'success': result.success_count or 0,
+                'pending': pending_count,
+                'failed': result.failed_count or 0,
+                'partial': result.partial_count or 0,
+                'buckets': {
+                    'tiny': result.tiny_count or 0,
+                    'small': result.small_count or 0,
+                    'medium': result.medium_count or 0,
+                    'large': result.large_count or 0,
+                    'unknown': result.unknown_size_count or 0
+                },
+                'total_size_bytes': int(result.total_size_bytes or 0),
+                'max_file_size': int(result.max_file_size or 0)
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/records', methods=['GET'])
+def get_batch_records(batch_id):
+    """Get staging records for a batch with optional pagination for large datasets.
+    
+    Query params:
+        page: Page number (1-based), default=1
+        per_page: Records per page, default=5000 (0 = all records)
+        status_filter: Filter by execution_status (optional)
+    """
+    try:
+        # Parse pagination params
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 5000, type=int)  # Default 5000 for large batches
+        status_filter = request.args.get('status_filter', '')
+        
+        # Build WHERE clause
+        where_conditions = [f"batch_id = '{batch_id}'"]
+        if status_filter:
+            where_conditions.append(f"execution_status = '{status_filter}'")
+        where_clause = " AND ".join(where_conditions)
+        
+        # First get total count
+        count_query = f"SELECT COUNT(*) FROM dbo.migration_staging WHERE {where_clause}"
+        
+        # Build paginated query using OFFSET/FETCH for SQL Server
+        if per_page > 0:
+            offset = (page - 1) * per_page
+            query = f"""
+                SELECT 
+                    id,
+                    source_documentnumber,
+                    source_documentpart,
+                    source_documenttype,
+                    source_documentversion,
+                    source_loioid,
+                    source_description,
+                    source_dokob,
+                    source_objky,
+                    target_documentnumber,
+                    target_documentpart,
+                    target_documenttype,
+                    target_documentversion,
+                    filename,
+                    file_size_bytes,
+                    mime_type,
+                    authorization_group,
+                    validation_status,
+                    validation_notes,
+                    execution_status,
+                    execution_error,
+                    user_approved,
+                    skip_migration
+                FROM dbo.migration_staging
+                WHERE {where_clause}
+                ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
+                OFFSET {offset} ROWS FETCH NEXT {per_page} ROWS ONLY
+            """
+        else:
+            # per_page=0 means get all records (for backwards compatibility)
+            query = f"""
+                SELECT 
+                    id,
+                    source_documentnumber,
+                    source_documentpart,
+                    source_documenttype,
+                    source_documentversion,
+                    source_loioid,
+                    source_description,
+                    source_dokob,
+                    source_objky,
+                    target_documentnumber,
+                    target_documentpart,
+                    target_documenttype,
+                    target_documentversion,
+                    filename,
+                    file_size_bytes,
+                    mime_type,
+                    authorization_group,
+                    validation_status,
+                    validation_notes,
+                    execution_status,
+                    execution_error,
+                    user_approved,
+                    skip_migration
+                FROM dbo.migration_staging
+                WHERE {where_clause}
+                ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
+            """
+        
+        with misc_engine.begin() as con:
+            total_count = con.execute(text(count_query)).scalar()
             df = pd.read_sql(query, con)
         
-        # Replace NaN/NaT with None for JSON serialization (robust manual conversion)
-        records = []
-        for _, row in df.iterrows():
-            rec = {}
-            for col in df.columns:
-                val = row[col]
-                rec[col] = None if pd.isna(val) else val
-            records.append(rec)
-        return jsonify({'success': True, 'records': records})
+        # Convert to JSON-safe records (handles NaN/NaT properly)
+        records = df_to_json_safe(df)
+        
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 1
+        
+        return jsonify({
+            'success': True, 
+            'records': records,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_count,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1129,6 +1282,92 @@ def execute_selected():
         result = execute_migration(batch_id, record_ids=record_ids)
         
         return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/cancel', methods=['POST'])
+def cancel_migration(batch_id):
+    """Cancel a running migration for the given batch."""
+    try:
+        # Check if migration is actually running
+        if not is_migration_running(batch_id):
+            return jsonify({
+                'success': False, 
+                'error': 'No migration is currently running for this batch'
+            }), 400
+        
+        # Request cancellation
+        request_cancel(batch_id)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Cancellation requested for batch {batch_id}. Migration will stop after current operations complete.',
+            'cancel_requested': True
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/status', methods=['GET'])
+def get_batch_status(batch_id):
+    """Get current status of a batch including whether migration is running or cancelled."""
+    try:
+        with misc_engine.begin() as con:
+            batch = con.execute(text("""
+                SELECT status, total_records, executed_records, successful_records, failed_records
+                FROM dbo.migration_batch
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchone()
+        
+        if not batch:
+            return jsonify({'success': False, 'error': 'Batch not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'batch_id': batch_id,
+            'status': batch[0],
+            'total_records': batch[1] or 0,
+            'executed_records': batch[2] or 0,
+            'successful_records': batch[3] or 0,
+            'failed_records': batch[4] or 0,
+            'is_running': is_migration_running(batch_id),
+            'cancel_requested': is_cancel_requested(batch_id)
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/token-status', methods=['GET'])
+def get_token_status():
+    """Get current authentication token status for monitoring."""
+    try:
+        from authentication import get_token_remaining_seconds, is_token_expiring_soon
+        
+        bearer_token = session.get('bearer_token')
+        has_refresh_token = bool(session.get('refresh_token'))
+        remaining_seconds = get_token_remaining_seconds()
+        
+        if not bearer_token:
+            return jsonify({
+                'success': True,
+                'logged_in': False,
+                'message': 'Not logged in'
+            })
+        
+        return jsonify({
+            'success': True,
+            'logged_in': True,
+            'has_refresh_token': has_refresh_token,
+            'token_remaining_seconds': remaining_seconds,
+            'token_remaining_minutes': remaining_seconds // 60 if remaining_seconds else None,
+            'is_expiring_soon': is_token_expiring_soon(300),
+            'can_auto_refresh': has_refresh_token,
+            'message': f"Token valid for {remaining_seconds // 60}min" if remaining_seconds else "Token expiry unknown"
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1291,14 +1530,8 @@ def get_results(batch_id):
         with misc_engine.begin() as con:
             df = pd.read_sql(query, con)
         
-        # Replace NaN/NaT with None for JSON serialization (robust manual conversion)
-        results = []
-        for _, row in df.iterrows():
-            rec = {}
-            for col in df.columns:
-                val = row[col]
-                rec[col] = None if pd.isna(val) else val
-            results.append(rec)
+        # Convert to JSON-safe records (handles NaN/NaT properly)
+        results = df_to_json_safe(df)
         
         # Parse execution_error JSON strings into objects
         for record in results:
@@ -1631,17 +1864,8 @@ def get_batch_logs(batch_id):
         
         print(f"[LOGS] Found {len(df)} records for batch {batch_id}")
         
-        # Convert DataFrame to dict with explicit None conversion for NaT/NaN
-        logs = []
-        for _, row in df.iterrows():
-            log = {}
-            for col in df.columns:
-                val = row[col]
-                if pd.isna(val):
-                    log[col] = None
-                else:
-                    log[col] = val
-            logs.append(log)
+        # Convert to JSON-safe records (handles NaN/NaT properly)
+        logs = df_to_json_safe(df)
         
         # Parse execution_error JSON if present
         for log in logs:
@@ -1789,25 +2013,16 @@ def get_batch_file_details(batch_id):
         
         print(f"[FILE_DETAILS] Found {len(df)} file records (page {page}, total: {total_count})")
         
-        # Convert DataFrame to dict
-        file_details = []
-        for _, row in df.iterrows():
-            detail = {}
-            for col in df.columns:
-                val = row[col]
-                if pd.isna(val):
-                    detail[col] = None
-                else:
-                    detail[col] = val
-            
-            # Parse JSON error_messages if present
+        # Convert to JSON-safe records (handles NaN/NaT properly)
+        file_details = df_to_json_safe(df)
+        
+        # Parse JSON error_messages if present
+        for detail in file_details:
             if detail.get('error_messages'):
                 try:
                     detail['error_messages'] = json.loads(detail['error_messages'])
                 except:
                     pass
-            
-            file_details.append(detail)
         
         return jsonify({
             'success': True, 
@@ -1883,15 +2098,15 @@ def get_batch_file_summary(batch_id):
             
             # Status distribution
             status_df = pd.read_sql(text(status_query), con, params={'batch_id': batch_id})
-            status_dist = status_df.to_dict('records')
+            status_dist = df_to_json_safe(status_df)
             
             # Error category distribution
             error_df = pd.read_sql(text(error_category_query), con, params={'batch_id': batch_id})
-            error_dist = error_df.to_dict('records')
+            error_dist = df_to_json_safe(error_df)
             
             # Containers with errors
             containers_df = pd.read_sql(text(containers_with_errors_query), con, params={'batch_id': batch_id})
-            containers_with_errors = containers_df.to_dict('records')
+            containers_with_errors = df_to_json_safe(containers_df)
         
         summary = {
             'total_files': summary_result[0] or 0,
@@ -3199,11 +3414,55 @@ def get_dms_status():
         })
 
 
+@migrate_bp.route('/api/dms/dokob-stats', methods=['GET'])
+def get_dms_dokob_stats():
+    """
+    Get DOKOB (object type) statistics from local DMS database.
+    Returns count per DOKOB for filtering in batch creation.
+    """
+    try:
+        import sqlite3
+        db_path = 'userdata/dms_objects.db'
+        
+        if not os.path.exists(db_path):
+            return jsonify({'success': True, 'dokobs': []})
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT dokob, COUNT(*) as count 
+            FROM dms_objects 
+            GROUP BY dokob 
+            ORDER BY count DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        dokobs = [{'dokob': row[0] or 'UNKNOWN', 'count': row[1]} for row in rows]
+        
+        return jsonify({
+            'success': True,
+            'dokobs': dokobs
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
 @migrate_bp.route('/api/dms/create-batch-stream', methods=['GET'])
 def create_dms_migration_batch_stream():
     """
     Create a migration batch from local DMS objects database using SSE for progress.
     Uses GET with query parameters for EventSource compatibility.
+    
+    Query params:
+        wave: Wave identifier (required)
+        description: Batch description
+        notes: Additional notes
+        dokob_filter: Comma-separated list of DOKOB values to include (optional, empty = all)
     """
     import sqlite3
     from datetime import datetime
@@ -3212,6 +3471,7 @@ def create_dms_migration_batch_stream():
     wave = request.args.get('wave')
     description = request.args.get('description', '')
     notes = request.args.get('notes', '')
+    dokob_filter = request.args.get('dokob_filter', '')  # Comma-separated list of DOKOBs
     
     if not wave:
         return jsonify({'success': False, 'error': 'Wave ist erforderlich'})
@@ -3223,21 +3483,31 @@ def create_dms_migration_batch_stream():
     # Extract session data BEFORE the generator (outside request context)
     current_user = session.get('user_email', 'system')
     
+    # Parse DOKOB filter
+    dokob_list = [d.strip() for d in dokob_filter.split(',') if d.strip()] if dokob_filter else []
+    
     def generate():
         try:
             yield f"data: {json.dumps({'type': 'status', 'message': 'Lese lokale Datenbank...', 'percent': 5})}\n\n"
             
-            # Read from SQLite
+            # Read from SQLite with optional DOKOB filter
             conn = sqlite3.connect(db_path)
-            dms_df = pd.read_sql("SELECT * FROM dms_objects", conn)
+            if dokob_list:
+                placeholders = ','.join(['?' for _ in dokob_list])
+                query = f"SELECT * FROM dms_objects WHERE dokob IN ({placeholders})"
+                dms_df = pd.read_sql(query, conn, params=dokob_list)
+                filter_info = f"DOKOB-Filter: {', '.join(dokob_list)}"
+            else:
+                dms_df = pd.read_sql("SELECT * FROM dms_objects", conn)
+                filter_info = "Alle Objekttypen"
             conn.close()
             
             if len(dms_df) == 0:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Keine DMS-Objekte in lokaler Datenbank'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Keine DMS-Objekte gefunden (evtl. Filter zu streng)'})}\n\n"
                 return
             
             total_records = len(dms_df)
-            yield f"data: {json.dumps({'type': 'status', 'message': f'{total_records:,} Datensätze geladen', 'percent': 10})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': f'{total_records:,} Datensätze geladen ({filter_info})', 'percent': 10})}\n\n"
             
             # Generate batch ID
             batch_id = f"DMS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

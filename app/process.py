@@ -154,9 +154,8 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
             'X-CSRF-Token': 'fetch',
             'Accept': 'application/json'
         }
-        api_list = cfg.get(sap_system, 'api_list')
-        first_element = next(iter(api_list))
-        base_url = cfg.get(sap_system, 'api_list', first_element, 'base_url')
+        # Use 'document' API for CSRF token (DMS migration uses Document API)
+        base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
         resp = server_session.get(base_url, headers=headers)
         if resp.status_code != 200:
             raise Exception(f'Failed to fetch CSRF token for {sap_system}: {resp.status_code} {resp.reason}')

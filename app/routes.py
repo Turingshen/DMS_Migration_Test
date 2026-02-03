@@ -471,7 +471,7 @@ def delete_batch(batch_id):
 def fetch_batch_metadata(batch_id):
     """Fetch file metadata (size, LOIO) for all records in a batch from DIL database.
     This is useful for Excel-based batches where file sizes are not available.
-    Uses the same fast DIL-based lookup as prepare.py."""
+    Uses optimized batch updates instead of row-by-row."""
     try:
         from app_config import DilEngine
         dil_db = DilEngine.load()
@@ -509,13 +509,16 @@ def fetch_batch_metadata(batch_id):
         # Step 1: Look up LOIO_IDs from DIL.DMS_DOC2LOIO
         print(f"[FETCH-META] Looking up LOIO_IDs for {len(df)} documents...")
         
-        # Build conditions for batch lookup
+        # Build conditions for batch lookup - use vectorized approach
+        df['dokvr_padded'] = df['source_documentversion'].astype(str).str.zfill(2)
+        df['doktl_padded'] = df['source_documentpart'].astype(str).str.zfill(3)
+        
         conditions = []
         for _, row in df.iterrows():
             doknr = str(row.get('source_documentnumber', '')).replace("'", "''")
             dokar = str(row.get('source_documenttype', '')).replace("'", "''")
-            dokvr = str(row.get('source_documentversion', '')).replace("'", "''").zfill(2)
-            doktl = str(row.get('source_documentpart', '')).replace("'", "''").zfill(3)
+            dokvr = row['dokvr_padded']
+            doktl = row['doktl_padded']
             conditions.append(
                 f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
             )
@@ -536,6 +539,8 @@ def fetch_batch_metadata(batch_id):
             with dil_engine.begin() as con:
                 chunk_df = pd.read_sql(loio_query, con)
             all_loios.append(chunk_df)
+            if i % 1000 == 0:
+                print(f"[FETCH-META] LOIO lookup: {i}/{len(conditions)} done")
         
         if not all_loios or all(len(c) == 0 for c in all_loios):
             return jsonify({
@@ -572,108 +577,117 @@ def fetch_batch_metadata(batch_id):
             with dil_engine.begin() as con:
                 chunk_df = pd.read_sql(size_query, con)
             all_sizes.append(chunk_df)
+            if i % 2000 == 0:
+                print(f"[FETCH-META] File size lookup: {i}/{len(loio_ids)} done")
         
         # Check if any file sizes were found
         total_size_records = sum(len(c) for c in all_sizes)
-        if total_size_records == 0:
-            # Still update LOIO_IDs even if no file sizes found
-            updated_loio_count = 0
-            for _, row in df.iterrows():
-                doknr = str(row.get('source_documentnumber', ''))
-                dokar = str(row.get('source_documenttype', ''))
-                dokvr = str(row.get('source_documentversion', '')).zfill(2)
-                doktl = str(row.get('source_documentpart', '')).zfill(3)
-                
-                match = loio_df[
-                    (loio_df['doknr'] == doknr) &
-                    (loio_df['dokar'] == dokar) &
-                    (loio_df['dokvr'] == dokvr) &
-                    (loio_df['doktl'] == doktl)
-                ]
-                
-                if len(match) > 0:
-                    loio_id = match.iloc[0].get('lo_objid')
-                    if loio_id and pd.notna(loio_id):
-                        with misc_engine.begin() as con:
-                            con.execute(text("""
-                                UPDATE dbo.migration_staging
-                                SET source_loioid = :loioid
-                                WHERE id = :staging_id
-                            """), {'loioid': str(loio_id), 'staging_id': row['id']})
-                        updated_loio_count += 1
+        
+        # Step 3: Merge LOIO_IDs with file sizes (even if no sizes found)
+        if total_size_records > 0:
+            size_df = pd.concat(all_sizes, ignore_index=True)
+            size_df.columns = [c.lower() for c in size_df.columns]
+            print(f"[FETCH-META] Found {len(size_df)} file sizes (before dedup)")
             
-            return jsonify({
-                'success': True,
-                'message': 'LOIO_IDs updated, but no file sizes found in DIL.DMS_FILE_SIZE table',
-                'updated_loio': updated_loio_count,
-                'updated_size': 0,
-                'info': 'File sizes are not available in DIL for these documents. This is normal for newer documents.'
-            })
+            # Remove duplicates - keep first (largest file size) per LOIO
+            size_df = size_df.sort_values('file_size', ascending=False).drop_duplicates(subset=['loio_id'], keep='first')
+            print(f"[FETCH-META] After dedup: {len(size_df)} unique file sizes")
+            
+            loio_df = loio_df.merge(
+                size_df[['loio_id', 'file_size', 'file_name']],
+                how='left',
+                left_on='lo_objid',
+                right_on='loio_id'
+            )
+        else:
+            loio_df['file_size'] = None
+            loio_df['file_name'] = None
+            print(f"[FETCH-META] No file sizes found")
         
-        size_df = pd.concat(all_sizes, ignore_index=True)
-        size_df.columns = [c.lower() for c in size_df.columns]
-        print(f"[FETCH-META] Found {len(size_df)} file sizes")
+        # Remove duplicate LOIO entries per document (keep first with file_size if available)
+        print(f"[FETCH-META] LOIO records before dedup: {len(loio_df)}")
+        loio_df = loio_df.sort_values('file_size', ascending=False, na_position='last')
+        loio_df = loio_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+        print(f"[FETCH-META] LOIO records after dedup: {len(loio_df)}")
         
-        # Step 3: Merge LOIO_IDs with file sizes
-        loio_df = loio_df.merge(
-            size_df[['loio_id', 'file_size', 'file_name']],
+        # Step 4: Merge with original df to get staging IDs
+        df_merged = df.merge(
+            loio_df,
             how='left',
-            left_on='lo_objid',
-            right_on='loio_id'
+            left_on=['source_documentnumber', 'source_documenttype', 'dokvr_padded', 'doktl_padded'],
+            right_on=['doknr', 'dokar', 'dokvr', 'doktl']
         )
         
-        # Step 4: Update staging records
-        updated_count = 0
-        error_count = 0
+        # Safety check: df_merged should have same length as df
+        if len(df_merged) != len(df):
+            print(f"[FETCH-META] WARNING: Merge produced {len(df_merged)} rows from {len(df)} - possible duplicates!")
+            # Remove duplicates by staging ID, keep first (with file_size)
+            df_merged = df_merged.sort_values('file_size', ascending=False, na_position='last')
+            df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
+            print(f"[FETCH-META] After final dedup: {len(df_merged)} rows")
         
-        for _, row in df.iterrows():
-            doknr = str(row.get('source_documentnumber', ''))
-            dokar = str(row.get('source_documenttype', ''))
-            dokvr = str(row.get('source_documentversion', '')).zfill(2)
-            doktl = str(row.get('source_documentpart', '')).zfill(3)
+        # Step 5: BULK UPDATE using temp table approach (much faster than row-by-row)
+        print(f"[FETCH-META] Preparing bulk update for {len(df_merged)} staging records...")
+        
+        # Prepare update DataFrame - only rows with LOIO
+        update_df = df_merged[df_merged['lo_objid'].notna()][['id', 'lo_objid', 'file_size', 'file_name']].copy()
+        update_df.columns = ['staging_id', 'source_loioid', 'file_size_bytes', 'filename']
+        update_df['staging_id'] = update_df['staging_id'].astype(int)
+        update_df['source_loioid'] = update_df['source_loioid'].astype(str)
+        update_df['file_size_bytes'] = pd.to_numeric(update_df['file_size_bytes'], errors='coerce').astype('Int64')
+        update_df['filename'] = update_df['filename'].astype(str).replace('nan', None)
+        
+        print(f"[FETCH-META] Bulk updating {len(update_df)} records via temp table...")
+        
+        with misc_engine.begin() as con:
+            # Create temp table
+            con.execute(text("""
+                IF OBJECT_ID('tempdb..#metadata_update') IS NOT NULL DROP TABLE #metadata_update;
+                CREATE TABLE #metadata_update (
+                    staging_id INT PRIMARY KEY,
+                    source_loioid NVARCHAR(100),
+                    file_size_bytes BIGINT,
+                    filename NVARCHAR(500)
+                );
+            """))
             
-            # Find matching LOIO record
-            match = loio_df[
-                (loio_df['doknr'] == doknr) &
-                (loio_df['dokar'] == dokar) &
-                (loio_df['dokvr'] == dokvr) &
-                (loio_df['doktl'] == doktl)
-            ]
+            # Bulk insert into temp table in chunks
+            chunk_size = 900
+            for i in range(0, len(update_df), chunk_size):
+                chunk = update_df.iloc[i:i + chunk_size]
+                chunk.to_sql('#metadata_update', con, if_exists='append', index=False, method='multi')
+                if i % 10000 == 0:
+                    print(f"[FETCH-META] Inserted {i}/{len(update_df)} into temp table")
             
-            if len(match) > 0:
-                loio_id = match.iloc[0].get('lo_objid')
-                file_size = match.iloc[0].get('file_size')
-                file_name = match.iloc[0].get('file_name')
-                
-                update_parts = []
-                params = {'staging_id': row['id']}
-                
-                if loio_id and pd.notna(loio_id):
-                    update_parts.append("source_loioid = :loioid")
-                    params['loioid'] = str(loio_id)
-                    
-                if file_size and pd.notna(file_size):
-                    update_parts.append("file_size_bytes = :file_size")
-                    params['file_size'] = int(file_size)
-                    
-                if file_name and pd.notna(file_name):
-                    update_parts.append("filename = :filename")
-                    params['filename'] = str(file_name)
-                
-                if update_parts:
-                    with misc_engine.begin() as con:
-                        con.execute(text(f"""
-                            UPDATE dbo.migration_staging
-                            SET {', '.join(update_parts)}
-                            WHERE id = :staging_id
-                        """), params)
-                    updated_count += 1
-            else:
-                error_count += 1
+            print(f"[FETCH-META] Temp table ready, executing UPDATE JOIN...")
+            
+            # Single UPDATE with JOIN - much faster than 200k individual updates!
+            result = con.execute(text("""
+                UPDATE s
+                SET s.source_loioid = t.source_loioid,
+                    s.file_size_bytes = t.file_size_bytes,
+                    s.filename = CASE WHEN t.filename IS NOT NULL AND t.filename != 'None' THEN t.filename ELSE s.filename END
+                FROM dbo.migration_staging s
+                INNER JOIN #metadata_update t ON s.id = t.staging_id
+            """))
+            
+            updated_count = result.rowcount
+            print(f"[FETCH-META] UPDATE JOIN complete: {updated_count} rows affected")
+            
+            # Drop temp table
+            con.execute(text("DROP TABLE #metadata_update"))
+        
+        error_count = len(df) - len(update_df)
         
         # Calculate statistics
-        total_bytes = size_df['file_size'].dropna().sum()
-        max_bytes = size_df['file_size'].dropna().max() if len(size_df) > 0 else 0
+        if total_size_records > 0:
+            total_bytes = size_df['file_size'].dropna().sum()
+            max_bytes = size_df['file_size'].dropna().max()
+        else:
+            total_bytes = 0
+            max_bytes = 0
+        
+        print(f"[FETCH-META] Complete: {updated_count} updated, {error_count} not found")
         
         return jsonify({
             'success': True,
@@ -690,6 +704,234 @@ def fetch_batch_metadata(batch_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/fetch-metadata-stream', methods=['GET'])
+def fetch_batch_metadata_stream(batch_id):
+    """SSE streaming endpoint for fetching file metadata from DIL database.
+    Provides real-time progress updates."""
+    
+    def generate():
+        try:
+            from app_config import DilEngine
+            dil_db = DilEngine.load()
+            dil_engine = dil_db.engine
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Loading batch records...'})}\n\n"
+            
+            # Get records that need metadata
+            query = f"""
+                SELECT id, source_documentnumber, source_documentpart, source_documenttype, source_documentversion,
+                       file_size_bytes, source_loioid
+                FROM dbo.migration_staging
+                WHERE batch_id = '{batch_id}'
+                  AND skip_migration = 0
+            """
+            
+            with misc_engine.begin() as con:
+                df = pd.read_sql(query, con)
+            
+            if len(df) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No records found'})}\n\n"
+                return
+            
+            total_records = len(df)
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'init', 'total': total_records, 'message': f'Found {total_records} records'})}\n\n"
+            
+            # Count how many already have metadata
+            records_with_size = df[df['file_size_bytes'].notna()].shape[0]
+            records_without_size = df[df['file_size_bytes'].isna()].shape[0]
+            
+            if records_without_size == 0:
+                yield f"data: {json.dumps({'type': 'complete', 'message': 'All records already have file sizes', 'updated': 0, 'errors': 0, 'already_had_metadata': records_with_size})}\n\n"
+                return
+            
+            # Step 1: Look up LOIO_IDs from DIL.DMS_DOC2LOIO
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'loio', 'message': 'Looking up LOIO_IDs from DIL...'})}\n\n"
+            
+            # Build conditions for batch lookup - use vectorized approach
+            df['dokvr_padded'] = df['source_documentversion'].astype(str).str.zfill(2)
+            df['doktl_padded'] = df['source_documentpart'].astype(str).str.zfill(3)
+            
+            conditions = []
+            for _, row in df.iterrows():
+                doknr = str(row.get('source_documentnumber', '')).replace("'", "''")
+                dokar = str(row.get('source_documenttype', '')).replace("'", "''")
+                dokvr = row['dokvr_padded']
+                doktl = row['doktl_padded']
+                conditions.append(
+                    f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
+                )
+            
+            # Query LOIO_IDs in chunks
+            chunk_size = 200
+            all_loios = []
+            
+            for i in range(0, len(conditions), chunk_size):
+                chunk = conditions[i:i + chunk_size]
+                where_clause = " OR ".join(chunk)
+                loio_query = f"""
+                    SELECT DOKNR, DOKAR, DOKVR, DOKTL, LO_OBJID
+                    FROM DIL.DMS_DOC2LOIO
+                    WHERE MANDT = '100'
+                    AND ({where_clause})
+                """
+                with dil_engine.begin() as con:
+                    chunk_df = pd.read_sql(loio_query, con)
+                all_loios.append(chunk_df)
+                
+                if i % 1000 == 0:
+                    pct = int((i / len(conditions)) * 50)  # First 50% is LOIO lookup
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'current': i, 'total': len(conditions), 'percent': pct, 'message': f'LOIO lookup: {i}/{len(conditions)}'})}\n\n"
+            
+            if not all_loios or all(len(c) == 0 for c in all_loios):
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No LOIO_IDs found in DIL database for these documents'})}\n\n"
+                return
+            
+            loio_df = pd.concat(all_loios, ignore_index=True)
+            loio_df.columns = [c.lower() for c in loio_df.columns]
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'percent': 50, 'message': f'Found {len(loio_df)} LOIO_IDs'})}\n\n"
+            
+            # Step 2: Look up file sizes from DIL.DMS_FILE_SIZE
+            loio_ids = loio_df['lo_objid'].dropna().unique().tolist()
+            
+            if not loio_ids:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No LOIO_IDs available for file size lookup'})}\n\n"
+                return
+            
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'size', 'message': f'Looking up file sizes for {len(loio_ids)} LOIOs...'})}\n\n"
+            
+            all_sizes = []
+            chunk_size = 500
+            
+            for i in range(0, len(loio_ids), chunk_size):
+                chunk = loio_ids[i:i + chunk_size]
+                placeholders = ",".join([f"'{lid}'" for lid in chunk])
+                size_query = f"""
+                    SELECT LOIO_ID, FILE_SIZE, FILE_NAME
+                    FROM DIL.DMS_FILE_SIZE
+                    WHERE LOIO_ID IN ({placeholders})
+                """
+                with dil_engine.begin() as con:
+                    chunk_df = pd.read_sql(size_query, con)
+                all_sizes.append(chunk_df)
+                
+                if i % 2000 == 0:
+                    pct = 50 + int((i / len(loio_ids)) * 25)  # Next 25% is file size lookup
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'size', 'current': i, 'total': len(loio_ids), 'percent': pct, 'message': f'File sizes: {i}/{len(loio_ids)}'})}\n\n"
+            
+            # Check if any file sizes were found
+            total_size_records = sum(len(c) for c in all_sizes)
+            
+            # Step 3: Merge LOIO_IDs with file sizes (even if no sizes found)
+            if total_size_records > 0:
+                size_df = pd.concat(all_sizes, ignore_index=True)
+                size_df.columns = [c.lower() for c in size_df.columns]
+                
+                # Remove duplicates - keep first (largest file size) per LOIO
+                size_df = size_df.sort_values('file_size', ascending=False).drop_duplicates(subset=['loio_id'], keep='first')
+                
+                loio_df = loio_df.merge(
+                    size_df[['loio_id', 'file_size', 'file_name']],
+                    how='left',
+                    left_on='lo_objid',
+                    right_on='loio_id'
+                )
+            else:
+                loio_df['file_size'] = None
+                loio_df['file_name'] = None
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'merge', 'percent': 75, 'message': f'Found {total_size_records} file sizes, merging...'})}\n\n"
+            
+            # Remove duplicate LOIO entries per document (keep first with file_size if available)
+            loio_df = loio_df.sort_values('file_size', ascending=False, na_position='last')
+            loio_df = loio_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+            
+            # Step 4: Merge with original df to get staging IDs
+            df_merged = df.merge(
+                loio_df,
+                how='left',
+                left_on=['source_documentnumber', 'source_documenttype', 'dokvr_padded', 'doktl_padded'],
+                right_on=['doknr', 'dokar', 'dokvr', 'doktl']
+            )
+            
+            # Safety check: df_merged should have same length as df
+            if len(df_merged) != len(df):
+                df_merged = df_merged.sort_values('file_size', ascending=False, na_position='last')
+                df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
+            
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'update', 'message': f'Preparing bulk update for {len(df_merged)} records...'})}\n\n"
+            
+            # Prepare update DataFrame - only rows with LOIO (BULK UPDATE approach)
+            update_df = df_merged[df_merged['lo_objid'].notna()][['id', 'lo_objid', 'file_size', 'file_name']].copy()
+            update_df.columns = ['staging_id', 'source_loioid', 'file_size_bytes', 'filename']
+            update_df['staging_id'] = update_df['staging_id'].astype(int)
+            update_df['source_loioid'] = update_df['source_loioid'].astype(str)
+            update_df['file_size_bytes'] = pd.to_numeric(update_df['file_size_bytes'], errors='coerce').astype('Int64')
+            update_df['filename'] = update_df['filename'].astype(str).replace('nan', None)
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 78, 'message': f'Bulk updating {len(update_df)} records via temp table...'})}\n\n"
+            
+            with misc_engine.begin() as con:
+                # Create temp table
+                con.execute(text("""
+                    IF OBJECT_ID('tempdb..#metadata_update') IS NOT NULL DROP TABLE #metadata_update;
+                    CREATE TABLE #metadata_update (
+                        staging_id INT PRIMARY KEY,
+                        source_loioid NVARCHAR(100),
+                        file_size_bytes BIGINT,
+                        filename NVARCHAR(500)
+                    );
+                """))
+                
+                # Bulk insert into temp table in chunks
+                chunk_size = 900
+                for i in range(0, len(update_df), chunk_size):
+                    chunk = update_df.iloc[i:i + chunk_size]
+                    chunk.to_sql('#metadata_update', con, if_exists='append', index=False, method='multi')
+                    
+                    if i % 10000 == 0:
+                        pct = 78 + int((i / len(update_df)) * 15)  # 78-93%
+                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'current': i, 'total': len(update_df), 'percent': pct, 'message': f'Temp table: {i}/{len(update_df)}'})}\n\n"
+                
+                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 95, 'message': 'Executing UPDATE JOIN...'})}\n\n"
+                
+                # Single UPDATE with JOIN - much faster than 200k individual updates!
+                result = con.execute(text("""
+                    UPDATE s
+                    SET s.source_loioid = t.source_loioid,
+                        s.file_size_bytes = t.file_size_bytes,
+                        s.filename = CASE WHEN t.filename IS NOT NULL AND t.filename != 'None' THEN t.filename ELSE s.filename END
+                    FROM dbo.migration_staging s
+                    INNER JOIN #metadata_update t ON s.id = t.staging_id
+                """))
+                
+                updated_count = result.rowcount
+                
+                # Drop temp table
+                con.execute(text("DROP TABLE #metadata_update"))
+            
+            error_count = len(df) - len(update_df)
+            
+            # Calculate statistics
+            if total_size_records > 0:
+                total_bytes = size_df['file_size'].dropna().sum()
+                max_bytes = size_df['file_size'].dropna().max()
+            else:
+                total_bytes = 0
+                max_bytes = 0
+            
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Metadata fetch complete', 'updated': updated_count, 'errors': error_count, 'already_had_metadata': records_with_size, 'total_processed': total_records, 'total_size_mb': round(total_bytes / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(max_bytes / (1024 * 1024), 1) if max_bytes else 0})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    })
 
 
 @migrate_bp.route('/batch/<batch_id>/progress', methods=['GET'])
@@ -785,7 +1027,7 @@ def get_batch_records(batch_id):
                 skip_migration
             FROM dbo.migration_staging
             WHERE batch_id = '{batch_id}'
-            ORDER BY id
+            ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
         """
         
         with misc_engine.begin() as con:
@@ -1043,7 +1285,7 @@ def get_results(batch_id):
             FROM dbo.migration_staging
             WHERE batch_id = '{batch_id}'
                 AND execution_status != 'pending'
-            ORDER BY id
+            ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
         """
         
         with misc_engine.begin() as con:
@@ -2369,13 +2611,28 @@ def load_dms_objects():
         werke_filter = "', '".join(selected_werke)
         
         # Define queries per DOKOB - executed sequentially for better performance
+        # Exclusion rules applied:
+        # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
+        # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
+        # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
+        # - PMAFVC: Exclude if parent order is TECO/deleted
+        # - STKO_DOC: Exclude if STKO.LOEKZ = 'X'
+        # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
+        # - PLKO: Exclude if PLKO.LOEKZ = 'X'
         queries = {
             'EQUI': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
                        equz.IWERK as WERK
                 FROM DIL.DRAD drad
                 JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                JOIN DIL.EQUI equi ON drad.OBJKY = equi.EQUNR
                 WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = equi.OBJNR 
+                      AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
             """,
             'IFLOT': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2383,6 +2640,12 @@ def load_dms_objects():
                 FROM DIL.DRAD drad
                 JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
                 WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = iflot.OBJNR 
+                      AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
             """,
             'MPLA': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2402,6 +2665,7 @@ def load_dms_objects():
                     SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
                     RIGHT(drad.OBJKY, 2) = plko.PLNAL
                 WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
+                  AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
             """,
             'PMAUFK': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2409,6 +2673,12 @@ def load_dms_objects():
                 FROM DIL.DRAD drad
                 JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
                 WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = aufk.OBJNR 
+                      AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
             """,
             'PMAFVC': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2417,14 +2687,43 @@ def load_dms_objects():
                 JOIN DIL.AFVC afvc ON 
                     SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
                     SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                JOIN DIL.AFKO afko ON afvc.AUFPL = afko.AUFPL
+                JOIN DIL.AUFK aufk ON afko.AUFNR = aufk.AUFNR
                 WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = aufk.OBJNR 
+                      AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
             """,
             'PMQMEL': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
                        qmih.IWERK as WERK
                 FROM DIL.DRAD drad
                 JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
                 WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = qmel.OBJNR 
+                      AND j.STAT IN ('I0072', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
+            """,
+            'SMQMEL': f"""
+                SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                       qmih.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
+                WHERE drad.DOKOB = 'SMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM DIL.JEST j 
+                      WHERE j.OBJNR = qmel.OBJNR 
+                      AND j.STAT IN ('I0072', 'I0076')
+                      AND (j.INACT IS NULL OR j.INACT = '')
+                  )
             """,
             'STKO_DOC': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2432,6 +2731,7 @@ def load_dms_objects():
                 FROM DIL.DRAD drad
                 JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
                 WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                  AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
             """,
             'STPO_DOC': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2440,6 +2740,7 @@ def load_dms_objects():
                 JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
                 JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
                 WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                  AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
             """
         }
         
@@ -2541,14 +2842,28 @@ def load_dms_objects_stream():
             
             werke_filter = "', '".join(selected_werke)
             
-            # Define queries per DOKOB
+            # Define queries per DOKOB with exclusion rules
+            # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
+            # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
+            # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
+            # - PMAFVC: Exclude if parent order is TECO/deleted
+            # - STKO_DOC: Exclude if STKO.LOEKZ = 'X'
+            # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
+            # - PLKO: Exclude if PLKO.LOEKZ = 'X'
             queries = {
                 'EQUI': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
                            equz.IWERK as WERK
                     FROM DIL.DRAD drad
                     JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                    JOIN DIL.EQUI equi ON drad.OBJKY = equi.EQUNR
                     WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = equi.OBJNR 
+                          AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
                 """,
                 'IFLOT': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2556,6 +2871,12 @@ def load_dms_objects_stream():
                     FROM DIL.DRAD drad
                     JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
                     WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = iflot.OBJNR 
+                          AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
                 """,
                 'MPLA': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2575,6 +2896,7 @@ def load_dms_objects_stream():
                         SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
                         RIGHT(drad.OBJKY, 2) = plko.PLNAL
                     WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
+                      AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
                 """,
                 'PMAUFK': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2582,6 +2904,12 @@ def load_dms_objects_stream():
                     FROM DIL.DRAD drad
                     JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
                     WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = aufk.OBJNR 
+                          AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
                 """,
                 'PMAFVC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2590,14 +2918,43 @@ def load_dms_objects_stream():
                     JOIN DIL.AFVC afvc ON 
                         SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
                         SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                    JOIN DIL.AFKO afko ON afvc.AUFPL = afko.AUFPL
+                    JOIN DIL.AUFK aufk ON afko.AUFNR = aufk.AUFNR
                     WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = aufk.OBJNR 
+                          AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
                 """,
                 'PMQMEL': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
                            qmih.IWERK as WERK
                     FROM DIL.DRAD drad
                     JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
                     WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = qmel.OBJNR 
+                          AND j.STAT IN ('I0072', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
+                """,
+                'SMQMEL': f"""
+                    SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
+                           qmih.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
+                    WHERE drad.DOKOB = 'SMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM DIL.JEST j 
+                          WHERE j.OBJNR = qmel.OBJNR 
+                          AND j.STAT IN ('I0072', 'I0076')
+                          AND (j.INACT IS NULL OR j.INACT = '')
+                      )
                 """,
                 'STKO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2605,6 +2962,7 @@ def load_dms_objects_stream():
                     FROM DIL.DRAD drad
                     JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
                     WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                      AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
                 """,
                 'STPO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -2613,11 +2971,76 @@ def load_dms_objects_stream():
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
                     JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
                     WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                      AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
+                """
+            }
+            
+            # Define count queries (without exclusion filter) to calculate excluded count
+            count_queries = {
+                'EQUI': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                    WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
+                """,
+                'IFLOT': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                    WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
+                """,
+                'MPLA': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
+                    LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                    WHERE drad.DOKOB = 'MPLA' 
+                      AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
+                """,
+                'PMPLKO': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.PLKO plko ON 
+                        LEFT(drad.OBJKY, 1) = plko.PLNTY AND
+                        SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
+                        RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                    WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
+                """,
+                'PMAUFK': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                    WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
+                """,
+                'PMAFVC': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.AFVC afvc ON 
+                        SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
+                        SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                    WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
+                """,
+                'PMQMEL': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                """,
+                'SMQMEL': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    WHERE drad.DOKOB = 'SMQMEL' AND qmih.IWERK IN ('{werke_filter}')
+                """,
+                'STKO_DOC': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                    WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
+                """,
+                'STPO_DOC': f"""
+                    SELECT COUNT(*) FROM DIL.DRAD drad
+                    JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                 """
             }
             
             all_results = []
             stats = {}
+            stats_total = {}  # Total counts without exclusion
+            stats_excluded = {}  # Excluded counts
             total_queries = len(queries)
             
             with dil_db.engine.begin() as con:
@@ -2627,15 +3050,31 @@ def load_dms_objects_stream():
                     
                     query_start = time.time()
                     try:
+                        # Get filtered data
                         df = pd.read_sql(query, con)
                         count = len(df)
                         stats[dokob] = count
                         if count > 0:
                             all_results.append(df)
+                        
+                        # Get total count (without filter) for exclusion statistics
+                        total_count = count  # Default to same as filtered
+                        excluded_count = 0
+                        if dokob in count_queries:
+                            try:
+                                result = con.execute(text(count_queries[dokob]))
+                                total_count = result.scalar() or 0
+                                excluded_count = total_count - count
+                            except Exception as count_err:
+                                print(f"[DMS Load] Count query error for {dokob}: {count_err}")
+                        
+                        stats_total[dokob] = total_count
+                        stats_excluded[dokob] = excluded_count
+                        
                         query_time = time.time() - query_start
                         
-                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
-                        print(f"[DMS Load] {dokob}: {count} records in {query_time:.2f}s")
+                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'total': total_count, 'excluded': excluded_count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
+                        print(f"[DMS Load] {dokob}: {count} records (excluded {excluded_count}) in {query_time:.2f}s")
                     except Exception as e:
                         print(f"[DMS Load] ERROR in {dokob}: {str(e)}")
                         stats[dokob] = 0
@@ -2669,8 +3108,8 @@ def load_dms_objects_stream():
                 except Exception as save_error:
                     print(f"[DMS Load] Auto-save failed: {save_error}")
             
-            # Send final result
-            yield f"data: {json.dumps({'type': 'complete', 'stats': stats, 'count': len(data_list), 'query_time': f'{total_time:.2f}s', 'saved': saved, 'data': data_list})}\n\n"
+            # Send final result with exclusion statistics
+            yield f"data: {json.dumps({'type': 'complete', 'stats': stats, 'stats_total': stats_total, 'stats_excluded': stats_excluded, 'count': len(data_list), 'query_time': f'{total_time:.2f}s', 'saved': saved, 'data': data_list})}\n\n"
             
         except Exception as e:
             import traceback
@@ -2758,3 +3197,158 @@ def get_dms_status():
             'count': 0,
             'error': str(e)
         })
+
+
+@migrate_bp.route('/api/dms/create-batch-stream', methods=['GET'])
+def create_dms_migration_batch_stream():
+    """
+    Create a migration batch from local DMS objects database using SSE for progress.
+    Uses GET with query parameters for EventSource compatibility.
+    """
+    import sqlite3
+    from datetime import datetime
+    from app.db_schema import init_staging_tables
+    
+    wave = request.args.get('wave')
+    description = request.args.get('description', '')
+    notes = request.args.get('notes', '')
+    
+    if not wave:
+        return jsonify({'success': False, 'error': 'Wave ist erforderlich'})
+    
+    db_path = 'userdata/dms_objects.db'
+    if not os.path.exists(db_path):
+        return jsonify({'success': False, 'error': 'Keine DMS-Objekte in lokaler Datenbank'})
+    
+    # Extract session data BEFORE the generator (outside request context)
+    current_user = session.get('user_email', 'system')
+    
+    def generate():
+        try:
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Lese lokale Datenbank...', 'percent': 5})}\n\n"
+            
+            # Read from SQLite
+            conn = sqlite3.connect(db_path)
+            dms_df = pd.read_sql("SELECT * FROM dms_objects", conn)
+            conn.close()
+            
+            if len(dms_df) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Keine DMS-Objekte in lokaler Datenbank'})}\n\n"
+                return
+            
+            total_records = len(dms_df)
+            yield f"data: {json.dumps({'type': 'status', 'message': f'{total_records:,} Datensätze geladen', 'percent': 10})}\n\n"
+            
+            # Generate batch ID
+            batch_id = f"DMS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Ensure staging tables exist
+            init_staging_tables(misc_engine)
+            
+            # Get unique Werke from the loaded data
+            unique_werke = dms_df['werk'].unique().tolist() if 'werk' in dms_df.columns else []
+            werke_str = ', '.join(sorted(unique_werke))
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Bereite Staging-Daten vor...', 'percent': 15})}\n\n"
+            
+            # Helper function to compute target document number
+            # - Auto-generated IDs (25 digits, all numeric) → None (will get new number in target)
+            # - Manual/external IDs (contain letters) → preserve as target number
+            def compute_target_docnumber(doknr):
+                if pd.isnull(doknr):
+                    return None
+                val = str(doknr).strip()
+                # Check if this is an auto-generated ID (25 chars, all numeric after stripping leading zeros)
+                if len(val) == 25:
+                    try:
+                        int(val.lstrip('0') or '0')
+                        return None  # Auto-generated → will get new number
+                    except (ValueError, TypeError):
+                        pass
+                # Manual/external ID → preserve it
+                return val[:25]
+            
+            # Prepare staging DataFrame using vectorized operations (FAST!)
+            # NOTE: target_* fields depend on whether source is auto-generated or manual
+            # - Auto-generated IDs → target stays None (will get new number during migration)
+            # - Manual/external IDs → target = source (preserve external number)
+            staging_df = pd.DataFrame({
+                'batch_id': batch_id,
+                'created_by': current_user,
+                'source_documentnumber': dms_df['doknr'].fillna(''),
+                'source_documentpart': dms_df['doktl'].fillna('000'),
+                'source_documenttype': dms_df['dokar'].fillna(''),
+                'source_documentversion': dms_df['dokvr'].fillna('00'),
+                'source_dokob': dms_df['dokob'].fillna(''),
+                'source_objky': dms_df['objky'].fillna(''),
+                'target_documentnumber': dms_df['doknr'].apply(compute_target_docnumber),
+                'target_documentpart': dms_df['doktl'].fillna('000'),
+                'target_documenttype': dms_df['dokar'].fillna(''),
+                'target_documentversion': dms_df['dokvr'].fillna('00'),
+                'user_approved': 0,
+                'skip_migration': 0,
+                'validation_status': 'pending',
+                'execution_status': 'pending'
+            })
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Schreibe in Staging-Datenbank...', 'percent': 20})}\n\n"
+            
+            # Save to staging database in chunks (SQL Server limit with method='multi' is ~1000)
+            chunk_size = 900
+            total_rows = len(staging_df)
+            
+            with misc_engine.begin() as con:
+                for i in range(0, total_rows, chunk_size):
+                    chunk_df = staging_df.iloc[i:i + chunk_size]
+                    chunk_df.to_sql(
+                        'migration_staging',
+                        con,
+                        schema='dbo',
+                        if_exists='append',
+                        index=False,
+                        method='multi'
+                    )
+                    
+                    # Calculate progress (20% to 90%)
+                    progress = 20 + int(70 * min(i + chunk_size, total_rows) / total_rows)
+                    rows_done = min(i + chunk_size, total_rows)
+                    yield f"data: {json.dumps({'type': 'progress', 'message': f'{rows_done:,} / {total_rows:,} Zeilen', 'percent': progress, 'rows': rows_done, 'total': total_rows})}\n\n"
+                    print(f"[DMS Batch] Inserted rows {i+1}-{rows_done} of {total_rows}")
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Erstelle Batch-Eintrag...', 'percent': 95})}\n\n"
+                
+                # Create batch record with Werke info
+                batch_record = pd.DataFrame([{
+                    'batch_id': batch_id,
+                    'created_by': current_user,
+                    'source_file': f'DMS Objects: {werke_str}' if werke_str else 'dms_objects.db',
+                    'total_records': len(staging_df),
+                    'status': 'prepared',
+                    'wave': wave,
+                    'description': description[:40] if description else None,
+                    'notes': f"Werke: {werke_str}\n{notes}" if werke_str else notes if notes else None
+                }])
+                
+                batch_record.to_sql(
+                    'migration_batch',
+                    con,
+                    schema='dbo',
+                    if_exists='append',
+                    index=False
+                )
+            
+            print(f"[DMS Batch] Created batch {batch_id} with {len(staging_df)} records")
+            
+            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'batch_id': batch_id, 'record_count': len(staging_df), 'wave': wave, 'percent': 100})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            print(f"[DMS Batch ERROR] {e}")
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    })

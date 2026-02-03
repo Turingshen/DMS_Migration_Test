@@ -1173,59 +1173,50 @@ function fetchMetadata() {
     
     const btn = document.getElementById('fetchMetadataBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Fetching...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
     
-    fetch(`/batch/${batchId}/fetch-metadata`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
+    // Use SSE for progress updates
+    const eventSource = new EventSource(`/batch/${batchId}/fetch-metadata-stream`);
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
         
-        if (data.success) {
-            let message = `Metadata Fetch Complete!\n\n`;
+        if (data.type === 'status') {
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${data.message}`;
+        } else if (data.type === 'progress') {
+            const pct = data.percent || 0;
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${pct}% - ${data.message}`;
+        } else if (data.type === 'complete') {
+            eventSource.close();
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
             
-            // Handle both old and new response formats
-            if (data.updated_loio !== undefined) {
-                message += `✓ LOIO_IDs updated: ${data.updated_loio}\n`;
-                message += `✓ File sizes updated: ${data.updated_size || 0}\n`;
-            } else {
-                message += `✓ Updated: ${data.updated || 0}\n`;
-                message += `✗ Errors: ${data.errors || 0}\n`;
-                message += `ℹ Already had metadata: ${data.already_had_metadata || 0}\n`;
-            }
+            let message = `Metadata Fetch Complete!\n\n`;
+            message += `✓ Updated: ${data.updated || 0}\n`;
+            message += `✗ Errors: ${data.errors || 0}\n`;
+            message += `ℹ Already had metadata: ${data.already_had_metadata || 0}\n`;
             
             if (data.total_size_mb) {
                 message += `\n📊 Total size: ${data.total_size_mb} MB\n`;
                 message += `📊 Max file: ${data.max_file_mb} MB\n`;
             }
             
-            if (data.info) {
-                message += `\nℹ️ ${data.info}`;
-            }
-            
-            if (data.error_details && data.error_details.length > 0) {
-                message += `\nFirst errors:\n${data.error_details.join('\n')}`;
-            }
-            
             alert(message);
             loadRecords();  // Reload to show updated data
-        } else if (data.login_required) {
-            alert('⚠️ Not logged in!\n\nPlease login to SAP first.');
-            window.location.href = '/';
-        } else {
-            alert('Fetch failed: ' + (data.error || 'Unknown error'));
+        } else if (data.type === 'error') {
+            eventSource.close();
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
+            alert('Fetch failed: ' + data.message);
         }
-    })
-    .catch(error => {
-        alert('Error fetching metadata: ' + error);
+    };
+    
+    eventSource.onerror = function(error) {
+        eventSource.close();
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
-    });
+        alert('Connection error during metadata fetch');
+    };
 }
 
 function retryFailed() {

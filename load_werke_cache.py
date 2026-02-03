@@ -33,26 +33,40 @@ def load_werke():
     cursor = conn.cursor()
     
     # Die komplette Query für alle DOKOB-Typen
+    # Zählt DRAD-Einträge (nicht DISTINCT Dokumente) mit Ausschlussfilter
     query = """
         SELECT WERK, COUNT(*) as CNT FROM (
-            -- EQUI -> EQUZ (current records only)
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, equz.IWERK as WERK
+            -- EQUI -> EQUZ (current records only, excluding deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, equz.IWERK as WERK
             FROM DIL.DRAD drad
             JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+            JOIN DIL.EQUI equi ON drad.OBJKY = equi.EQUNR
             WHERE drad.DOKOB = 'EQUI'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = equi.OBJNR 
+                  AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
             
             UNION ALL
             
-            -- IFLOT -> IFLOT
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, iflot.IWERK as WERK
+            -- IFLOT -> IFLOT (excluding deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, iflot.IWERK as WERK
             FROM DIL.DRAD drad
             JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
             WHERE drad.DOKOB = 'IFLOT'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = iflot.OBJNR 
+                  AND j.STAT IN ('I0320', 'I0013', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
             
             UNION ALL
             
             -- MPLA -> MPOS (with fallback to PLAN_SORT)
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, 
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, 
                 COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
             FROM DIL.DRAD drad
             JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
@@ -61,57 +75,96 @@ def load_werke():
             
             UNION ALL
             
-            -- PMPLKO -> PLKO
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, plko.WERKS as WERK
+            -- PMPLKO -> PLKO (excluding deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, plko.WERKS as WERK
             FROM DIL.DRAD drad
             JOIN DIL.PLKO plko ON 
                 LEFT(drad.OBJKY, 1) = plko.PLNTY AND
                 SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
                 RIGHT(drad.OBJKY, 2) = plko.PLNAL
             WHERE drad.DOKOB = 'PMPLKO'
+              AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
             
             UNION ALL
             
-            -- PMAUFK -> AUFK
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, aufk.WERKS as WERK
+            -- PMAUFK -> AUFK (excluding TECO/deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, aufk.WERKS as WERK
             FROM DIL.DRAD drad
             JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
             WHERE drad.DOKOB = 'PMAUFK'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = aufk.OBJNR 
+                  AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
             
             UNION ALL
             
-            -- PMAFVC -> AFVC (OV + AUFPL + APLZL)
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, afvc.WERKS as WERK
+            -- PMAFVC -> AFVC (excluding parent order TECO/deleted via AFKO)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, afvc.WERKS as WERK
             FROM DIL.DRAD drad
             JOIN DIL.AFVC afvc ON 
                 SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
                 SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+            JOIN DIL.AFKO afko ON afvc.AUFPL = afko.AUFPL
+            JOIN DIL.AUFK aufk ON afko.AUFNR = aufk.AUFNR
             WHERE drad.DOKOB = 'PMAFVC'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = aufk.OBJNR 
+                  AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
             
             UNION ALL
             
-            -- PMQMEL -> QMIH
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+            -- PMQMEL -> QMIH (excluding closed/deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
             FROM DIL.DRAD drad
             JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+            JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
             WHERE drad.DOKOB = 'PMQMEL'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = qmel.OBJNR 
+                  AND j.STAT IN ('I0072', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
             
             UNION ALL
             
-            -- STKO_DOC -> STKO (BINTOHEX GUIDX)
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+            -- SMQMEL -> QMIH (excluding closed/deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+            FROM DIL.DRAD drad
+            JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+            JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
+            WHERE drad.DOKOB = 'SMQMEL'
+              AND NOT EXISTS (
+                  SELECT 1 FROM DIL.JEST j 
+                  WHERE j.OBJNR = qmel.OBJNR 
+                  AND j.STAT IN ('I0072', 'I0076')
+                  AND (j.INACT IS NULL OR j.INACT = '')
+              )
+            
+            UNION ALL
+            
+            -- STKO_DOC -> STKO (excluding deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
             FROM DIL.DRAD drad
             JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
             WHERE drad.DOKOB = 'STKO_DOC'
+              AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
             
             UNION ALL
             
-            -- STPO_DOC -> STPO -> STKO
-            SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+            -- STPO_DOC -> STPO -> STKO (excluding deleted)
+            SELECT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
             FROM DIL.DRAD drad
             JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
             JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
             WHERE drad.DOKOB = 'STPO_DOC'
+              AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
         ) combined
         WHERE WERK IS NOT NULL AND WERK != ''
         GROUP BY WERK

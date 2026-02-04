@@ -19,9 +19,9 @@ _active_migrations = {}  # batch_id -> start_time
 _cancel_requested = {}   # batch_id -> True/False - for graceful cancellation
 
 # Circuit Breaker settings
-CIRCUIT_BREAKER_THRESHOLD = 3  # Stop after N consecutive auth errors (reduced from 5)
+CIRCUIT_BREAKER_THRESHOLD = 3  # Stop after N consecutive auth errors
 CIRCUIT_BREAKER_ERRORS = (401, 403)  # HTTP status codes that trigger circuit breaker
-PACKAGE_SIZE = 10  # Process in packages of N records (reduced from 100 for faster error detection)
+PACKAGE_SIZE = 50  # Process in packages of N records (balance between responsiveness and throughput)
 
 # Token refresh import (for automatic refresh before packages)
 try:
@@ -593,9 +593,16 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         
         if not documents[2] or len(documents[2]) == 0:
             error_msg = "READ_EMPTY - No documents found"
+            error_info = {'status_code': 404, 'detail': 'Container has no files attached'}
             logger.warning(error_msg, category="READ")
             update_execution_status(staging_id, 'failed', error_msg)
-            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'status_code': 404}
+            return {
+                'staging_id': staging_id, 
+                'status': 'failed', 
+                'error': error_msg, 
+                'error_category': 'SOURCE_EMPTY',
+                'status_code': 404
+            }
         
         logger.info(f"Found {len(documents[2])} files to migrate", category="EXECUTE")
         
@@ -1267,12 +1274,16 @@ def execute_migration(batch_id, record_ids=None):
         # Convert DataFrame to list of tuples for package processing
         records_list = list(records_df.iterrows())
         
-        # Package size = max_workers to ensure only N concurrent requests
-        # This allows circuit breaker to work effectively
-        effective_package_size = max_workers  # Use worker count as package size
+        # Use PACKAGE_SIZE for grouping, max_workers for parallelism within each package
+        effective_package_size = PACKAGE_SIZE
         total_packages = (len(records_list) + effective_package_size - 1) // effective_package_size
         
-        print(f"[PACKAGES] Processing {total_records} records in {total_packages} packages of {effective_package_size} (= {max_workers} workers)")
+        # For small batches, use single package to avoid overhead
+        if total_records <= PACKAGE_SIZE:
+            total_packages = 1
+            effective_package_size = total_records
+        
+        print(f"[START] Batch {batch_id}: {total_records} records, {max_workers} workers")
         
         server_session = requests.Session()
         token_refresh_failed = False

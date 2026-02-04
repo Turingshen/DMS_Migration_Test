@@ -228,83 +228,243 @@ def _extract_error_fields(resp, max_raw_len=500):
 
 
 def _classify_error(err_info):
-    """Classify an error into a broader bucket to ease filtering in UI/output."""
+    """Classify an error into a clear, actionable category.
+    
+    Categories are grouped by root cause for easier troubleshooting:
+    - API_KEY_*: APIM configuration issues
+    - TOKEN_*: OAuth/Authentication issues  
+    - CSRF_*: CSRF token issues
+    - SOURCE_*: Problems reading from source system (R/3)
+    - TARGET_*: Problems writing to target system (S/4)
+    - UPLOAD_*: File upload specific issues
+    - NETWORK_*: Connection/timeout issues
+    """
     if not err_info:
         return 'UNKNOWN'
-    code = err_info.get('status_code') or err_info.get('status') or ''
-    detail = (err_info.get('detail') or err_info.get('title') or '').lower()
-    sap_code = str(err_info.get('code', '')).upper()
     
-    # SAP-specific error codes
+    # Extract key fields
+    code = err_info.get('status_code') or err_info.get('status') or 0
+    detail = (err_info.get('detail') or err_info.get('title') or '').lower()
+    reason = (err_info.get('reason') or '').lower()
+    sap_code = str(err_info.get('code', '')).upper()
+    instance = str(err_info.get('instance', '')).lower()
+    
+    # Handle malformed status_code (legacy errors with string like "Error during getinfo:")
+    if isinstance(code, str):
+        code_lower = code.lower()
+        if 'error during getinfo' in code_lower or 'error during' in code_lower:
+            # Legacy error format - classify by reason
+            if 'unauthorized' in reason:
+                return 'TOKEN_EXPIRED'
+            if 'forbidden' in reason:
+                return 'AUTH_FORBIDDEN'
+            if 'ok' in reason:  # "unexpected OK" - empty response
+                return 'SOURCE_NOT_FOUND'
+            return 'SOURCE_READ_ERROR'
+        try:
+            code = int(code) if code.isdigit() else 0
+        except:
+            code = 0
+    
+    # === API KEY ISSUES (APIM) ===
+    if 'invalid apikey' in detail or 'apikey' in detail.lower():
+        return 'API_KEY_INVALID'
+    if 'api key' in detail or 'api-key' in detail:
+        return 'API_KEY_INVALID'
+    
+    # === CSRF TOKEN ISSUES ===
+    if 'csrf' in detail or 'csrf' in reason:
+        return 'CSRF_FAILED'
+    
+    # === TOKEN / AUTH ISSUES ===
+    if code == 401:
+        if 'expired' in detail or 'token' in detail:
+            return 'TOKEN_EXPIRED'
+        return 'TOKEN_INVALID'
+    
+    # === PERMISSION ISSUES ===
+    if code == 403:
+        if 'invalid apikey' in detail:
+            return 'API_KEY_INVALID'
+        if 'permission' in detail or 'authorized' in detail:
+            return 'AUTH_NO_PERMISSION'
+        return 'AUTH_FORBIDDEN'
+    
+    # === SAP-SPECIFIC ERROR CODES ===
     if sap_code:
-        if 'AUTH' in sap_code or 'PERM' in sap_code:
-            return 'AUTH_ERROR'
+        if 'AUTH' in sap_code or 'PERM' in sap_code or 'BEGRU' in sap_code:
+            return 'AUTH_NO_PERMISSION'
         if 'LOCK' in sap_code:
-            return 'LOCKED'
+            return 'TARGET_LOCKED'
         if 'NOT_FOUND' in sap_code or 'NOTFOUND' in sap_code:
-            return 'NOT_FOUND'
+            return 'SOURCE_NOT_FOUND'
         if 'DUPLICATE' in sap_code or 'EXIST' in sap_code:
-            return 'ALREADY_EXISTS'
+            return 'TARGET_EXISTS'
         if 'INVALID' in sap_code:
             return 'VALIDATION_ERROR'
     
-    if isinstance(code, int):
-        if code >= 500:
-            return 'SERVER_ERROR'
-        if code == 429:
-            return 'RATE_LIMIT'
-        if code == 413:
-            return 'PAYLOAD_TOO_LARGE'
-        if code == 404:
-            return 'NOT_FOUND'
-        if code == 409:
-            return 'CONFLICT'
-        if code == 403:
-            return 'FORBIDDEN'
-        if code == 401:
-            return 'UNAUTHORIZED'
-        if code == 400:
-            return 'BAD_REQUEST'
+    # === TIMEOUT / GATEWAY ISSUES ===
+    if code == 504:
+        return 'GATEWAY_TIMEOUT'
+    if code == 502 or code == 503:
+        return 'SERVER_UNAVAILABLE'
+    if 'timeout' in detail or 'timed out' in detail:
+        return 'UPLOAD_TIMEOUT'
     
-    # Text-based classification
-    if 'timeout' in detail:
-        return 'TIMEOUT'
-    if 'duplicate' in detail or 'exist' in detail:
-        return 'ALREADY_EXISTS'
-    if 'size' in detail or 'large' in detail or 'limit' in detail:
-        return 'PAYLOAD_TOO_LARGE'
+    # === RATE LIMITING ===
+    if code == 429:
+        return 'RATE_LIMITED'
+    
+    # === PAYLOAD SIZE ===
+    if code == 413:
+        return 'UPLOAD_SIZE_EXCEEDED'
+    if 'size' in detail and ('exceed' in detail or 'limit' in detail or 'large' in detail):
+        return 'UPLOAD_SIZE_EXCEEDED'
+    
+    # === NOT FOUND ===
+    if code == 404:
+        if 'attachment' in instance or 'file' in detail:
+            return 'SOURCE_NOT_FOUND'
+        return 'TARGET_NOT_FOUND'
+    
+    # === CONFLICT / DUPLICATE ===
+    if code == 409 or 'duplicate' in detail or 'already exist' in detail:
+        return 'TARGET_EXISTS'
+    
+    # === SERVER ERRORS (500+) ===
+    if code >= 500:
+        if 'documentinforecord' in instance or 'create' in detail:
+            return 'TARGET_CREATE_FAILED'
+        if 'attachment' in instance or 'upload' in detail:
+            return 'UPLOAD_FAILED'
+        return 'SERVER_ERROR'
+    
+    # === BAD REQUEST ===
+    if code == 400:
+        if 'validation' in detail or 'invalid' in detail:
+            return 'VALIDATION_ERROR'
+        return 'BAD_REQUEST'
+    
+    # === TEXT-BASED FALLBACKS ===
     if 'lock' in detail:
-        return 'LOCKED'
-    if 'auth' in detail or 'permission' in detail:
-        return 'AUTH_ERROR'
-    if 'invalid' in detail or 'validation' in detail:
-        return 'VALIDATION_ERROR'
+        return 'TARGET_LOCKED'
+    if 'permission' in detail or 'authorized' in detail:
+        return 'AUTH_NO_PERMISSION'
     if 'connection' in detail or 'network' in detail:
         return 'NETWORK_ERROR'
+    if 'empty' in detail or 'no document' in detail or 'not found' in detail:
+        return 'SOURCE_NOT_FOUND'
+    
     return 'OTHER'
 
 
 def get_error_description(category):
-    """Get human-readable description for error category."""
+    """Get human-readable description for error category with action hint."""
     descriptions = {
-        'UNKNOWN': 'Unbekannter Fehler',
-        'SERVER_ERROR': 'SAP Server Fehler (5xx)',
-        'RATE_LIMIT': 'API Rate Limit erreicht',
-        'PAYLOAD_TOO_LARGE': 'Datei zu groß',
-        'NOT_FOUND': 'Dokument nicht gefunden',
-        'CONFLICT': 'Konflikt/Änderungskonflikt',
-        'FORBIDDEN': 'Keine Berechtigung',
-        'UNAUTHORIZED': 'Nicht authentifiziert',
-        'BAD_REQUEST': 'Ungültige Anfrage',
-        'TIMEOUT': 'Zeitüberschreitung',
-        'ALREADY_EXISTS': 'Bereits vorhanden',
-        'LOCKED': 'Objekt gesperrt',
-        'AUTH_ERROR': 'Berechtigungsfehler',
-        'VALIDATION_ERROR': 'Validierungsfehler',
-        'NETWORK_ERROR': 'Netzwerkfehler',
-        'OTHER': 'Sonstiger Fehler'
+        # Unknown
+        'UNKNOWN': ('Unbekannter Fehler', 'Details prüfen'),
+        'OTHER': ('Sonstiger Fehler', 'Details prüfen'),
+        
+        # API Key / APIM Issues
+        'API_KEY_INVALID': ('API-Key ungültig', 'API im APIM freischalten'),
+        'API_KEY_MISSING': ('API-Key fehlt', 'Konfiguration prüfen'),
+        
+        # Token / Auth Issues
+        'TOKEN_EXPIRED': ('OAuth Token abgelaufen', 'Neu einloggen'),
+        'TOKEN_INVALID': ('OAuth Token ungültig', 'Neu einloggen'),
+        'CSRF_FAILED': ('CSRF Token Fehler', 'Session erneuern'),
+        
+        # Permission Issues  
+        'AUTH_NO_PERMISSION': ('Keine SAP-Berechtigung', 'BEGRU/Rolle prüfen'),
+        'AUTH_FORBIDDEN': ('Zugriff verweigert (403)', 'Berechtigungen prüfen'),
+        
+        # Source System Issues (R/3)
+        'SOURCE_NOT_FOUND': ('Dokument in R/3 nicht gefunden', 'Quelldaten prüfen'),
+        'SOURCE_EMPTY': ('Container ohne Dateien', 'Erwartet - leer'),
+        'SOURCE_READ_ERROR': ('Lesefehler im Quellsystem', 'R/3 API prüfen'),
+        
+        # Target System Issues (S/4)
+        'TARGET_CREATE_FAILED': ('Anlage fehlgeschlagen', 'SAP Log prüfen'),
+        'TARGET_EXISTS': ('Dokument existiert bereits', 'Duplikat prüfen'),
+        'TARGET_LOCKED': ('Objekt gesperrt', 'Sperre lösen'),
+        'TARGET_NOT_FOUND': ('Zielobjekt nicht gefunden', 'Mapping prüfen'),
+        
+        # Upload Issues
+        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 50MB pro Datei'),
+        'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
+        'UPLOAD_FAILED': ('Upload fehlgeschlagen', 'Details prüfen'),
+        
+        # Network / Gateway Issues
+        'GATEWAY_TIMEOUT': ('API Gateway Timeout (504)', 'Später erneut versuchen'),
+        'SERVER_UNAVAILABLE': ('Server nicht erreichbar', 'Später erneut versuchen'),
+        'RATE_LIMITED': ('Rate Limit erreicht (429)', 'Pacing erhöhen'),
+        'SERVER_ERROR': ('SAP Serverfehler (5xx)', 'SAP Support kontaktieren'),
+        'NETWORK_ERROR': ('Netzwerkfehler', 'Verbindung prüfen'),
+        
+        # Validation Issues
+        'VALIDATION_ERROR': ('Validierungsfehler', 'Eingabedaten prüfen'),
+        'BAD_REQUEST': ('Ungültige Anfrage (400)', 'Request prüfen'),
     }
-    return descriptions.get(category, category)
+    
+    entry = descriptions.get(category)
+    if entry:
+        return entry[0]  # Return just the description for backwards compatibility
+    return category
+
+
+def get_error_details(category):
+    """Get full error details including description and action hint.
+    
+    Returns:
+        tuple: (description, action_hint) or (category, '') if not found
+    """
+    descriptions = {
+        # API Key / APIM Issues
+        'API_KEY_INVALID': ('API-Key ungültig', 'API im APIM freischalten'),
+        'API_KEY_MISSING': ('API-Key fehlt', 'Konfiguration prüfen'),
+        
+        # Token / Auth Issues
+        'TOKEN_EXPIRED': ('OAuth Token abgelaufen', 'Neu einloggen'),
+        'TOKEN_INVALID': ('OAuth Token ungültig', 'Neu einloggen'),
+        'CSRF_FAILED': ('CSRF Token Fehler', 'Session erneuern'),
+        
+        # Permission Issues  
+        'AUTH_NO_PERMISSION': ('Keine SAP-Berechtigung', 'BEGRU/Rolle prüfen'),
+        'AUTH_FORBIDDEN': ('Zugriff verweigert (403)', 'Berechtigungen prüfen'),
+        
+        # Source System Issues (R/3)
+        'SOURCE_NOT_FOUND': ('Dokument in R/3 nicht gefunden', 'Quelldaten prüfen'),
+        'SOURCE_EMPTY': ('Container ohne Dateien', 'Erwartet - leer'),
+        'SOURCE_READ_ERROR': ('Lesefehler im Quellsystem', 'R/3 API prüfen'),
+        
+        # Target System Issues (S/4)
+        'TARGET_CREATE_FAILED': ('Anlage fehlgeschlagen', 'SAP Log prüfen'),
+        'TARGET_EXISTS': ('Dokument existiert bereits', 'Duplikat prüfen'),
+        'TARGET_LOCKED': ('Objekt gesperrt', 'Sperre lösen'),
+        'TARGET_NOT_FOUND': ('Zielobjekt nicht gefunden', 'Mapping prüfen'),
+        
+        # Upload Issues
+        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 50MB pro Datei'),
+        'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
+        'UPLOAD_FAILED': ('Upload fehlgeschlagen', 'Details prüfen'),
+        
+        # Network / Gateway Issues
+        'GATEWAY_TIMEOUT': ('API Gateway Timeout (504)', 'Später erneut versuchen'),
+        'SERVER_UNAVAILABLE': ('Server nicht erreichbar', 'Später erneut versuchen'),
+        'RATE_LIMITED': ('Rate Limit erreicht (429)', 'Pacing erhöhen'),
+        'SERVER_ERROR': ('SAP Serverfehler (5xx)', 'SAP Support kontaktieren'),
+        'NETWORK_ERROR': ('Netzwerkfehler', 'Verbindung prüfen'),
+        
+        # Validation Issues
+        'VALIDATION_ERROR': ('Validierungsfehler', 'Eingabedaten prüfen'),
+        'BAD_REQUEST': ('Ungültige Anfrage (400)', 'Request prüfen'),
+        
+        # Unknown
+        'UNKNOWN': ('Unbekannter Fehler', 'Details prüfen'),
+        'OTHER': ('Sonstiger Fehler', 'Details prüfen'),
+    }
+    
+    return descriptions.get(category, (category, ''))
 
 
 def _new_timeline():

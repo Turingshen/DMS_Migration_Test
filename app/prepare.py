@@ -417,6 +417,89 @@ def enrich_file_sizes(data_df):
     return data_df
 
 
+def enrich_filenames_from_draw(data_df):
+    """
+    Enrich dataframe with filenames from DIL.DRAW.filep.
+    This is a workaround for documents where the API doesn't return the file extension.
+    The filep field in DRAW contains the full filename with extension.
+    
+    Returns dataframe with added 'source_filename' column.
+    """
+    required_cols = ['documentnumber', 'documenttype', 'documentversion', 'documentpart']
+    if not all(col in data_df.columns for col in required_cols):
+        print("[PREPARE] Missing columns for DRAW filename lookup")
+        data_df['source_filename'] = None
+        return data_df
+    
+    print(f"[PREPARE] Looking up filenames from DRAW for {len(data_df)} documents...")
+    
+    try:
+        # Build list of document keys for lookup
+        doc_keys = []
+        for _, row in data_df.iterrows():
+            doknr = str(row['documentnumber'])
+            dokar = str(row['documenttype'])
+            dokvr = str(row['documentversion']).zfill(2)
+            doktl = str(row['documentpart']).zfill(3)
+            doc_keys.append((doknr, dokar, dokvr, doktl))
+        
+        # Chunk the queries to avoid too large IN clauses
+        chunk_size = 300
+        all_filenames = []
+        
+        for i in range(0, len(doc_keys), chunk_size):
+            chunk = doc_keys[i:i + chunk_size]
+            conditions = [
+                f"(doknr = '{k[0]}' AND dokar = '{k[1]}' AND dokvr = '{k[2]}' AND doktl = '{k[3]}')"
+                for k in chunk
+            ]
+            where_clause = " OR ".join(conditions)
+            
+            query = f"""
+                SELECT doknr, dokar, dokvr, doktl, filep
+                FROM dil.DRAW
+                WHERE {where_clause}
+            """
+            with dil_engine.begin() as con:
+                chunk_df = pd.read_sql(query, con)
+            all_filenames.append(chunk_df)
+        
+        if all_filenames:
+            filename_df = pd.concat(all_filenames, ignore_index=True)
+            filename_df.columns = [c.lower() for c in filename_df.columns]
+            
+            # Prepare merge columns
+            data_df['_doknr'] = data_df['documentnumber'].astype(str)
+            data_df['_dokar'] = data_df['documenttype'].astype(str)
+            data_df['_dokvr'] = data_df['documentversion'].astype(str).str.zfill(2)
+            data_df['_doktl'] = data_df['documentpart'].astype(str).str.zfill(3)
+            
+            # Merge to get filenames
+            data_df = data_df.merge(
+                filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep']],
+                how='left',
+                left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
+                right_on=['doknr', 'dokar', 'dokvr', 'doktl']
+            )
+            data_df.rename(columns={'filep': 'source_filename'}, inplace=True)
+            data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
+            
+            # Count how many filenames we found
+            found_count = data_df['source_filename'].notna().sum()
+            with_ext = data_df['source_filename'].dropna().apply(lambda x: '.' in str(x)).sum()
+            print(f"[PREPARE] Found {found_count} filenames in DRAW, {with_ext} with extension")
+        else:
+            data_df['source_filename'] = None
+            
+    except Exception as e:
+        print(f"[WARN] Failed to enrich filenames from DRAW: {e}")
+        if 'source_filename' not in data_df.columns:
+            data_df['source_filename'] = None
+    
+    return data_df
+
+
 def apply_translations(data_df, rules):
     """Apply migration rules: translation mappings and overwrites with optional conditions."""
     if not rules or len(data_df) == 0:
@@ -605,6 +688,9 @@ def enrich_with_metadata(data_df):
     # Enrich with file sizes from DIL.DMS_FILE_SIZE
     data_df = enrich_file_sizes(data_df)
     
+    # Enrich with filenames from DIL.DRAW (workaround for missing extensions in API)
+    data_df = enrich_filenames_from_draw(data_df)
+    
     # Compute target document numbers (X55- prefix)
     # Set target document number to source for manual IDs, empty for auto-generated IDs
     # Auto-generated IDs will be assigned by target system during migration
@@ -657,6 +743,7 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'target_dokob': row.get('target_dokob'),
             'target_objky': row.get('target_objky'),
             'authorization_group': row.get('authorization_group'),
+            'filename': row.get('source_filename'),  # From DIL.DRAW.filep (with extension)
             'file_size_bytes': row.get('file_size_bytes'),
             'validation_status': 'pending',
             'execution_status': 'pending',

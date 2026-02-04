@@ -363,7 +363,8 @@ def load_specific_records(batch_id, record_ids):
             authorization_group,
             filename,
             file_size_bytes,
-            skip_migration
+            skip_migration,
+            ISNULL(container_created, 0) as container_created
         FROM dbo.migration_staging
         WHERE batch_id = '{batch_id}'
             AND id IN ({ids_str})
@@ -377,14 +378,32 @@ def load_specific_records(batch_id, record_ids):
     return df
 
 
-def update_execution_status(staging_id, status, error=None):
-    """Update execution status for a staging record."""
+def update_execution_status(staging_id, status, error=None, error_category=None):
+    """Update execution status for a staging record.
+    
+    Args:
+        staging_id: The staging record ID
+        status: 'success', 'failed', or 'partial'
+        error: Error message or dict
+        error_category: Optional error category. If not provided for failures, will be auto-classified.
+    """
     try:
+        # Determine error_category
+        final_category = None
+        if status == 'success':
+            final_category = None  # Clear on success
+        elif error_category:
+            final_category = error_category  # Use provided category
+        elif error:
+            # Auto-classify from error
+            final_category = _auto_classify_error(error)
+        
         update_query = """
             UPDATE dbo.migration_staging
             SET execution_status = :status,
                 execution_completed_at = GETUTCDATE(),
-                execution_error = :error
+                execution_error = :error,
+                error_category = :error_category
             WHERE id = :staging_id
         """
         
@@ -392,10 +411,49 @@ def update_execution_status(staging_id, status, error=None):
             con.execute(text(update_query), {
                 'status': status,
                 'error': str(error) if error else None,
+                'error_category': final_category,
                 'staging_id': staging_id
             })
     except Exception as e:
         print(f"[UPDATE_ERROR] Failed to update staging_id={staging_id}: {e}")
+
+
+def _auto_classify_error(error):
+    """Auto-classify error string into a category."""
+    if not error:
+        return 'UNKNOWN'
+    
+    error_str = str(error).upper()
+    
+    # Check for common patterns
+    if 'READ_EMPTY' in error_str or 'NO DOCUMENTS FOUND' in error_str:
+        return 'READ_EMPTY'
+    if 'READ_TIMEOUT' in error_str or 'TIMEOUT' in error_str:
+        return 'TIMEOUT_RETRY'
+    if 'API_ERROR_501' in error_str or '501' in error_str:
+        return 'API_NOT_IMPLEMENTED'
+    if 'API_ERROR_504' in error_str or '504' in error_str or 'GATEWAY TIMEOUT' in error_str:
+        return 'TIMEOUT_RETRY'
+    if 'API_ERROR_401' in error_str or 'UNAUTHORIZED' in error_str:
+        return 'AUTH_ERROR'
+    if 'API_ERROR_403' in error_str or 'FORBIDDEN' in error_str:
+        return 'AUTH_FORBIDDEN'
+    if 'API_ERROR_400' in error_str or 'BAD REQUEST' in error_str:
+        return 'BAD_REQUEST'
+    if 'API_ERROR_404' in error_str or 'NOT FOUND' in error_str:
+        return 'SOURCE_NOT_FOUND'
+    if 'API_ERROR_500' in error_str or 'INTERNAL SERVER ERROR' in error_str:
+        return 'SERVER_ERROR'
+    if 'CSRF' in error_str:
+        return 'CSRF_FAILED'
+    if 'DOC_NUMBER' in error_str or 'DOCUMENTNUMBER' in error_str:
+        return 'CODE_BUG'
+    if 'UPLOAD' in error_str:
+        return 'UPLOAD_ERROR'
+    if 'SIZE' in error_str and ('EXCEEDED' in error_str or 'LARGE' in error_str):
+        return 'SIZE_EXCEEDED'
+    
+    return 'UNKNOWN'
 
 
 def mark_execution_started(staging_id):
@@ -523,6 +581,102 @@ def save_file_details(staging_id, batch_id, file_index, file_result, loio_id=Non
         print(f"[SAVE_FILE_DETAILS_ERROR] Failed to save file details for staging_id={staging_id}, file_index={file_index}: {e}")
 
 
+def get_successfully_uploaded_files(staging_id):
+    """Get list of file indices that were already successfully uploaded.
+    
+    Used for retry optimization - skip re-uploading files that succeeded.
+    
+    Args:
+        staging_id: The staging record ID
+        
+    Returns:
+        set: Set of file_index values that have upload_status starting with 'SUCCESS'
+    """
+    try:
+        with misc_engine.begin() as con:
+            result = con.execute(text("""
+                SELECT file_index
+                FROM dbo.migration_file_details
+                WHERE staging_id = :staging_id
+                  AND upload_status LIKE 'SUCCESS%'
+            """), {'staging_id': staging_id}).fetchall()
+            return {row[0] for row in result}
+    except Exception as e:
+        print(f"[GET_UPLOADED_FILES_ERROR] Failed to get uploaded files for staging_id={staging_id}: {e}")
+        return set()
+
+
+def get_cached_file_info(staging_id):
+    """Get cached file info from migration_file_details for retry.
+    
+    When container is already created but upload failed, we can use the cached
+    file info instead of reading from source system again (which may fail with 501).
+    
+    Args:
+        staging_id: The staging record ID
+        
+    Returns:
+        list: List of file info dicts compatible with get_info() result format
+    """
+    try:
+        with misc_engine.begin() as con:
+            # Get staging record for source document info
+            staging = con.execute(text("""
+                SELECT source_documentnumber, source_documentpart, 
+                       source_documenttype, source_documentversion,
+                       source_loioid, filename
+                FROM dbo.migration_staging
+                WHERE id = :staging_id
+            """), {'staging_id': staging_id}).fetchone()
+            
+            if not staging:
+                return None
+            
+            # Get file details (use correct column names: filename, loio_id)
+            file_details = con.execute(text("""
+                SELECT file_index, filename, loio_id, file_size_bytes, mime_type
+                FROM dbo.migration_file_details
+                WHERE staging_id = :staging_id
+                ORDER BY file_index
+            """), {'staging_id': staging_id}).fetchall()
+            
+            if not file_details:
+                # No file details, but we have staging record - use that
+                # Build a single file entry from staging record
+                return [{
+                    'Documentnumber': staging[0],
+                    'Documentpart': staging[1],
+                    'Documenttype': staging[2],
+                    'Documentversion': staging[3],
+                    'LOIOID': staging[4] or '',
+                    'Docpath': staging[5] or '',
+                    'Description': '',
+                    '_cached': True  # Mark as cached for logging
+                }]
+            
+            # Build file list from file_details
+            files = []
+            for fd in file_details:
+                files.append({
+                    'Documentnumber': staging[0],
+                    'Documentpart': staging[1],
+                    'Documenttype': staging[2],
+                    'Documentversion': staging[3],
+                    'LOIOID': fd[2] or staging[4] or '',
+                    'Docpath': fd[1] or '',
+                    'Description': '',
+                    '_cached': True,
+                    '_file_index': fd[0],
+                    '_file_size': fd[3],
+                    '_mime_type': fd[4]
+                })
+            return files
+            
+    except Exception as e:
+        print(f"[GET_CACHED_FILE_INFO_ERROR] Failed to get cached file info for staging_id={staging_id}: {e}")
+        return None
+
+
 def is_auto_generated_id(doc_number):
     """Check if document number is auto-generated by SAP.
     
@@ -553,12 +707,19 @@ def is_auto_generated_id(doc_number):
         return False  # Failed to convert = manually assigned
 
 
-def execute_single_document(server_session, staging_record, session_snapshot):
-    """Execute migration for a single staging record."""
+def execute_single_document(staging_record, session_snapshot):
+    """Execute migration for a single staging record.
+    
+    Each worker creates its own requests.Session for optimal connection pooling.
+    The session_snapshot contains auth tokens and is shared read-only across workers.
+    """
     staging_id = staging_record['id']
     batch_id = staging_record.get('batch_id')
     logger = get_logger(batch_id=batch_id, staging_id=staging_id)
     start_time = time.time()
+    
+    # Create worker-specific session for optimal connection pooling
+    server_session = requests.Session()
     
     # Mark execution as started in database
     mark_execution_started(staging_id)
@@ -566,21 +727,44 @@ def execute_single_document(server_session, staging_record, session_snapshot):
     logger.info(f"Starting migration for document {staging_record['source_documentnumber']}", category="EXECUTE")
     
     try:
-        # Prepare session headers for read system
-        prepare_session_headers(server_session, session_snapshot, read_sap_system)
-        server_session.headers.pop('Slug', None)
+        # Check if this is a RETRY with container already created
+        # In that case, we can skip the READ from source system and use cached file info
+        container_already_created = staging_record.get('container_created', 0) == 1
         
-        logger.debug(f"Fetching document info from {read_sap_system}", category="EXECUTE")
+        if container_already_created:
+            # RETRY MODE: Container exists, get file info from local database instead of API
+            logger.info(f"Retry mode: Container already created, using cached file info", category="EXECUTE")
+            cached_files = get_cached_file_info(staging_id)
+            
+            if cached_files:
+                # Build documents structure from cached data
+                documents = (200, 'OK', cached_files)
+                logger.info(f"Using {len(cached_files)} cached file records for retry", category="EXECUTE")
+                # IMPORTANT: Still need to set up session headers for binary read!
+                prepare_session_headers(server_session, session_snapshot, read_sap_system)
+                server_session.headers.pop('Slug', None)
+            else:
+                # No cached file info - fall back to reading from source
+                logger.warning(f"No cached file info found, falling back to source read", category="EXECUTE")
+                container_already_created = False  # Force normal read path
         
-        # Get document info from source system
-        documents = get_info(
-            server_session,
-            read_sap_system,
-            staging_record['source_documentnumber'],
-            staging_record['source_documentpart'],
-            staging_record['source_documenttype'],
-            staging_record['source_documentversion']
-        )
+        if not container_already_created:
+            # NORMAL MODE: Read from source system
+            # Prepare session headers for read system
+            prepare_session_headers(server_session, session_snapshot, read_sap_system)
+            server_session.headers.pop('Slug', None)
+            
+            logger.debug(f"Fetching document info from {read_sap_system}", category="EXECUTE")
+            
+            # Get document info from source system
+            documents = get_info(
+                server_session,
+                read_sap_system,
+                staging_record['source_documentnumber'],
+                staging_record['source_documentpart'],
+                staging_record['source_documenttype'],
+                staging_record['source_documentversion']
+            )
         
         if documents[0] != 200:
             import json
@@ -617,7 +801,28 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         metadata_updated = False
         # batch_id already set at function start from staging_record
         
+        # Get already successfully uploaded files (for retry optimization)
+        already_uploaded = get_successfully_uploaded_files(staging_id)
+        if already_uploaded:
+            logger.info(f"Retry mode: {len(already_uploaded)} files already uploaded successfully, will skip them", category="EXECUTE")
+        
         for file_index, document in enumerate(documents[2]):
+            # Skip files that were already successfully uploaded (retry optimization)
+            if file_index in already_uploaded:
+                logger.info(f"Skipping file {file_index} - already successfully uploaded", category="EXECUTE")
+                # Add a placeholder result for the skipped file
+                results.append({
+                    'file': document.get('Docpath', '').split('/')[-1] or f'file_{file_index}',
+                    'status': 'SUCCESS_SKIPPED',
+                    'file_size': 0,
+                    'file_size_mb': 0,
+                    'mime_type': None,
+                    'is_size_error': False,
+                    'actual_time_seconds': 0,
+                    'skipped': True
+                })
+                continue
+            
             # Fetch document content
             selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
             document_args = {k: document[k] for k in selected_keys}
@@ -670,7 +875,25 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                 save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue
             
-            filename = _sanitize_filename(document.get('Docpath', '').split('/')[-1] or 'unnamed')
+            # Get filename from API Docpath
+            api_filename = _sanitize_filename(document.get('Docpath', '').split('/')[-1] or '')
+            
+            # Workaround: If API filename has no extension, try to get it from staging record
+            # (which was populated from DIL.DRAW.filep during Prepare)
+            staging_filename = staging_record.get('filename', '') or ''
+            
+            if api_filename and '.' not in api_filename and staging_filename and '.' in staging_filename:
+                # API has no extension but staging has one - extract extension from staging
+                staging_ext = '.' + staging_filename.rsplit('.', 1)[-1]
+                filename = api_filename + staging_ext
+                logger.debug(f"Added extension from DRAW: {api_filename} -> {filename}", category="EXECUTE")
+            elif api_filename:
+                filename = api_filename
+            elif staging_filename:
+                # No API filename at all, use staging filename
+                filename = staging_filename
+            else:
+                filename = 'unnamed'
             
             # Update metadata fields in staging table (once, on first successful file read)
             if not metadata_updated:
@@ -694,12 +917,20 @@ def execute_single_document(server_session, staging_record, session_snapshot):
             # Prepare for write operations
             prepare_session_headers(server_session, session_snapshot, write_sap_system)
             
+            # Extract document identifiers (needed for upload URL even if container exists)
+            doc_type = staging_record['target_documenttype']
+            doc_number = staging_record['target_documentnumber']
+            doc_version = staging_record['target_documentversion']
+            doc_part = staging_record['target_documentpart']
+            
+            # Check if container was already created in a previous (failed) attempt
+            container_already_created = staging_record.get('container_created', 0) == 1
+            if container_already_created:
+                logger.info(f"Container already created in previous attempt, skipping CREATE", category="CREATE")
+                doc_created = True
+            
             # Create document info record (once per container)
             if not doc_created:
-                doc_type = staging_record['target_documenttype']
-                doc_number = staging_record['target_documentnumber']
-                doc_version = staging_record['target_documentversion']
-                doc_part = staging_record['target_documentpart']
                 
                 # Check if source document number is auto-generated
                 source_doc_number = staging_record['source_documentnumber']
@@ -775,6 +1006,14 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                     logger.info(f"Document created successfully: {doc_number} (status {create_resp.status_code})", category="CREATE")
                     doc_created = True
                     
+                    # Mark container as created for idempotent retries
+                    with misc_engine.begin() as con:
+                        con.execute(text("""
+                            UPDATE dbo.migration_staging
+                            SET container_created = 1
+                            WHERE id = :staging_id
+                        """), {'staging_id': staging_id})
+                    
                     # Create Object Link if target mapping is available
                     target_dokob = staging_record.get('target_dokob')
                     target_objky = staging_record.get('target_objky')
@@ -813,6 +1052,13 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                 elif create_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
                     logger.warning(f"Document already exists, continuing: {doc_number}", category="CREATE")
                     doc_created = True  # Tolerate existing
+                    # Mark container as created (was created in a previous attempt)
+                    with misc_engine.begin() as con:
+                        con.execute(text("""
+                            UPDATE dbo.migration_staging
+                            SET container_created = 1
+                            WHERE id = :staging_id
+                        """), {'staging_id': staging_id})
                 else:
                     error_info = _extract_error_fields(create_resp)
                     error_msg = f"CREATE_FAIL_{create_resp.status_code}"
@@ -940,10 +1186,16 @@ def execute_single_document(server_session, staging_record, session_snapshot):
         total_bytes = sum(r.get('file_size', 0) for r in results)
         
         # Determine overall status
-        success_count = len([r for r in results if r['status'] == 'SUCCESS'])
+        # Count SUCCESS and SUCCESS_SKIPPED as successful
+        success_count = len([r for r in results if r['status'] in ('SUCCESS', 'SUCCESS_SKIPPED')])
+        skipped_count = len([r for r in results if r.get('skipped', False)])
         
-        if all(r['status'] == 'SUCCESS' for r in results):
-            logger.info(f"Migration completed successfully for all {len(results)} files in {execution_time:.2f}s ({total_bytes/1024/1024:.2f} MB)", category="EXECUTE")
+        # All files successful (including skipped from previous runs)
+        if all(r['status'] in ('SUCCESS', 'SUCCESS_SKIPPED') for r in results):
+            if skipped_count > 0:
+                logger.info(f"Migration completed: {success_count - skipped_count} new + {skipped_count} skipped (already uploaded) in {execution_time:.2f}s", category="EXECUTE")
+            else:
+                logger.info(f"Migration completed successfully for all {len(results)} files in {execution_time:.2f}s ({total_bytes/1024/1024:.2f} MB)", category="EXECUTE")
             update_execution_status(staging_id, 'success')
             return {
                 'staging_id': staging_id, 
@@ -952,16 +1204,19 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                 'stats': {
                     'execution_time': execution_time,
                     'total_bytes': total_bytes,
-                    'file_count': len(results)
+                    'file_count': len(results),
+                    'skipped_count': skipped_count
                 }
             }
         elif success_count == 0 and not doc_created:
             # No container created and no files uploaded -> this is a complete failure, not partial
+            # Exclude skipped files from failure count (they were already successful)
+            actual_failed = len([r for r in results if not r.get('skipped', False)])
             import json
             error_details = [r.get('error_detail') for r in results if r.get('error_detail')]
-            error_summary = f"FAILED 0/{len(results)} files - no container created"
+            error_summary = f"FAILED 0/{actual_failed} files - no container created"
             
-            logger.error(f"Migration failed completely: 0 of {len(results)} files, no container created in {execution_time:.2f}s", category="EXECUTE")
+            logger.error(f"Migration failed completely: 0 of {actual_failed} files, no container created in {execution_time:.2f}s", category="EXECUTE")
             
             if error_details:
                 error_json = json.dumps({'summary': error_summary, 'errors': error_details})
@@ -976,17 +1231,23 @@ def execute_single_document(server_session, staging_record, session_snapshot):
                 'stats': {
                     'execution_time': execution_time,
                     'total_bytes': total_bytes,
-                    'file_count': len(results)
+                    'file_count': len(results),
+                    'skipped_count': skipped_count
                 }
             }
         else:
             # Container created but not all files uploaded -> partial success
+            # Calculate actual new successes (excluding skipped)
+            new_success_count = len([r for r in results if r['status'] == 'SUCCESS'])
+            total_non_skipped = len([r for r in results if not r.get('skipped', False)])
             import json
-            # Collect all errors from results
-            error_details = [r.get('error_detail') for r in results if r.get('error_detail')]
+            # Collect all errors from results (excluding skipped)
+            error_details = [r.get('error_detail') for r in results if r.get('error_detail') and not r.get('skipped', False)]
             error_summary = f"PARTIAL_SUCCESS {success_count}/{len(results)} files"
+            if skipped_count > 0:
+                error_summary = f"PARTIAL_SUCCESS {new_success_count} new + {skipped_count} skipped / {len(results)} total"
             
-            logger.warning(f"Partial success: {success_count} of {len(results)} files migrated in {execution_time:.2f}s", category="EXECUTE")
+            logger.warning(f"Partial success: {success_count} of {len(results)} files migrated (new: {new_success_count}, skipped: {skipped_count}) in {execution_time:.2f}s", category="EXECUTE")
             
             # Store detailed errors as JSON if available
             if error_details:
@@ -1283,9 +1544,10 @@ def execute_migration(batch_id, record_ids=None):
             total_packages = 1
             effective_package_size = total_records
         
-        print(f"[START] Batch {batch_id}: {total_records} records, {max_workers} workers")
+        print(f"[START] Batch {batch_id}: {total_records} records, {max_workers} workers (worker-specific sessions)")
         
-        server_session = requests.Session()
+        # NOTE: Each worker creates its own requests.Session() for optimal connection pooling
+        # No shared server_session needed anymore
         token_refresh_failed = False
         
         for package_num in range(total_packages):
@@ -1328,7 +1590,7 @@ def execute_migration(batch_id, record_ids=None):
                 print(f"[PROBE] Testing first record to verify SAP authentication...")
                 try:
                     _, probe_row = package_records[0]
-                    probe_result = execute_single_document(server_session, probe_row, session_snapshot)
+                    probe_result = execute_single_document(probe_row, session_snapshot)
                     probe_error = str(probe_result.get('error', '')).lower()
                     probe_status = probe_result.get('status_code', 0)
                     
@@ -1385,9 +1647,10 @@ def execute_migration(batch_id, record_ids=None):
                 continue
             
             # Process this package with ThreadPoolExecutor
+            # Each worker creates its own requests.Session for optimal connection pooling
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(execute_single_document, server_session, row, session_snapshot): idx
+                    executor.submit(execute_single_document, row, session_snapshot): idx
                     for idx, (_, row) in enumerate(package_records)
                 }
                 
@@ -1488,7 +1751,7 @@ def execute_migration(batch_id, record_ids=None):
                 if is_cancel_requested(batch_id) or circuit_breaker_tripped:
                     break
         
-        server_session.close()
+        # Note: Each worker creates and closes its own session internally
         
         # Handle circuit breaker or cancel situation
         if circuit_breaker_tripped or is_cancel_requested(batch_id):
@@ -1552,23 +1815,46 @@ def execute_migration(batch_id, record_ids=None):
         total_bytes_this_run = sum(r.get('stats', {}).get('total_bytes', 0) for r in results)
         total_files_this_run = sum(r.get('stats', {}).get('file_count', 0) for r in results)
         
-        # Now calculate CUMULATIVE statistics from database (all executed records)
+        # Now calculate statistics from database
+        # If record_ids provided (execute_selected), only count those records
+        # Otherwise count all executed records in the batch
         with misc_engine.begin() as con:
-            # Get cumulative stats from all executed records in this batch
-            cumulative = con.execute(text("""
-                SELECT 
-                    COUNT(*) as total_executed,
-                    SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                    SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-                    SUM(COALESCE(file_size_bytes, 0)) as total_bytes,
-                    SUM(DATEDIFF(MILLISECOND, execution_started_at, execution_completed_at)) / 1000.0 as total_execution_time
-                FROM dbo.migration_staging 
-                WHERE batch_id = :batch_id 
-                AND execution_status IN ('success', 'failed', 'partial')
-                AND execution_started_at IS NOT NULL
-                AND execution_completed_at IS NOT NULL
-            """), {'batch_id': batch_id}).fetchone()
+            # Build SQL with optional record_ids filter
+            if record_ids:
+                # Execute selected mode - only count the selected records
+                record_ids_str = ','.join(str(id) for id in record_ids)
+                stats_sql = f"""
+                    SELECT 
+                        COUNT(*) as total_executed,
+                        SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
+                        SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                        SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+                        SUM(CAST(COALESCE(file_size_bytes, 0) AS BIGINT)) as total_bytes,
+                        SUM(DATEDIFF(MILLISECOND, execution_started_at, execution_completed_at)) / 1000.0 as total_execution_time
+                    FROM dbo.migration_staging 
+                    WHERE batch_id = :batch_id 
+                    AND id IN ({record_ids_str})
+                    AND execution_status IN ('success', 'failed', 'partial')
+                    AND execution_started_at IS NOT NULL
+                    AND execution_completed_at IS NOT NULL
+                """
+            else:
+                # Full batch execution - count all executed records
+                stats_sql = """
+                    SELECT 
+                        COUNT(*) as total_executed,
+                        SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
+                        SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                        SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+                        SUM(CAST(COALESCE(file_size_bytes, 0) AS BIGINT)) as total_bytes,
+                        SUM(DATEDIFF(MILLISECOND, execution_started_at, execution_completed_at)) / 1000.0 as total_execution_time
+                    FROM dbo.migration_staging 
+                    WHERE batch_id = :batch_id 
+                    AND execution_status IN ('success', 'failed', 'partial')
+                    AND execution_started_at IS NOT NULL
+                    AND execution_completed_at IS NOT NULL
+                """
+            cumulative = con.execute(text(stats_sql), {'batch_id': batch_id}).fetchone()
         
         # Use cumulative stats from database
         total_executed = cumulative[0] or 0
@@ -1592,11 +1878,17 @@ def execute_migration(batch_id, record_ids=None):
         throughput_mb_per_min = (total_mb / real_duration * 60) if real_duration > 0 else 0
         total_files = total_executed  # Approximation - 1 file per document on average
         
+        # Determine final status based on results
+        if cumulative_failed + cumulative_partial > 0:
+            final_status = 'completed_with_errors'
+        else:
+            final_status = 'completed'
+        
         # Update batch with CUMULATIVE statistics
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_batch
-                SET status = 'completed',
+                SET status = '{final_status}',
                     executed_records = {total_executed},
                     successful_records = {cumulative_success},
                     failed_records = {cumulative_failed + cumulative_partial}
@@ -1781,7 +2073,11 @@ def execute_migration(batch_id, record_ids=None):
                 WHERE batch_id = '{batch_id}'
             """))
         
-        print(f"[DONE] Batch {batch_id}: ✓{cumulative_success} ✗{cumulative_failed} ⚠{cumulative_partial} | {batch_stats['batch_duration_formatted']} | {throughput_mb_per_min:.1f}MB/min")
+        # Print final summary - differentiate between full batch and selected records
+        if record_ids:
+            print(f"[DONE] Selected {len(record_ids)} records: ✓{cumulative_success} ✗{cumulative_failed} ⚠{cumulative_partial} | {batch_stats['batch_duration_formatted']} | {throughput_mb_per_min:.1f}MB/min")
+        else:
+            print(f"[DONE] Batch {batch_id}: ✓{cumulative_success} ✗{cumulative_failed} ⚠{cumulative_partial} | {batch_stats['batch_duration_formatted']} | {throughput_mb_per_min:.1f}MB/min")
         
         # Release the lock
         clear_migration_lock(batch_id)

@@ -90,13 +90,13 @@ def test_api_structure_route():
     server_session = req_lib.Session()
     prepare_session_headers(server_session, session, read_sap_system)
     
-    # Make test request
+    # Make test request - accept query params for custom document lookup
     base_url = cfg.get(read_sap_system, "api_list", "document", "base_url")
     test_params = {
-        "Documentnumber": "0000000000000010002159971",
-        "Documentpart": "000",
-        "Documenttype": "IY1",
-        "Documentversion": "00"
+        "Documentnumber": request.args.get('doknr', "0000000000000010002159971"),
+        "Documentpart": request.args.get('part', "000"),
+        "Documenttype": request.args.get('type', "IY1"),
+        "Documentversion": request.args.get('version', "00")
     }
     formatted_args = ",".join(f"{key}='{value}'" for key, value in test_params.items())
     request_url = f"{base_url}/DocumentSet({formatted_args})?$expand=DocumentfilesSet"
@@ -732,6 +732,115 @@ def fetch_batch_metadata(batch_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@migrate_bp.route('/batch/<batch_id>/apply-rules', methods=['POST'])
+def apply_batch_rules(batch_id):
+    """Apply migration rules to all records in a batch.
+    This updates target_documenttype, authorization_group, etc. based on configured rules."""
+    try:
+        from app.prepare import load_translations
+        
+        # Load all active rules
+        rules = load_translations()
+        if not rules:
+            return jsonify({'success': True, 'updated': 0, 'rules_applied': 0, 'message': 'No active rules found'})
+        
+        # Get all records for this batch
+        with misc_engine.begin() as con:
+            records = con.execute(text("""
+                SELECT id, source_documenttype, source_documentnumber, source_documentversion, 
+                       source_documentpart, source_description, authorization_group,
+                       source_dokob, source_objky, filename,
+                       target_documenttype, target_documentnumber, target_documentversion,
+                       target_documentpart, target_dokob, target_objky
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+        
+        if not records:
+            return jsonify({'success': True, 'updated': 0, 'message': 'No records in batch'})
+        
+        # Convert to DataFrame for rule application
+        import pandas as pd
+        columns = ['id', 'source_documenttype', 'source_documentnumber', 'source_documentversion',
+                   'source_documentpart', 'source_description', 'authorization_group',
+                   'source_dokob', 'source_objky', 'filename',
+                   'target_documenttype', 'target_documentnumber', 'target_documentversion',
+                   'target_documentpart', 'target_dokob', 'target_objky']
+        df = pd.DataFrame(records, columns=columns)
+        
+        # Initialize target columns from source if not set
+        if 'target_documenttype' not in df.columns or df['target_documenttype'].isna().all():
+            df['target_documenttype'] = df['source_documenttype']
+        
+        # Apply each rule
+        rules_applied = 0
+        for rule in rules:
+            rtype = (rule.get('rule_type') or 'translation').lower()
+            source_col = rule.get('source_column')
+            target_col = rule.get('target_column')
+            source_val = rule.get('source_value')
+            target_val = rule.get('target_value')
+            
+            if not target_col or target_val is None:
+                continue
+            
+            # Ensure target column exists
+            if target_col not in df.columns:
+                df[target_col] = None
+            
+            # Build mask
+            if rtype == 'translation' and source_col and source_col in df.columns and source_val:
+                mask = df[source_col].astype(str).str.contains(str(source_val), case=False, na=False)
+                df.loc[mask, target_col] = target_val
+                matched = mask.sum()
+                if matched > 0:
+                    rules_applied += 1
+                    print(f"[RULE] {source_col}={source_val} -> {target_col}={target_val}: {matched} records")
+            elif rtype == 'overwrite':
+                # Overwrite all records
+                df[target_col] = target_val
+                rules_applied += 1
+                print(f"[RULE] Overwrite {target_col}={target_val}: all records")
+        
+        # Update database
+        updated = 0
+        with misc_engine.begin() as con:
+            for _, row in df.iterrows():
+                con.execute(text("""
+                    UPDATE dbo.migration_staging
+                    SET target_documenttype = :target_documenttype,
+                        target_documentnumber = :target_documentnumber,
+                        target_documentversion = :target_documentversion,
+                        target_documentpart = :target_documentpart,
+                        authorization_group = :authorization_group,
+                        target_dokob = :target_dokob,
+                        target_objky = :target_objky
+                    WHERE id = :id
+                """), {
+                    'id': row['id'],
+                    'target_documenttype': row.get('target_documenttype'),
+                    'target_documentnumber': row.get('target_documentnumber'),
+                    'target_documentversion': row.get('target_documentversion'),
+                    'target_documentpart': row.get('target_documentpart'),
+                    'authorization_group': row.get('authorization_group'),
+                    'target_dokob': row.get('target_dokob'),
+                    'target_objky': row.get('target_objky')
+                })
+                updated += 1
+        
+        return jsonify({
+            'success': True, 
+            'updated': updated, 
+            'rules_applied': rules_applied,
+            'message': f'{updated} records updated with {rules_applied} rules'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @migrate_bp.route('/batch/<batch_id>/fetch-metadata-stream', methods=['GET'])
 def fetch_batch_metadata_stream(batch_id):
     """SSE streaming endpoint for fetching file metadata from DIL database.
@@ -964,6 +1073,388 @@ def fetch_batch_metadata_stream(batch_id):
     })
 
 
+@migrate_bp.route('/batch/<batch_id>/refresh-data-stream', methods=['GET'])
+def refresh_batch_data_stream(batch_id):
+    """SSE streaming endpoint that combines:
+    1. Fetch metadata (LOIO, file sizes) from DIL
+    2. Fetch filenames from DIL.DRAW (for file extension workaround)
+    3. Apply migration rules
+    
+    This replaces the separate 'Fetch Metadata' and 'Apply Rules' buttons.
+    """
+    
+    def generate():
+        try:
+            from app_config import DilEngine
+            from app.prepare import load_translations
+            
+            dil_db = DilEngine.load()
+            dil_engine = dil_db.engine
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Loading batch records...'})}\n\n"
+            
+            # Get all records for this batch
+            query = f"""
+                SELECT id, source_documentnumber, source_documentpart, source_documenttype, source_documentversion,
+                       file_size_bytes, source_loioid, filename
+                FROM dbo.migration_staging
+                WHERE batch_id = '{batch_id}'
+                  AND skip_migration = 0
+            """
+            
+            with misc_engine.begin() as con:
+                df = pd.read_sql(query, con)
+            
+            if len(df) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No records found'})}\n\n"
+                return
+            
+            total_records = int(len(df))
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'init', 'total': total_records, 'percent': 5, 'message': f'Found {total_records} records'})}\n\n"
+            
+            # ========== PHASE 1: LOIO Lookup ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'loio', 'message': 'Phase 1/4: Looking up LOIO_IDs from DIL...'})}\n\n"
+            
+            # Build conditions for batch lookup - VECTORIZED approach
+            df['dokvr_padded'] = df['source_documentversion'].astype(str).str.zfill(2)
+            df['doktl_padded'] = df['source_documentpart'].astype(str).str.zfill(3)
+            df['doknr_escaped'] = df['source_documentnumber'].astype(str).str.replace("'", "''", regex=False)
+            df['dokar_escaped'] = df['source_documenttype'].astype(str).str.replace("'", "''", regex=False)
+            
+            conditions = (
+                "(DOKNR='" + df['doknr_escaped'] + 
+                "' AND DOKAR='" + df['dokar_escaped'] + 
+                "' AND DOKVR='" + df['dokvr_padded'] + 
+                "' AND DOKTL='" + df['doktl_padded'] + "')"
+            ).tolist()
+            
+            df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
+            
+            # Query LOIO_IDs in chunks
+            chunk_size = 200
+            all_loios = []
+            
+            for i in range(0, len(conditions), chunk_size):
+                chunk = conditions[i:i + chunk_size]
+                where_clause = " OR ".join(chunk)
+                loio_query = f"""
+                    SELECT DOKNR, DOKAR, DOKVR, DOKTL, LO_OBJID
+                    FROM DIL.DMS_DOC2LOIO
+                    WHERE MANDT = '100'
+                    AND ({where_clause})
+                """
+                with dil_engine.begin() as con:
+                    chunk_df = pd.read_sql(loio_query, con)
+                all_loios.append(chunk_df)
+                
+                if i % 500 == 0:
+                    pct = 5 + int((i / len(conditions)) * 15)  # 5-20%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'percent': pct, 'message': f'LOIO lookup: {i}/{len(conditions)}'})}\n\n"
+            
+            loio_df = pd.DataFrame()
+            if all_loios and not all(len(c) == 0 for c in all_loios):
+                loio_df = pd.concat(all_loios, ignore_index=True)
+                loio_df.columns = [c.lower() for c in loio_df.columns]
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'percent': 20, 'message': f'Found {len(loio_df)} LOIO_IDs'})}\n\n"
+            
+            # ========== PHASE 2: File Size Lookup ==========
+            loio_ids = loio_df['lo_objid'].dropna().unique().tolist() if len(loio_df) > 0 else []
+            total_size_records = 0
+            size_df = pd.DataFrame()
+            
+            if loio_ids:
+                yield f"data: {json.dumps({'type': 'status', 'phase': 'size', 'message': f'Phase 2/4: Looking up file sizes for {len(loio_ids)} LOIOs...'})}\n\n"
+                
+                all_sizes = []
+                chunk_size = 500
+                
+                for i in range(0, len(loio_ids), chunk_size):
+                    chunk = loio_ids[i:i + chunk_size]
+                    placeholders = ",".join([f"'{lid}'" for lid in chunk])
+                    size_query = f"""
+                        SELECT LOIO_ID, FILE_SIZE, FILE_NAME
+                        FROM DIL.DMS_FILE_SIZE
+                        WHERE LOIO_ID IN ({placeholders})
+                    """
+                    with dil_engine.begin() as con:
+                        chunk_df = pd.read_sql(size_query, con)
+                    all_sizes.append(chunk_df)
+                    
+                    if i % 1000 == 0:
+                        pct = 20 + int((i / len(loio_ids)) * 15)  # 20-35%
+                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'size', 'percent': pct, 'message': f'File sizes: {i}/{len(loio_ids)}'})}\n\n"
+                
+                total_size_records = sum(len(c) for c in all_sizes)
+                if total_size_records > 0:
+                    size_df = pd.concat(all_sizes, ignore_index=True)
+                    size_df.columns = [c.lower() for c in size_df.columns]
+                    size_df = size_df.sort_values('file_size', ascending=False).drop_duplicates(subset=['loio_id'], keep='first')
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'size', 'percent': 35, 'message': f'Found {total_size_records} file sizes'})}\n\n"
+            
+            # ========== PHASE 3: Filename Lookup from DRAW ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'draw', 'message': 'Phase 3/4: Looking up filenames from DIL.DRAW...'})}\n\n"
+            
+            # Build document keys for DRAW lookup
+            doc_keys = []
+            for _, row in df.iterrows():
+                doknr = str(row['source_documentnumber'])
+                dokar = str(row['source_documenttype'])
+                dokvr = str(row['source_documentversion']).zfill(2)
+                doktl = str(row['source_documentpart']).zfill(3)
+                doc_keys.append((doknr.replace("'", "''"), dokar.replace("'", "''"), dokvr, doktl))
+            
+            all_filenames = []
+            chunk_size = 300
+            
+            for i in range(0, len(doc_keys), chunk_size):
+                chunk = doc_keys[i:i + chunk_size]
+                conditions_draw = [
+                    f"(doknr = '{k[0]}' AND dokar = '{k[1]}' AND dokvr = '{k[2]}' AND doktl = '{k[3]}')"
+                    for k in chunk
+                ]
+                where_clause = " OR ".join(conditions_draw)
+                
+                draw_query = f"""
+                    SELECT doknr, dokar, dokvr, doktl, filep
+                    FROM dil.DRAW
+                    WHERE {where_clause}
+                """
+                with dil_engine.begin() as con:
+                    chunk_df = pd.read_sql(draw_query, con)
+                all_filenames.append(chunk_df)
+                
+                if i % 600 == 0:
+                    pct = 35 + int((i / len(doc_keys)) * 15)  # 35-50%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': pct, 'message': f'DRAW lookup: {i}/{len(doc_keys)}'})}\n\n"
+            
+            filename_df = pd.DataFrame()
+            filenames_found = 0
+            if all_filenames:
+                filename_df = pd.concat(all_filenames, ignore_index=True)
+                filename_df.columns = [c.lower() for c in filename_df.columns]
+                filenames_found = int(filename_df['filep'].notna().sum())
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': 50, 'message': f'Found {filenames_found} filenames from DRAW'})}\n\n"
+            
+            # ========== PHASE 4: Apply Rules ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'rules', 'message': 'Phase 4/4: Applying migration rules...'})}\n\n"
+            
+            rules = load_translations()
+            rules_applied = 0
+            
+            # Get full records for rule application
+            with misc_engine.begin() as con:
+                full_df = pd.read_sql(f"""
+                    SELECT id, source_documenttype, source_documentnumber, source_documentversion,
+                           source_documentpart, source_description, authorization_group,
+                           source_dokob, source_objky, filename,
+                           target_documenttype, target_documentnumber, target_documentversion,
+                           target_documentpart, target_dokob, target_objky
+                    FROM dbo.migration_staging
+                    WHERE batch_id = '{batch_id}'
+                """, con)
+            
+            # Initialize target columns from source if not set
+            if full_df['target_documenttype'].isna().all():
+                full_df['target_documenttype'] = full_df['source_documenttype']
+            
+            # Apply each rule
+            for rule in rules:
+                rtype = (rule.get('rule_type') or 'translation').lower()
+                source_col = rule.get('source_column')
+                target_col = rule.get('target_column')
+                source_val = rule.get('source_value')
+                target_val = rule.get('target_value')
+                
+                if not target_col or target_val is None:
+                    continue
+                
+                if target_col not in full_df.columns:
+                    full_df[target_col] = None
+                
+                if rtype == 'translation' and source_col and source_col in full_df.columns and source_val:
+                    mask = full_df[source_col].astype(str).str.contains(str(source_val), case=False, na=False)
+                    full_df.loc[mask, target_col] = target_val
+                    if mask.sum() > 0:
+                        rules_applied += 1
+                elif rtype == 'overwrite':
+                    full_df[target_col] = target_val
+                    rules_applied += 1
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
+            
+            # ========== MERGE AND UPDATE ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'update', 'message': 'Merging data and updating database...'})}\n\n"
+            
+            # Merge LOIO data with file sizes
+            if len(loio_df) > 0 and len(size_df) > 0:
+                loio_df = loio_df.merge(
+                    size_df[['loio_id', 'file_size', 'file_name']],
+                    how='left',
+                    left_on='lo_objid',
+                    right_on='loio_id'
+                )
+            elif len(loio_df) > 0:
+                loio_df['file_size'] = None
+                loio_df['file_name'] = None
+            
+            # Remove duplicates
+            if len(loio_df) > 0:
+                loio_df = loio_df.sort_values('file_size', ascending=False, na_position='last')
+                loio_df = loio_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+            
+            # Prepare merge with staging IDs
+            df_merged = df.copy()
+            if len(loio_df) > 0:
+                df_merged = df.merge(
+                    loio_df,
+                    how='left',
+                    left_on=['source_documentnumber', 'source_documenttype', 'dokvr_padded', 'doktl_padded'],
+                    right_on=['doknr', 'dokar', 'dokvr', 'doktl']
+                )
+                df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
+            
+            # Merge filenames from DRAW
+            if len(filename_df) > 0:
+                df_merged['_doknr'] = df_merged['source_documentnumber'].astype(str)
+                df_merged['_dokar'] = df_merged['source_documenttype'].astype(str)
+                df_merged['_dokvr'] = df_merged['source_documentversion'].astype(str).str.zfill(2)
+                df_merged['_doktl'] = df_merged['source_documentpart'].astype(str).str.zfill(3)
+                
+                df_merged = df_merged.merge(
+                    filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep']],
+                    how='left',
+                    left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
+                    right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
+                    suffixes=('', '_draw')
+                )
+                df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                                        'doknr_draw', 'dokar_draw', 'dokvr_draw', 'doktl_draw'],
+                               errors='ignore', inplace=True)
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 70, 'message': 'Preparing bulk update...'})}\n\n"
+            
+            # Prepare update data
+            update_data = []
+            for _, row in df_merged.iterrows():
+                staging_id = int(row['id'])
+                source_loioid = str(row.get('lo_objid', '')) if pd.notna(row.get('lo_objid')) else None
+                file_size_bytes = int(row.get('file_size')) if pd.notna(row.get('file_size')) else None
+                
+                # Filename: prefer DRAW.filep if available
+                draw_filename = str(row.get('filep', '')) if pd.notna(row.get('filep')) else None
+                dil_filename = str(row.get('file_name', '')) if pd.notna(row.get('file_name')) else None
+                filename = draw_filename or dil_filename
+                
+                update_data.append({
+                    'staging_id': staging_id,
+                    'source_loioid': source_loioid,
+                    'file_size_bytes': file_size_bytes,
+                    'filename': filename
+                })
+            
+            # Also get rule updates
+            rule_updates = {}
+            for _, row in full_df.iterrows():
+                rule_updates[int(row['id'])] = {
+                    'target_documenttype': row.get('target_documenttype'),
+                    'target_documentnumber': row.get('target_documentnumber'),
+                    'target_documentversion': row.get('target_documentversion'),
+                    'target_documentpart': row.get('target_documentpart'),
+                    'authorization_group': row.get('authorization_group'),
+                    'target_dokob': row.get('target_dokob'),
+                    'target_objky': row.get('target_objky')
+                }
+            
+            # Bulk update using temp table
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 75, 'message': 'Bulk updating via temp table...'})}\n\n"
+            
+            updated_count = 0
+            with misc_engine.begin() as con:
+                # Create temp table for metadata
+                con.execute(text("""
+                    IF OBJECT_ID('tempdb..#refresh_update') IS NOT NULL DROP TABLE #refresh_update;
+                    CREATE TABLE #refresh_update (
+                        staging_id INT PRIMARY KEY,
+                        source_loioid NVARCHAR(100),
+                        file_size_bytes BIGINT,
+                        filename NVARCHAR(500)
+                    );
+                """))
+                
+                # Insert metadata updates
+                update_df = pd.DataFrame(update_data)
+                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna()]
+                
+                if len(update_df) > 0:
+                    chunk_size = 900
+                    for i in range(0, len(update_df), chunk_size):
+                        chunk = update_df.iloc[i:i + chunk_size]
+                        chunk.to_sql('#refresh_update', con, if_exists='append', index=False, method='multi')
+                        
+                        if i % 5000 == 0:
+                            pct = 75 + int((i / len(update_df)) * 10)  # 75-85%
+                            yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': pct, 'message': f'Temp table: {i}/{len(update_df)}'})}\n\n"
+                    
+                    # Update metadata
+                    result = con.execute(text("""
+                        UPDATE s
+                        SET s.source_loioid = COALESCE(t.source_loioid, s.source_loioid),
+                            s.file_size_bytes = COALESCE(t.file_size_bytes, s.file_size_bytes),
+                            s.filename = CASE WHEN t.filename IS NOT NULL AND t.filename != 'None' AND t.filename != '' 
+                                              THEN t.filename ELSE s.filename END
+                        FROM dbo.migration_staging s
+                        INNER JOIN #refresh_update t ON s.id = t.staging_id
+                    """))
+                    updated_count = result.rowcount
+                
+                con.execute(text("DROP TABLE #refresh_update"))
+                
+                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': f'Updated {updated_count} metadata records'})}\n\n"
+                
+                # Update rule results
+                for staging_id, vals in rule_updates.items():
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET target_documenttype = :target_documenttype,
+                            target_documentnumber = :target_documentnumber,
+                            target_documentversion = :target_documentversion,
+                            target_documentpart = :target_documentpart,
+                            authorization_group = :authorization_group,
+                            target_dokob = :target_dokob,
+                            target_objky = :target_objky
+                        WHERE id = :id
+                    """), {
+                        'id': staging_id,
+                        'target_documenttype': vals.get('target_documenttype'),
+                        'target_documentnumber': vals.get('target_documentnumber'),
+                        'target_documentversion': vals.get('target_documentversion'),
+                        'target_documentpart': vals.get('target_documentpart'),
+                        'authorization_group': vals.get('authorization_group'),
+                        'target_dokob': vals.get('target_dokob'),
+                        'target_objky': vals.get('target_objky')
+                    })
+            
+            # Calculate statistics
+            total_bytes = size_df['file_size'].dropna().sum() if len(size_df) > 0 else 0
+            max_bytes = size_df['file_size'].dropna().max() if len(size_df) > 0 else 0
+            
+            # Convert numpy types to native Python types for JSON serialization
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    })
+
+
 @migrate_bp.route('/batch/<batch_id>/progress', methods=['GET'])
 def get_batch_progress(batch_id):
     """Get execution progress for a batch (for live polling during execution)."""
@@ -1029,10 +1520,12 @@ def get_batch_progress(batch_id):
 @migrate_bp.route('/batch/<batch_id>/preview-stats', methods=['GET'])
 def get_batch_preview_stats(batch_id):
     """Get aggregated statistics for batch preview (computed on DB level for performance).
-    Returns counts and file size buckets without loading all records."""
+    Returns counts and file size buckets without loading all records.
+    Buckets only count non-success records (pending/failed/partial) for runtime estimation."""
     try:
         # Aggregate stats in single SQL query - much faster than loading all records
         # Use CAST to BIGINT for file_size_bytes to avoid integer overflow on large batches
+        # Buckets only count non-success records for accurate runtime estimation
         query = text("""
             SELECT 
                 COUNT(*) as total_records,
@@ -1040,13 +1533,15 @@ def get_batch_preview_stats(batch_id):
                 SUM(CASE WHEN execution_status = 'pending' THEN 1 ELSE 0 END) as pending_count,
                 SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
                 SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-                SUM(CASE WHEN file_size_bytes IS NULL OR file_size_bytes = 0 THEN 1 ELSE 0 END) as unknown_size_count,
-                SUM(CASE WHEN file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
-                SUM(CASE WHEN file_size_bytes > 1048576 AND file_size_bytes <= 10485760 THEN 1 ELSE 0 END) as small_count,
-                SUM(CASE WHEN file_size_bytes > 10485760 AND file_size_bytes <= 52428800 THEN 1 ELSE 0 END) as medium_count,
-                SUM(CASE WHEN file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
-                SUM(CAST(CASE WHEN file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
-                MAX(file_size_bytes) as max_file_size
+                -- Buckets count only non-success records for runtime estimation
+                SUM(CASE WHEN execution_status != 'success' AND (file_size_bytes IS NULL OR file_size_bytes = 0) THEN 1 ELSE 0 END) as unknown_size_count,
+                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
+                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 1048576 AND file_size_bytes <= 10485760 THEN 1 ELSE 0 END) as small_count,
+                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 10485760 AND file_size_bytes <= 52428800 THEN 1 ELSE 0 END) as medium_count,
+                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
+                -- Total size also only for non-success records
+                SUM(CAST(CASE WHEN execution_status != 'success' AND file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
+                MAX(CASE WHEN execution_status != 'success' THEN file_size_bytes ELSE 0 END) as max_file_size
             FROM dbo.migration_staging
             WHERE batch_id = :batch_id
         """)
@@ -1057,15 +1552,18 @@ def get_batch_preview_stats(batch_id):
         if not result or result.total_records == 0:
             return jsonify({'success': False, 'error': 'Batch not found or empty'}), 404
         
-        # Calculate pending (non-success) for runtime estimation
-        pending_count = (result.total_records or 0) - (result.success_count or 0)
+        # Use actual pending count from DB (records with execution_status = 'pending')
+        actual_pending_count = result.pending_count or 0
+        # Also calculate "to execute" count (all non-success = pending + failed + partial)
+        to_execute_count = (result.total_records or 0) - (result.success_count or 0)
         
         return jsonify({
             'success': True,
             'stats': {
                 'total': result.total_records or 0,
                 'success': result.success_count or 0,
-                'pending': pending_count,
+                'pending': actual_pending_count,  # Real pending from DB
+                'to_execute': to_execute_count,   # All non-success (for runtime estimation)
                 'failed': result.failed_count or 0,
                 'partial': result.partial_count or 0,
                 'buckets': {
@@ -1084,6 +1582,43 @@ def get_batch_preview_stats(batch_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@migrate_bp.route('/batch/<batch_id>/error-categories', methods=['GET'])
+def get_batch_error_categories(batch_id):
+    """Get distinct error categories for a batch with counts.
+    
+    Reads directly from migration_staging.error_category column.
+    """
+    try:
+        categories_dict = {}
+        
+        with misc_engine.connect() as con:
+            # Get categories directly from staging table (covers all cases)
+            result = con.execute(text("""
+                SELECT error_category, COUNT(*) as cnt
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+                    AND execution_status = 'failed'
+                    AND error_category IS NOT NULL
+                GROUP BY error_category
+                ORDER BY cnt DESC
+            """), {'batch_id': batch_id}).fetchall()
+            
+            for row in result:
+                categories_dict[row[0]] = row[1]
+        
+        # Convert to list sorted by count
+        categories = [{'category': cat, 'count': cnt} for cat, cnt in categories_dict.items()]
+        categories.sort(key=lambda x: -x['count'])
+        
+        return jsonify({
+            'success': True,
+            'categories': categories
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @migrate_bp.route('/batch/<batch_id>/records', methods=['GET'])
 def get_batch_records(batch_id):
     """Get staging records for a batch with optional pagination for large datasets.
@@ -1092,85 +1627,100 @@ def get_batch_records(batch_id):
         page: Page number (1-based), default=1
         per_page: Records per page, default=5000 (0 = all records)
         status_filter: Filter by execution_status (optional)
+        error_category: Filter by error category (applied in Python after dynamic classification)
     """
     try:
         # Parse pagination params
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 5000, type=int)  # Default 5000 for large batches
         status_filter = request.args.get('status_filter', '')
+        error_category_filter = request.args.get('error_category', '')
         
-        # Build WHERE clause
-        where_conditions = [f"batch_id = '{batch_id}'"]
+        # Build WHERE clause with ms. prefix for JOIN
+        where_conditions = [f"ms.batch_id = '{batch_id}'"]
         if status_filter:
-            where_conditions.append(f"execution_status = '{status_filter}'")
+            where_conditions.append(f"ms.execution_status = '{status_filter}'")
+        # If filtering by error_category, filter by failed status AND the category in staging table
+        if error_category_filter:
+            where_conditions.append("ms.execution_status = 'failed'")
+            where_conditions.append(f"ms.error_category = '{error_category_filter}'")
         where_clause = " AND ".join(where_conditions)
         
-        # First get total count
-        count_query = f"SELECT COUNT(*) FROM dbo.migration_staging WHERE {where_clause}"
+        # First get total count (with all filters applied)
+        count_conditions = [f"ms.batch_id = '{batch_id}'"]
+        if status_filter:
+            count_conditions.append(f"ms.execution_status = '{status_filter}'")
+        if error_category_filter:
+            count_conditions.append("ms.execution_status = 'failed'")
+            count_conditions.append(f"ms.error_category = '{error_category_filter}'")
+        count_query = "SELECT COUNT(*) FROM dbo.migration_staging ms WHERE " + " AND ".join(count_conditions)
         
         # Build paginated query using OFFSET/FETCH for SQL Server
+        # Use ms.error_category from staging table (set during execution)
         if per_page > 0:
             offset = (page - 1) * per_page
             query = f"""
                 SELECT 
-                    id,
-                    source_documentnumber,
-                    source_documentpart,
-                    source_documenttype,
-                    source_documentversion,
-                    source_loioid,
-                    source_description,
-                    source_dokob,
-                    source_objky,
-                    target_documentnumber,
-                    target_documentpart,
-                    target_documenttype,
-                    target_documentversion,
-                    filename,
-                    file_size_bytes,
-                    mime_type,
-                    authorization_group,
-                    validation_status,
-                    validation_notes,
-                    execution_status,
-                    execution_error,
-                    user_approved,
-                    skip_migration
-                FROM dbo.migration_staging
+                    ms.id,
+                    ms.source_documentnumber,
+                    ms.source_documentpart,
+                    ms.source_documenttype,
+                    ms.source_documentversion,
+                    ms.source_loioid,
+                    ms.source_description,
+                    ms.source_dokob,
+                    ms.source_objky,
+                    ms.target_documentnumber,
+                    ms.target_documentpart,
+                    ms.target_documenttype,
+                    ms.target_documentversion,
+                    ms.filename,
+                    ms.file_size_bytes,
+                    ms.mime_type,
+                    ms.authorization_group,
+                    ms.validation_status,
+                    ms.validation_notes,
+                    ms.execution_status,
+                    ms.execution_error,
+                    ms.user_approved,
+                    ms.skip_migration,
+                    ms.error_category
+                FROM dbo.migration_staging ms
                 WHERE {where_clause}
-                ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
+                ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
                 OFFSET {offset} ROWS FETCH NEXT {per_page} ROWS ONLY
             """
         else:
             # per_page=0 means get all records (for backwards compatibility)
             query = f"""
                 SELECT 
-                    id,
-                    source_documentnumber,
-                    source_documentpart,
-                    source_documenttype,
-                    source_documentversion,
-                    source_loioid,
-                    source_description,
-                    source_dokob,
-                    source_objky,
-                    target_documentnumber,
-                    target_documentpart,
-                    target_documenttype,
-                    target_documentversion,
-                    filename,
-                    file_size_bytes,
-                    mime_type,
-                    authorization_group,
-                    validation_status,
-                    validation_notes,
-                    execution_status,
-                    execution_error,
-                    user_approved,
-                    skip_migration
-                FROM dbo.migration_staging
+                    ms.id,
+                    ms.source_documentnumber,
+                    ms.source_documentpart,
+                    ms.source_documenttype,
+                    ms.source_documentversion,
+                    ms.source_loioid,
+                    ms.source_description,
+                    ms.source_dokob,
+                    ms.source_objky,
+                    ms.target_documentnumber,
+                    ms.target_documentpart,
+                    ms.target_documenttype,
+                    ms.target_documentversion,
+                    ms.filename,
+                    ms.file_size_bytes,
+                    ms.mime_type,
+                    ms.authorization_group,
+                    ms.validation_status,
+                    ms.validation_notes,
+                    ms.execution_status,
+                    ms.execution_error,
+                    ms.user_approved,
+                    ms.skip_migration,
+                    ms.error_category
+                FROM dbo.migration_staging ms
                 WHERE {where_clause}
-                ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
+                ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
             """
         
         with misc_engine.begin() as con:
@@ -1180,8 +1730,32 @@ def get_batch_records(batch_id):
         # Convert to JSON-safe records (handles NaN/NaT properly)
         records = df_to_json_safe(df)
         
+        # If error_category is NULL but execution_error exists, classify dynamically
+        from app.process import _classify_error
+        for record in records:
+            if not record.get('error_category') and record.get('execution_error'):
+                try:
+                    error_str = record['execution_error']
+                    if isinstance(error_str, str):
+                        import json
+                        try:
+                            error_info = json.loads(error_str)
+                        except:
+                            # Legacy format like "Error during getinfo: unexpexted Error"
+                            error_info = {'status_code': error_str, 'reason': error_str}
+                    else:
+                        error_info = error_str
+                    record['error_category'] = _classify_error(error_info)
+                except:
+                    record['error_category'] = 'UNKNOWN'
+        
+        # Apply error_category filter in Python (after dynamic classification)
+        if error_category_filter:
+            records = [r for r in records if r.get('error_category') == error_category_filter]
+        
         # Calculate pagination info
-        total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 1
+        filtered_count = len(records) if error_category_filter else total_count
+        total_pages = (filtered_count + per_page - 1) // per_page if per_page > 0 else 1
         
         return jsonify({
             'success': True, 
@@ -1189,7 +1763,7 @@ def get_batch_records(batch_id):
             'pagination': {
                 'page': page,
                 'per_page': per_page,
-                'total': total_count,
+                'total': filtered_count,
                 'total_pages': total_pages,
                 'has_next': page < total_pages,
                 'has_prev': page > 1
@@ -1412,6 +1986,125 @@ def skip_records():
             'updated': updated_count,
             'skip': skip,
             'reason': reason
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/error_overview', methods=['GET'])
+def get_error_overview():
+    """Get overview of all errors grouped by category for dashboard display."""
+    try:
+        from app.process import get_error_details
+        
+        with misc_engine.connect() as con:
+            # Get error counts grouped by category across all batches
+            result = con.execute(text("""
+                SELECT 
+                    fd.error_category,
+                    COUNT(*) as cnt
+                FROM dbo.migration_file_details fd
+                INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
+                WHERE fd.upload_status NOT LIKE 'SUCCESS%'
+                    AND ms.execution_status = 'failed'
+                    AND ms.skip_migration = 0
+                    AND fd.error_category IS NOT NULL
+                GROUP BY fd.error_category
+                ORDER BY cnt DESC
+            """)).fetchall()
+            
+            errors = []
+            total = 0
+            for row in result:
+                cat, cnt = row
+                total += cnt
+                errors.append({
+                    'category': cat,
+                    'count': cnt
+                })
+        
+        return jsonify({
+            'success': True,
+            'errors': errors,
+            'total_errors': total
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/retry_by_category', methods=['POST'])
+def retry_by_category():
+    """Reset and retry all failed records with a specific error category."""
+    try:
+        data = request.get_json()
+        category = data.get('category')
+        
+        if not category:
+            return jsonify({'success': False, 'error': 'Category required'}), 400
+        
+        # Get staging IDs with this error category
+        with misc_engine.begin() as con:
+            # Find staging_ids from file_details with this category
+            result = con.execute(text("""
+                SELECT DISTINCT fd.staging_id
+                FROM dbo.migration_file_details fd
+                INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
+                WHERE fd.error_category = :category
+                    AND ms.execution_status = 'failed'
+                    AND ms.skip_migration = 0
+            """), {'category': category}).fetchall()
+            
+            staging_ids = [row[0] for row in result]
+            
+            if not staging_ids:
+                return jsonify({'success': True, 'reset_count': 0, 'message': 'No records to retry'})
+            
+            ids_str = ','.join(str(id) for id in staging_ids)
+            
+            # Reset these staging records to pending
+            con.execute(text(f"""
+                UPDATE dbo.migration_staging
+                SET execution_status = 'pending',
+                    execution_error = NULL,
+                    execution_started_at = NULL,
+                    execution_completed_at = NULL
+                WHERE id IN ({ids_str})
+            """))
+            
+            reset_count = len(staging_ids)
+        
+        return jsonify({
+            'success': True,
+            'reset_count': reset_count,
+            'message': f'{reset_count} records with category {category} reset to pending'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/retry_all_errors', methods=['POST'])
+def retry_all_errors():
+    """Reset all failed records across all batches."""
+    try:
+        with misc_engine.begin() as con:
+            result = con.execute(text("""
+                UPDATE dbo.migration_staging
+                SET execution_status = 'pending',
+                    execution_error = NULL,
+                    execution_started_at = NULL,
+                    execution_completed_at = NULL
+                WHERE execution_status = 'failed'
+                    AND skip_migration = 0
+            """))
+            reset_count = result.rowcount
+        
+        return jsonify({
+            'success': True,
+            'reset_count': reset_count,
+            'message': f'{reset_count} failed records reset to pending'
         })
         
     except Exception as e:
@@ -1697,6 +2390,8 @@ def update_migration_rule(rule_id):
         # Ensure schema has latest columns (rule_type, condition_*)
         init_staging_tables(misc_engine)
         data = request.get_json()
+        source_column = (data.get('source_column') or '').strip()
+        target_column = (data.get('target_column') or '').strip()
         target_value = data.get('target_value', '')  # Allow empty string, only check for None
         notes = data.get('notes', '').strip()
         condition_column = (data.get('condition_column') or '').strip()
@@ -1709,7 +2404,9 @@ def update_migration_rule(rule_id):
         
         update_query = text("""
             UPDATE dbo.migration_translations
-            SET target_value = :target_value,
+            SET source_column = :source_column,
+                target_column = :target_column,
+                target_value = :target_value,
                 condition_column = :condition_column,
                 condition_value = :condition_value,
                 condition_operator = :condition_operator,
@@ -1720,6 +2417,8 @@ def update_migration_rule(rule_id):
         
         with misc_engine.begin() as con:
             con.execute(update_query, {
+                'source_column': source_column or None,
+                'target_column': target_column or None,
                 'target_value': target_value,
                 'condition_column': condition_column or None,
                 'condition_value': condition_value or None,

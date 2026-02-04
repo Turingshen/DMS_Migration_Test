@@ -341,6 +341,25 @@ def _classify_error(err_info):
     
     # === BAD REQUEST ===
     if code == 400:
+        # Fehlende Mappings erkennen (Dokumentart, Werk, etc. nicht vorhanden)
+        if 'nicht vorhanden' in detail or 'not found' in detail or 'does not exist' in detail:
+            if 'dokumentart' in detail or 'document type' in detail:
+                return 'MAPPING_DOCTYPE_MISSING'
+            if 'werk' in detail or 'plant' in detail:
+                return 'MAPPING_PLANT_MISSING'
+            if 'material' in detail:
+                return 'MAPPING_MATERIAL_MISSING'
+            if 'equipment' in detail or 'equi' in detail:
+                return 'MAPPING_EQUIPMENT_MISSING'
+            return 'MAPPING_MISSING'
+        # Ungültiges Dateiformat / fehlende Extension
+        if 'anlagenformat' in detail or 'erweiterung' in detail or 'file format' in detail or 'file extension' in detail:
+            return 'VALIDATION_FILETYPE_UNKNOWN'
+        # Fehlende Pflichtfelder
+        if 'mussfeld' in detail or 'pflichtfeld' in detail or 'required field' in detail:
+            if 'begru' in detail or 'berecht' in detail:
+                return 'VALIDATION_BEGRU_MISSING'
+            return 'VALIDATION_REQUIRED_FIELD'
         if 'validation' in detail or 'invalid' in detail:
             return 'VALIDATION_ERROR'
         return 'BAD_REQUEST'
@@ -403,6 +422,9 @@ def get_error_description(category):
         
         # Validation Issues
         'VALIDATION_ERROR': ('Validierungsfehler', 'Eingabedaten prüfen'),
+        'VALIDATION_REQUIRED_FIELD': ('Pflichtfeld fehlt', 'Quelldaten prüfen'),
+        'VALIDATION_BEGRU_MISSING': ('Berechtigungsgruppe fehlt', 'BEGRU in Quelldaten prüfen'),
+        'VALIDATION_FILETYPE_UNKNOWN': ('Dateityp unbekannt', 'Extension in DRAW.filep prüfen'),
         'BAD_REQUEST': ('Ungültige Anfrage (400)', 'Request prüfen'),
     }
     
@@ -443,6 +465,13 @@ def get_error_details(category):
         'TARGET_LOCKED': ('Objekt gesperrt', 'Sperre lösen'),
         'TARGET_NOT_FOUND': ('Zielobjekt nicht gefunden', 'Mapping prüfen'),
         
+        # Mapping Issues (Objekt im Zielsystem nicht vorhanden)
+        'MAPPING_MISSING': ('Stammdaten fehlen im Ziel', 'Mapping-Regel erstellen'),
+        'MAPPING_DOCTYPE_MISSING': ('Dokumentart fehlt im Ziel', 'Dokumenttyp-Mapping erstellen'),
+        'MAPPING_PLANT_MISSING': ('Werk fehlt im Zielsystem', 'Werk-Mapping prüfen'),
+        'MAPPING_MATERIAL_MISSING': ('Material fehlt im Ziel', 'Material-Mapping prüfen'),
+        'MAPPING_EQUIPMENT_MISSING': ('Equipment fehlt im Ziel', 'Equipment-Mapping prüfen'),
+        
         # Upload Issues
         'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 50MB pro Datei'),
         'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
@@ -457,6 +486,9 @@ def get_error_details(category):
         
         # Validation Issues
         'VALIDATION_ERROR': ('Validierungsfehler', 'Eingabedaten prüfen'),
+        'VALIDATION_REQUIRED_FIELD': ('Pflichtfeld fehlt', 'Quelldaten prüfen'),
+        'VALIDATION_BEGRU_MISSING': ('Berechtigungsgruppe fehlt', 'BEGRU in Quelldaten prüfen'),
+        'VALIDATION_FILETYPE_UNKNOWN': ('Dateityp unbekannt', 'Extension in DIL.DRAW.filep prüfen'),
         'BAD_REQUEST': ('Ungültige Anfrage (400)', 'Request prüfen'),
         
         # Unknown
@@ -929,12 +961,18 @@ async def async_process(input_data, session_snapshot):
 def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Documenttype='IY1', Documentversion='00'):
     """Get List of all attached Documents incl. Links.
     """
+    # Strip leading zeros from document number - SAP API requires this format
+    # e.g. '0000000000000010007841790' -> '10007841790'
+    clean_docnumber = Documentnumber.lstrip('0') if Documentnumber else Documentnumber
+    # Ensure at least one character remains if number was all zeros
+    if not clean_docnumber and Documentnumber:
+        clean_docnumber = '0'
     
-    api_args = {"Documentnumber":Documentnumber, "Documentpart":Documentpart, "Documenttype":Documenttype, "Documentversion":Documentversion}
+    api_args = {"Documentnumber":clean_docnumber, "Documentpart":Documentpart, "Documenttype":Documenttype, "Documentversion":Documentversion}
     formatted_args   = ",".join(f"{key}='{value}'" for key, value in api_args.items())
 
     base_url = cfg.get(sap_system, "api_list", "document", "base_url")
-    response = server_session.get(f"{base_url}/DocumentSet({formatted_args})?$expand=DocumentfilesSet" )   
+    response = server_session.get(f"{base_url}/DocumentSet({formatted_args})?$expand=DocumentfilesSet,ObjectlinksSet,DESCRIPTIONSSet" )   
     # print(f"{cfg.get(sap_system, "api_list", "document", 'base_url')}/DocumentSet({formatted_args})?$expand=DocumentfilesSet")
     doc_data = []
 
@@ -958,6 +996,45 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
             print(f'Response content: {response.content[:500]}...' if len(response.content) > 500 else f'Response content: {response.content}')
             return 200, 'PARSE_ERROR', []
         
+        # Extract ObjectlinksSet (DOKOB/OBJKY) from API response
+        object_links = []
+        try:
+            object_links_raw = full_raw['d'].get('ObjectlinksSet', {}).get('results', [])
+            for ol in object_links_raw:
+                if '__metadata' in ol:
+                    ol.pop('__metadata')
+                object_links.append(ol)
+        except (KeyError, TypeError, AttributeError):
+            pass  # ObjectlinksSet not available or empty
+        
+        # Extract DESCRIPTIONSSet (document descriptions in multiple languages)
+        descriptions = []
+        try:
+            descriptions_raw = full_raw['d'].get('DESCRIPTIONSSet', {}).get('results', [])
+            for desc in descriptions_raw:
+                if '__metadata' in desc:
+                    desc.pop('__metadata')
+                descriptions.append(desc)
+        except (KeyError, TypeError, AttributeError):
+            pass  # DESCRIPTIONSSet not available or empty
+        
+        # Get primary description (prefer German 'DE', fallback to English 'EN', then first available)
+        primary_description = None
+        if descriptions:
+            # Sort by language priority
+            for lang in ['DE', 'EN', 'D', 'E']:
+                for desc in descriptions:
+                    if desc.get('Languagecode', '').upper() == lang or desc.get('Language', '').upper() == lang:
+                        primary_description = desc.get('Dktxt') or desc.get('Description') or desc.get('DocumentDescription')
+                        if primary_description:
+                            break
+                if primary_description:
+                    break
+            # Fallback to first description if no language match
+            if not primary_description and descriptions:
+                first_desc = descriptions[0]
+                primary_description = first_desc.get('Dktxt') or first_desc.get('Description') or first_desc.get('DocumentDescription')
+        
         # list of documents
         for item in data:
             item.pop('__metadata')
@@ -969,8 +1046,16 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
                 if isinstance(cand_val, str) and cand_val.strip():
                     possible_desc = cand_val.strip()
                     break
+            # Use primary description from DESCRIPTIONSSet if available
+            if not possible_desc and primary_description:
+                possible_desc = primary_description
             if possible_desc:
                 item['DocumentDescription'] = possible_desc  # normalize
+            
+            # Inject ObjectlinksSet data into each file item for downstream use
+            item['_ObjectlinksSet'] = object_links
+            item['_DESCRIPTIONSSet'] = descriptions
+            
             doc_data.append(item)
         # print('doc_data:', json.dumps(doc_data, indent=4))
         return response.status_code, response.reason, doc_data

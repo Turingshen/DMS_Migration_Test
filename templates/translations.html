@@ -103,13 +103,31 @@
                     </div>
                     <div class="form-group">
                         <label for="sourceColumn">Source Column</label>
-                        <input type="text" class="form-control" id="sourceColumn"
-                               placeholder="e.g., authorization_group">
+                        <select class="form-control" id="sourceColumn">
+                            <option value="">-- Select --</option>
+                            <option value="source_documenttype">Document Type (source_documenttype)</option>
+                            <option value="source_documentnumber">Document Number (source_documentnumber)</option>
+                            <option value="source_documentversion">Document Version (source_documentversion)</option>
+                            <option value="source_documentpart">Document Part (source_documentpart)</option>
+                            <option value="source_description">Description (source_description)</option>
+                            <option value="authorization_group">Authorization Group (authorization_group)</option>
+                            <option value="source_dokob">Object Type (source_dokob)</option>
+                            <option value="source_objky">Object Key (source_objky)</option>
+                            <option value="filename">Filename (filename)</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="targetColumn">Target Column *</label>
-                        <input type="text" class="form-control" id="targetColumn" required 
-                               placeholder="e.g., authorization_group">
+                        <select class="form-control" id="targetColumn" required>
+                            <option value="">-- Select --</option>
+                            <option value="target_documenttype">Document Type (target_documenttype)</option>
+                            <option value="target_documentnumber">Document Number (target_documentnumber)</option>
+                            <option value="target_documentversion">Document Version (target_documentversion)</option>
+                            <option value="target_documentpart">Document Part (target_documentpart)</option>
+                            <option value="authorization_group">Authorization Group (authorization_group)</option>
+                            <option value="target_dokob">Object Type (target_dokob)</option>
+                            <option value="target_objky">Object Key (target_objky)</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="sourceValue">Source Value</label>
@@ -179,11 +197,31 @@
                     </div>
                     <div class="form-group">
                         <label>Source Column</label>
-                        <input type="text" class="form-control" id="editSourceColumn" disabled>
+                        <select class="form-control" id="editSourceColumn">
+                            <option value="">-- Select --</option>
+                            <option value="source_documenttype">Document Type (source_documenttype)</option>
+                            <option value="source_documentnumber">Document Number (source_documentnumber)</option>
+                            <option value="source_documentversion">Document Version (source_documentversion)</option>
+                            <option value="source_documentpart">Document Part (source_documentpart)</option>
+                            <option value="source_description">Description (source_description)</option>
+                            <option value="authorization_group">Authorization Group (authorization_group)</option>
+                            <option value="source_dokob">Object Type (source_dokob)</option>
+                            <option value="source_objky">Object Key (source_objky)</option>
+                            <option value="filename">Filename (filename)</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Target Column</label>
-                        <input type="text" class="form-control" id="editTargetColumn" disabled>
+                        <select class="form-control" id="editTargetColumn">
+                            <option value="">-- Select --</option>
+                            <option value="target_documenttype">Document Type (target_documenttype)</option>
+                            <option value="target_documentnumber">Document Number (target_documentnumber)</option>
+                            <option value="target_documentversion">Document Version (target_documentversion)</option>
+                            <option value="target_documentpart">Document Part (target_documentpart)</option>
+                            <option value="authorization_group">Authorization Group (authorization_group)</option>
+                            <option value="target_dokob">Object Type (target_dokob)</option>
+                            <option value="target_objky">Object Key (target_objky)</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Source Value</label>
@@ -435,6 +473,8 @@ function cloneRule(id) {
 function updateRule() {
     const id = $('#editRuleId').val();
     const data = {
+        source_column: $('#editSourceColumn').val(),
+        target_column: $('#editTargetColumn').val(),
         target_value: $('#editTargetValue').val(),  // Keep original value, don't trim to preserve empty strings
         condition_column: $('#editConditionColumn').val().trim(),
         condition_operator: $('#editConditionOperator').val().trim(),

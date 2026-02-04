@@ -83,6 +83,9 @@
                         <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Show/hide columns">
                             <i class="fas fa-columns"></i> Columns
                         </button>
+                        <button onclick="refreshData()" class="btn btn-info" id="refreshDataBtn" title="Fetch metadata, filenames and apply rules">
+                            <i class="fas fa-sync-alt"></i> Refresh Data
+                        </button>
                         <button onclick="excludeLargeFiles()" class="btn btn-warning" id="excludeLargeBtn" title="Exclude files larger than 50MB">
                             <i class="fas fa-ban"></i> Exclude >50MB
                         </button>
@@ -104,9 +107,6 @@
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
                             <i class="fas fa-redo"></i> Retry Failed
                         </button>
-                        <button onclick="fetchMetadata()" class="btn btn-info" id="fetchMetadataBtn" title="Fetch file sizes and metadata from SAP API">
-                            <i class="fas fa-download"></i> Fetch Metadata
-                        </button>
                     </div>
                 </div>
                 <div class="card-body">
@@ -115,11 +115,14 @@
                         <small id="filterInfo" class="text-muted" style="min-width: 180px; text-align: right;"></small>
                         <select id="statusFilter" class="form-select" style="width: auto;">
                             <option value="">Alle Status</option>
-                            <option value="pending">⏳ Pending</option>
-                            <option value="success">✅ Erfolgreich</option>
-                            <option value="failed">❌ Fehlgeschlagen</option>
-                            <option value="partial">⚠️ Teilweise</option>
+                            <option value="pending" id="statusPending">⏳ Pending</option>
+                            <option value="success" id="statusSuccess">✅ Erfolgreich</option>
+                            <option value="failed" id="statusFailed">❌ Fehlgeschlagen</option>
+                            <option value="partial" id="statusPartial">⚠️ Teilweise</option>
                             <option value="hide_completed">📋 Nur unbearbeitet</option>
+                        </select>
+                        <select id="errorCategoryFilter" class="form-select" style="width: auto;">
+                            <option value="">Alle Fehlerkategorien</option>
                         </select>
                     </div>
                     
@@ -139,8 +142,11 @@
                                     <th data-column="batch_id">Batch ID</th>
                                     <th data-column="source_doc">Source Doc</th>
                                     <th data-column="source_loioid">Source LOIO</th>
-                                    <th data-column="dokob">DOKOB</th>
-                                    <th data-column="objky">OBJKY</th>
+                                    <th data-column="dokob">Source DOKOB</th>
+                                    <th data-column="objky">Source OBJKY</th>
+                                    <th data-column="target_dokob">Target DOKOB</th>
+                                    <th data-column="target_objky">Target OBJKY</th>
+                                    <th data-column="target_type">Target Type</th>
                                     <th data-column="target_doc">Target Doc</th>
                                     <th data-column="type_info">Type/Ver/Part</th>
                                     <th data-column="description">Description</th>
@@ -149,6 +155,7 @@
                                     <th data-column="mime_type">MIME Type</th>
                                     <th data-column="auth_group">Auth Group</th>
                                     <th data-column="execution">Execution</th>
+                                    <th data-column="error_category">Error Category</th>
                                     <th data-column="created_at">Created At</th>
                                     <th data-column="created_by">Created By</th>
                                     <th data-column="exec_started">Exec Started</th>
@@ -238,6 +245,10 @@
                     <label class="form-check-label" for="col_execution">Execution Status</label>
                 </div>
                 <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_error_category" value="error_category" checked>
+                    <label class="form-check-label" for="col_error_category">Error Category</label>
+                </div>
+                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
                     <label class="form-check-label" for="col_batch_id">Batch ID</label>
                 </div>
@@ -247,11 +258,23 @@
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_dokob" value="dokob" checked>
-                    <label class="form-check-label" for="col_dokob">DOKOB</label>
+                    <label class="form-check-label" for="col_dokob">Source DOKOB</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_objky" value="objky" checked>
-                    <label class="form-check-label" for="col_objky">OBJKY</label>
+                    <label class="form-check-label" for="col_objky">Source OBJKY</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_dokob" value="target_dokob">
+                    <label class="form-check-label" for="col_target_dokob">Target DOKOB</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_objky" value="target_objky">
+                    <label class="form-check-label" for="col_target_objky">Target OBJKY</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_type" value="target_type">
+                    <label class="form-check-label" for="col_target_type">Target Type</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename">
@@ -307,6 +330,9 @@ let visibleColumns = {
     'source_loioid': false,
     'dokob': true,
     'objky': true,
+    'target_dokob': false,
+    'target_objky': false,
+    'target_type': false,
     'target_doc': true,
     'type_info': true,
     'description': true,
@@ -315,6 +341,7 @@ let visibleColumns = {
     'mime_type': false,
     'auth_group': true,
     'execution': true,
+    'error_category': true,
     'created_at': false,
     'created_by': false,
     'exec_started': false,
@@ -437,10 +464,35 @@ document.addEventListener('DOMContentLoaded', function() {
         applyFilters();
     });
     
-    // Status filter functionality
+    // Status filter functionality - reload from server with filter
     document.getElementById('statusFilter').addEventListener('change', function() {
-        applyFilters();
+        const status = this.value;
+        if (status && status !== 'hide_completed') {
+            // Server-side filter: reload with status filter to get all matching records
+            loadRecordsWithFilters(status, '');
+        } else if (status === 'hide_completed') {
+            // Client-side filter for hide_completed
+            applyFilters();
+        } else {
+            // No filter: reload default 100 records
+            loadRecords();
+        }
     });
+    
+    // Error category filter functionality - reload from server with filter
+    document.getElementById('errorCategoryFilter').addEventListener('change', function() {
+        const category = this.value;
+        if (category) {
+            // Server-side filter: reload with category filter to get all matching records
+            loadRecordsWithFilters('', category);
+        } else {
+            // No filter: reload default 100 records
+            loadRecords();
+        }
+    });
+    
+    // Load available error categories for filter dropdown
+    loadErrorCategories();
     
     // Select all checkbox
     document.getElementById('selectAllCheckbox').addEventListener('change', function() {
@@ -459,6 +511,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Current pacing setting from server
 let currentPacingSeconds = 0;
+
+// Load error categories for filter dropdown
+function loadErrorCategories() {
+    fetch(`/batch/${batchId}/error-categories`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.categories) {
+                const select = document.getElementById('errorCategoryFilter');
+                data.categories.forEach(cat => {
+                    const info = ERROR_CATEGORY_DETAILS[cat.category] || { desc: cat.category };
+                    const option = document.createElement('option');
+                    option.value = cat.category;
+                    option.textContent = `${info.desc} (${cat.count})`;
+                    select.appendChild(option);
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading error categories:', error);
+        });
+}
 
 function loadPacingSettings() {
     fetch('/settings/json')
@@ -484,11 +557,20 @@ function updatePacingDisplay() {
     }
 }
 
-function loadRecords() {
-    // Load statistics from server (aggregated - fast!) and only 100 records for preview
+function loadRecordsWithFilters(statusFilter = '', errorCategoryFilter = '') {
+    // Build query params with both filters
+    let recordsUrl = `/batch/${batchId}/records?per_page=500&page=1`;
+    if (statusFilter) {
+        recordsUrl += `&status_filter=${encodeURIComponent(statusFilter)}`;
+    }
+    if (errorCategoryFilter) {
+        recordsUrl += `&error_category=${encodeURIComponent(errorCategoryFilter)}`;
+    }
+    
+    // Load statistics from server (aggregated - fast!) and records
     Promise.all([
         fetch(`/batch/${batchId}/preview-stats`).then(r => r.json()),
-        fetch(`/batch/${batchId}/records?per_page=100&page=1`).then(r => r.json())
+        fetch(recordsUrl).then(r => r.json())
     ])
     .then(([statsData, recordsData]) => {
         if (!statsData.success) {
@@ -500,11 +582,65 @@ function loadRecords() {
             return;
         }
         
-        // Store preview records (only 100)
+        // Store records
         allRecords = recordsData.records;
         
-        // Display preview records
+        // Display records
         displayRecords(allRecords);
+        
+        // Update filter info
+        const filterInfo = document.getElementById('filterInfo');
+        const filterDesc = statusFilter ? statusFilter : (errorCategoryFilter ? errorCategoryFilter : '');
+        if (filterDesc) {
+            filterInfo.textContent = `Filter: ${filterDesc} (${allRecords.length} von ${recordsData.pagination?.total || allRecords.length})`;
+        } else {
+            filterInfo.textContent = `${allRecords.length} von ${recordsData.pagination?.total || allRecords.length} Datensätze`;
+        }
+        
+        // Update statistics from server-aggregated data
+        updateBatchStatisticsFromServer(statsData.stats, recordsData.pagination?.total || 0);
+    })
+    .catch(error => {
+        showError('Error loading records: ' + error);
+    });
+}
+
+function loadRecords(errorCategoryFilter = '') {
+    // Build query params
+    let recordsUrl = `/batch/${batchId}/records?per_page=100&page=1`;
+    if (errorCategoryFilter) {
+        // When filtering by error category, load up to 500 matching records
+        recordsUrl = `/batch/${batchId}/records?per_page=500&page=1&error_category=${encodeURIComponent(errorCategoryFilter)}`;
+    }
+    
+    // Load statistics from server (aggregated - fast!) and records
+    Promise.all([
+        fetch(`/batch/${batchId}/preview-stats`).then(r => r.json()),
+        fetch(recordsUrl).then(r => r.json())
+    ])
+    .then(([statsData, recordsData]) => {
+        if (!statsData.success) {
+            showError('Failed to load statistics: ' + statsData.error);
+            return;
+        }
+        if (!recordsData.success) {
+            showError('Failed to load records: ' + recordsData.error);
+            return;
+        }
+        
+        // Store records
+        allRecords = recordsData.records;
+        
+        // Display records
+        displayRecords(allRecords);
+        
+        // Update filter info
+        const filterInfo = document.getElementById('filterInfo');
+        if (errorCategoryFilter) {
+            filterInfo.textContent = `Filter: ${errorCategoryFilter} (${allRecords.length} von ${recordsData.pagination?.total || allRecords.length})`;
+        } else {
+            filterInfo.textContent = `${allRecords.length} von ${recordsData.pagination?.total || allRecords.length} Datensätze`;
+        }
         
         // Update statistics from server-aggregated data
         updateBatchStatisticsFromServer(statsData.stats, recordsData.pagination?.total || 0);
@@ -517,22 +653,37 @@ function loadRecords() {
 // New function: Update stats from server-aggregated data (FAST - no client-side loop)
 function updateBatchStatisticsFromServer(stats, totalRecords) {
     const buckets = stats.buckets;
-    const pendingCount = stats.pending || 0;
+    const pendingCount = stats.pending || 0;  // Real pending from DB
+    const toExecuteCount = stats.to_execute || pendingCount;  // All non-success
     const successCount = stats.success || 0;
+    const failedCount = stats.failed || 0;
+    const partialCount = stats.partial || 0;
+    const totalCount = stats.total || 0;
+    
+    // Update status filter dropdown with counts from DB (entire table, not just preview)
+    const pendingOpt = document.getElementById('statusPending');
+    const successOpt = document.getElementById('statusSuccess');
+    const failedOpt = document.getElementById('statusFailed');
+    const partialOpt = document.getElementById('statusPartial');
+    
+    if (pendingOpt) pendingOpt.textContent = `⏳ Pending (${pendingCount.toLocaleString()})`;
+    if (successOpt) successOpt.textContent = `✅ Erfolgreich (${successCount.toLocaleString()})`;
+    if (failedOpt) failedOpt.textContent = `❌ Fehlgeschlagen (${failedCount.toLocaleString()})`;
+    if (partialOpt) partialOpt.textContent = `⚠️ Teilweise (${partialCount.toLocaleString()})`;
     
     // Calculate runtime based on response-based pacing
     const transferRate = 1.0;  // seconds per MB
     const containerOverhead = 1.5;  // API overhead + minimal delay per container
     
     const totalSizeMB = (stats.total_size_bytes || 0) / (1024 * 1024);
-    const totalSerialRuntime = (totalSizeMB * transferRate) + (pendingCount * containerOverhead);
+    const totalSerialRuntime = (totalSizeMB * transferRate) + (toExecuteCount * containerOverhead);
     
     const maxWorkers = {{ max_workers | default(2) }};
     const totalRuntime = totalSerialRuntime / maxWorkers;
     
-    // Update statistics display
-    document.getElementById('statRecords').innerHTML = pendingCount > 0 
-        ? `${pendingCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
+    // Update statistics display (use toExecuteCount for "remaining work")
+    document.getElementById('statRecords').innerHTML = toExecuteCount > 0 
+        ? `${toExecuteCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
         : `<span class="text-success">✓ Alle ${stats.total} erledigt</span>`;
     document.getElementById('statTotalSize').textContent = formatFileSize(stats.total_size_bytes);
     document.getElementById('statTiny').textContent = buckets.tiny || 0;
@@ -540,7 +691,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     document.getElementById('statMedium').textContent = buckets.medium || 0;
     document.getElementById('statLarge').textContent = (buckets.large || 0) > 0 ? (buckets.large + ' ⚠️') : '0';
     document.getElementById('statUnknown').textContent = buckets.unknown || 0;
-    document.getElementById('statRuntime').textContent = pendingCount > 0 ? formatDuration(totalRuntime) : '-';
+    document.getElementById('statRuntime').textContent = toExecuteCount > 0 ? formatDuration(totalRuntime) : '-';
     
     // Update selection info to show preview info
     const selectionInfo = document.getElementById('selectionInfo');
@@ -558,7 +709,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     if (buckets.large > 0) breakdown.push(`🔴${buckets.large}`);
     if (buckets.unknown > 0) breakdown.push(`❓${buckets.unknown}`);
     
-    const detailText = pendingCount > 0 
+    const detailText = toExecuteCount > 0 
         ? `${breakdown.join(' ')} | ${formatFileSize(stats.total_size_bytes)} | ${maxWorkers} Worker`
         : 'Keine ausstehenden Dokumente';
     document.getElementById('statRuntimeDetail').textContent = detailText;
@@ -569,7 +720,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
         totalSize: stats.total_size_bytes,
         transferRate: transferRate,
         containerOverhead: containerOverhead,
-        containerCount: pendingCount,
+        containerCount: toExecuteCount,
         totalSerialRuntime: totalSerialRuntime,
         maxWorkers: maxWorkers,
         totalRuntime: totalRuntime
@@ -751,6 +902,9 @@ function displayRecords(records) {
                 <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
                 <td data-column="dokob"><small>${record.source_dokob || '-'}</small></td>
                 <td data-column="objky"><small>${truncate(record.source_objky, 25) || '-'}</small></td>
+                <td data-column="target_dokob"><small>${record.target_dokob || '-'}</small></td>
+                <td data-column="target_objky"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
+                <td data-column="target_type"><small>${record.target_documenttype || '-'}</small></td>
                 <td data-column="target_doc"><code>${record.target_documentnumber || '-'}</code></td>
                 <td data-column="type_info"><small>${typeInfo}</small></td>
                 <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
@@ -759,6 +913,7 @@ function displayRecords(records) {
                 <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
+                <td data-column="error_category">${getErrorCategoryBadge(record.error_category)}</td>
                 <td data-column="created_at"><small>${createdAt}</small></td>
                 <td data-column="created_by"><small>${record.created_by || '-'}</small></td>
                 <td data-column="exec_started"><small>${execStarted}</small></td>
@@ -787,6 +942,38 @@ function getExecutionBadge(status) {
         'pending': '<span class="badge badge-secondary">Pending</span>'
     };
     return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+// Error Category Details (from Python get_error_details)
+const ERROR_CATEGORY_DETAILS = {
+    'API_KEY_INVALID': { desc: 'API-Key ungültig', class: 'badge-danger' },
+    'TOKEN_EXPIRED': { desc: 'Token abgelaufen', class: 'badge-danger' },
+    'TOKEN_INVALID': { desc: 'Token ungültig', class: 'badge-danger' },
+    'CSRF_FAILED': { desc: 'CSRF Fehler', class: 'badge-danger' },
+    'SOURCE_NOT_FOUND': { desc: 'Nicht gefunden', class: 'badge-warning' },
+    'SOURCE_EMPTY': { desc: 'Keine Dateien', class: 'badge-secondary' },
+    'SOURCE_READ_ERROR': { desc: 'Lesefehler', class: 'badge-warning' },
+    'TARGET_CREATE_FAILED': { desc: 'Anlage fehlgeschlagen', class: 'badge-info' },
+    'TARGET_EXISTS': { desc: 'Existiert bereits', class: 'badge-info' },
+    'TARGET_LOCKED': { desc: 'Gesperrt', class: 'badge-info' },
+    'UPLOAD_SIZE_EXCEEDED': { desc: 'Zu groß', class: 'badge-warning' },
+    'UPLOAD_TIMEOUT': { desc: 'Timeout', class: 'badge-secondary' },
+    'GATEWAY_TIMEOUT': { desc: 'Gateway Timeout', class: 'badge-secondary' },
+    'RATE_LIMITED': { desc: 'Rate Limit', class: 'badge-secondary' },
+    'SERVER_ERROR': { desc: 'Serverfehler', class: 'badge-dark' },
+    'BAD_REQUEST': { desc: 'Ungültige Anfrage', class: 'badge-warning' },
+    'UNKNOWN': { desc: 'Unbekannt', class: 'badge-secondary' },
+    // New categories from staging-level errors
+    'READ_EMPTY': { desc: 'Keine Dateien im Quellsystem', class: 'badge-secondary' },
+    'TIMEOUT_RETRY': { desc: 'Timeout (Retry möglich)', class: 'badge-warning' },
+    'API_NOT_IMPLEMENTED': { desc: 'Serverfehler (501)', class: 'badge-dark' },
+    'CODE_BUG_FIXED': { desc: 'Code-Bug behoben', class: 'badge-success' }
+};
+
+function getErrorCategoryBadge(category) {
+    if (!category) return '-';
+    const info = ERROR_CATEGORY_DETAILS[category] || { desc: category, class: 'badge-secondary' };
+    return `<span class="badge ${info.class}" title="${category}">${info.desc}</span>`;
 }
 
 function formatFileSize(bytes) {
@@ -1301,17 +1488,17 @@ function resetFailed() {
     });
 }
 
-function fetchMetadata() {
-    if (!confirm('Fetch file metadata (LOIO, size) from DIL database for all records?\n\nThis is fast and does not require SAP login.')) {
+function refreshData() {
+    if (!confirm('Daten aktualisieren?\n\nDies führt folgende Schritte aus:\n1. Metadata (LOIO, Dateigröße) aus DIL holen\n2. Dateinamen aus DIL.DRAW holen (für Dateiendungen)\n3. Migration Rules anwenden')) {
         return;
     }
     
-    const btn = document.getElementById('fetchMetadataBtn');
+    const btn = document.getElementById('refreshDataBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Verbinde...';
     
     // Use SSE for progress updates
-    const eventSource = new EventSource(`/batch/${batchId}/fetch-metadata-stream`);
+    const eventSource = new EventSource(`/batch/${batchId}/refresh-data-stream`);
     
     eventSource.onmessage = function(event) {
         const data = JSON.parse(event.data);
@@ -1320,20 +1507,20 @@ function fetchMetadata() {
             btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${data.message}`;
         } else if (data.type === 'progress') {
             const pct = data.percent || 0;
-            btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${pct}% - ${data.message}`;
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${pct}% ${data.message}`;
         } else if (data.type === 'complete') {
             eventSource.close();
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
             
-            let message = `Metadata Fetch Complete!\n\n`;
-            message += `✓ Updated: ${data.updated || 0}\n`;
-            message += `✗ Errors: ${data.errors || 0}\n`;
-            message += `ℹ Already had metadata: ${data.already_had_metadata || 0}\n`;
+            let message = `Refresh Complete!\n\n`;
+            message += `✓ Metadata aktualisiert: ${data.metadata_updated || 0}\n`;
+            message += `✓ Dateinamen gefunden: ${data.filenames_found || 0}\n`;
+            message += `✓ Regeln angewendet: ${data.rules_applied || 0}\n`;
             
             if (data.total_size_mb) {
-                message += `\n📊 Total size: ${data.total_size_mb} MB\n`;
-                message += `📊 Max file: ${data.max_file_mb} MB\n`;
+                message += `\n📊 Gesamtgröße: ${data.total_size_mb} MB\n`;
+                message += `📊 Größte Datei: ${data.max_file_mb} MB\n`;
             }
             
             alert(message);
@@ -1341,16 +1528,16 @@ function fetchMetadata() {
         } else if (data.type === 'error') {
             eventSource.close();
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
-            alert('Fetch failed: ' + data.message);
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
+            alert('Refresh fehlgeschlagen: ' + data.message);
         }
     };
     
     eventSource.onerror = function(error) {
         eventSource.close();
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-download"></i> Fetch Metadata';
-        alert('Connection error during metadata fetch');
+        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
+        alert('Verbindungsfehler beim Refresh');
     };
 }
 
@@ -1440,6 +1627,7 @@ function retryFailed() {
 function applyFilters() {
     const searchTerm = document.getElementById('searchInput').value.toLowerCase();
     const statusFilter = document.getElementById('statusFilter').value;
+    const errorCategoryFilter = document.getElementById('errorCategoryFilter').value;
     
     const filtered = allRecords.filter(record => {
         // Text search filter
@@ -1458,7 +1646,13 @@ function applyFilters() {
             matchesStatus = record.execution_status === statusFilter;
         }
         
-        return matchesSearch && matchesStatus;
+        // Error category filter
+        let matchesErrorCategory = true;
+        if (errorCategoryFilter) {
+            matchesErrorCategory = record.error_category === errorCategoryFilter;
+        }
+        
+        return matchesSearch && matchesStatus && matchesErrorCategory;
     });
     
     displayRecords(filtered);

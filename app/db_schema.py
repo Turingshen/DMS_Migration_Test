@@ -49,6 +49,7 @@ CREATE TABLE dbo.migration_staging (
     -- Flags
     user_approved BIT DEFAULT 0,
     skip_migration BIT DEFAULT 0,
+    container_created BIT DEFAULT 0,
     
     INDEX idx_batch_id (batch_id),
     INDEX idx_validation_status (validation_status),
@@ -337,3 +338,13 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has target_dokob/target_objky columns")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add target object columns: {e}")
+        
+        # Ensure container_created flag exists (for idempotent retries)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'container_created') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD container_created BIT DEFAULT 0;
+            """))
+            print("[DB_INIT] Ensured migration_staging has container_created column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add container_created column: {e}")

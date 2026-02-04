@@ -981,7 +981,10 @@
 
     // Apply mappings to staging
     function applyMappings() {
-        if (!confirm('Apply all mappings to staging records in this batch?\n\nThis will update target_dokob and target_objky fields.')) return;
+        if (!confirm('Apply all mappings to staging records in this batch?\n\n' +
+            'NOTE: Object mappings are now applied ON-THE-FLY during migration.\n' +
+            'This button only updates records that already have source_dokob/source_objky values\n' +
+            '(from a previous partial migration run).')) return;
 
         fetch(`/batch/${BATCH_ID}/object-mapping/apply`, {
             method: 'POST'
@@ -989,7 +992,13 @@
         .then(r => r.json())
         .then(result => {
             if (result.success) {
-                alert(`✅ Applied mappings!\n\nUpdated: ${result.updated_count} records`);
+                if (result.updated === 0) {
+                    alert('ℹ️ No records updated.\n\n' + 
+                        'This is expected for new batches.\n' +
+                        'Object mappings will be applied automatically during migration execution.');
+                } else {
+                    alert(`✅ Applied mappings!\n\nUpdated: ${result.updated} records`);
+                }
                 loadStats();
             } else {
                 alert('Error: ' + (result.error || 'Unknown error'));

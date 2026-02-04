@@ -92,34 +92,51 @@ def test_api_structure_route():
     
     # Make test request - accept query params for custom document lookup
     base_url = cfg.get(read_sap_system, "api_list", "document", "base_url")
+    doknr_raw = request.args.get('doknr', "10002159971")
+    # Pad to 25 chars with leading zeros
+    doknr_padded = doknr_raw.zfill(25)
+    
     test_params = {
-        "Documentnumber": request.args.get('doknr', "0000000000000010002159971"),
+        "Documentnumber": doknr_padded,
         "Documentpart": request.args.get('part', "000"),
         "Documenttype": request.args.get('type', "IY1"),
         "Documentversion": request.args.get('version', "00")
     }
     formatted_args = ",".join(f"{key}='{value}'" for key, value in test_params.items())
-    request_url = f"{base_url}/DocumentSet({formatted_args})?$expand=DocumentfilesSet"
+    # Use full $expand with all three sets (like working API call)
+    expand_param = "$expand=DocumentfilesSet,ObjectlinksSet,DESCRIPTIONSSet"
+    request_url = f"{base_url}/DocumentSet({formatted_args})?{expand_param}"
     
     response = server_session.get(request_url)
     
     result = {
         "request_url": request_url,
+        "expand_param": expand_param,
+        "doknr_input": doknr_raw,
+        "doknr_padded": doknr_padded,
         "status": response.status_code,
         "reason": response.reason,
         "top_level_keys": [],
         "description_fields_found": {},
+        "objectlinks_sample": None,
+        "descriptions_sample": None,
         "attachment_sample_keys": [],
         "raw_response_sample": None
     }
     
     if response.status_code == 200:
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as e:
+            result["json_parse_error"] = str(e)
+            result["raw_response_text"] = response.text[:1000]
+            return jsonify(result)
+            
         if 'd' in data:
             d = data['d']
             result["top_level_keys"] = [k for k in d.keys() if k != '__metadata']
             
-            # Look for description fields
+            # Look for description fields at top level
             desc_candidates = ['DocumentDescription', 'Description', 'DocDescription', 
                               'DOCUMENTDESCRIPTION', 'Dktxt', 'DKTXT', 'Longtext',
                               'DocumentdescSet', 'to_DocumentDescription', 'to_DocDesc']
@@ -131,9 +148,32 @@ def test_api_structure_route():
                     else:
                         result["description_fields_found"][key] = val
             
-            # Get attachment structure
+            # Get ObjectlinksSet structure (NEW)
+            if 'ObjectlinksSet' in d:
+                objlinks = d['ObjectlinksSet']
+                if isinstance(objlinks, dict) and 'results' in objlinks:
+                    results = objlinks['results']
+                    result["objectlinks_count"] = len(results)
+                    if results:
+                        result["objectlinks_sample"] = [{k: v for k, v in item.items() if k != '__metadata'} 
+                                                         for item in results[:3]]
+                        result["objectlinks_keys"] = [k for k in results[0].keys() if k != '__metadata']
+            
+            # Get DESCRIPTIONSSet structure (NEW)
+            if 'DESCRIPTIONSSet' in d:
+                descs = d['DESCRIPTIONSSet']
+                if isinstance(descs, dict) and 'results' in descs:
+                    results = descs['results']
+                    result["descriptions_count"] = len(results)
+                    if results:
+                        result["descriptions_sample"] = [{k: v for k, v in item.items() if k != '__metadata'} 
+                                                          for item in results[:5]]
+                        result["descriptions_keys"] = [k for k in results[0].keys() if k != '__metadata']
+            
+            # Get DocumentfilesSet structure
             if 'DocumentfilesSet' in d and 'results' in d['DocumentfilesSet']:
                 results = d['DocumentfilesSet']['results']
+                result["files_count"] = len(results)
                 if results:
                     first_item = {k: v for k, v in results[0].items() if k != '__metadata'}
                     result["attachment_sample_keys"] = list(first_item.keys())
@@ -143,7 +183,7 @@ def test_api_structure_route():
             result["raw_d_summary"] = {k: (type(v).__name__ if isinstance(v, dict) else repr(v)[:100]) 
                                         for k, v in d.items() if k != '__metadata'}
     else:
-        result["error_response"] = response.text[:500]
+        result["error_response"] = response.text[:1000]
     
     # Try to get description from DIL database (DRAT table)
     try:
@@ -3099,17 +3139,35 @@ def download_batch_object_mapping(batch_id):
             df_mappings = pd.read_sql(text(mappings_query), con, params={'batch_id': batch_id})
             
             # Get unique DOKOB/OBJKY values from staging for this batch
+            # NOTE: source_dokob/source_objky are populated during EXECUTE phase from API
+            # So this will only show values for records that have been executed
             staging_query = """
                 SELECT 
                     source_dokob,
                     source_objky,
-                    COUNT(*) as document_count
+                    COUNT(*) as document_count,
+                    SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count
                 FROM dbo.migration_staging
                 WHERE batch_id = :batch_id AND source_dokob IS NOT NULL AND source_objky IS NOT NULL
                 GROUP BY source_dokob, source_objky
                 ORDER BY source_dokob, source_objky
             """
             df_staging = pd.read_sql(text(staging_query), con, params={'batch_id': batch_id})
+            
+            # Count total and executed records for info sheet
+            count_query = """
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN source_dokob IS NOT NULL THEN 1 ELSE 0 END) as with_dokob,
+                    SUM(CASE WHEN execution_status IN ('success', 'failed') THEN 1 ELSE 0 END) as executed
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+            """
+            counts = con.execute(text(count_query), {'batch_id': batch_id}).fetchone()
+            total_records = counts[0] if counts else 0
+            records_with_dokob = counts[1] if counts else 0
+            executed_records = counts[2] if counts else 0
             
             # Get batch info
             batch_query = """
@@ -3150,6 +3208,35 @@ def download_batch_object_mapping(batch_id):
             
             if not df_unmapped.empty:
                 df_unmapped.to_excel(writer, sheet_name='Unmapped Objects', index=False)
+            
+            # Sheet 4: Info sheet with batch statistics and notes
+            info_data = {
+                'Info': [
+                    'Batch ID',
+                    'Wave',
+                    'Description',
+                    '',
+                    'Total Records',
+                    'Records with DOKOB/OBJKY',
+                    'Executed Records',
+                    '',
+                    'Note'
+                ],
+                'Value': [
+                    batch_id,
+                    batch_wave,
+                    batch_desc,
+                    '',
+                    str(total_records),
+                    str(records_with_dokob),
+                    str(executed_records),
+                    '',
+                    'DOKOB/OBJKY values are fetched from API during EXECUTE phase. '
+                    'If "Batch Objects" sheet is empty, start migration first to populate values.'
+                ]
+            }
+            df_info = pd.DataFrame(info_data)
+            df_info.to_excel(writer, sheet_name='Info', index=False)
         
         output.seek(0)
         
@@ -3428,17 +3515,26 @@ def object_mapping_all_batches():
 def apply_batch_object_mappings(batch_id):
     """
     Apply object mappings to staging records for a batch.
-    This updates target_dokob and target_objky in the staging table based on mappings.
-    Should be called after uploading mappings and before execution.
+    
+    NOTE: Since source_dokob/source_objky are now fetched from API during EXECUTE phase,
+    this endpoint will only work for records that have already been (partially) executed.
+    For new batches, object mappings are applied ON-THE-FLY during EXECUTE.
+    
+    This endpoint is kept for backward compatibility with manually-set source values.
     """
     try:
         from app.prepare import apply_object_mappings_for_batch
         
         updated = apply_object_mappings_for_batch(batch_id)
         
+        # Add a note if no updates were made
+        message = f'Applied mappings to {updated} staging records'
+        if updated == 0:
+            message += '. Note: Object mappings are now applied on-the-fly during EXECUTE (source_dokob/source_objky come from API).'
+        
         return jsonify({
             'success': True, 
-            'message': f'Applied mappings to {updated} staging records',
+            'message': message,
             'updated': updated
         })
         

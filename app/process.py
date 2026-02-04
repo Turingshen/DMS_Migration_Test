@@ -48,31 +48,33 @@ write_sap_system = "zbq"
 # You can go with MAX_API_WORKERS to about 50. But then you have to increase the add_up_to time as well to 75.
 
 
-dokument_query =  f"""
-    SELECT
-        drad.doknr,
-        drad.dokob,
-        drad.objky,
-        drad.dokar,
-        drad.dokvr,
-        drad.doktl,
-        drad.longtext_id,
-        iflos.strno
-    FROM dil.drad
-    LEFT JOIN iflos ON drad.objky = iflos.strno
-    WHERE iflos.tplnr IS NOT NULL;
-    """
+# DEPRECATED: DRAD query is no longer needed - DOKOB/OBJKY now come from API ObjectlinksSet
+# dokument_query =  f"""
+#     SELECT
+#         drad.doknr,
+#         drad.dokob,
+#         drad.objky,
+#         drad.dokar,
+#         drad.dokvr,
+#         drad.doktl,
+#         drad.longtext_id,
+#         iflos.strno
+#     FROM dil.drad
+#     LEFT JOIN iflos ON drad.objky = iflos.strno
+#     WHERE iflos.tplnr IS NOT NULL;
+#     """
 
-authgroup_query = """
-    SELECT
-        draw.doknr,
-        draw.dokar,
-        draw.dokvr,
-        draw.doktl,
-        draw.begru
-    FROM dil.draw
-    WHERE draw.begru IS NOT NULL AND draw.begru <> '';
-    """
+# DEPRECATED: This global query is not used - Authorization Groups are queried per-batch in prepare.py
+# authgroup_query = """
+#     SELECT
+#         draw.doknr,
+#         draw.dokar,
+#         draw.dokvr,
+#         draw.doktl,
+#         draw.begru
+#     FROM dil.draw
+#     WHERE draw.begru IS NOT NULL AND draw.begru <> '';
+#     """
 
 _authgroup_cache = {}
 

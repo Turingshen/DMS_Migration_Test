@@ -7,6 +7,7 @@ import pandas as pd
 import uuid
 import datetime as dt
 from flask import session as http_session
+from sqlalchemy import text
 from app_config import MiscEngine, DilEngine
 from app.db_schema import init_staging_tables
 
@@ -186,23 +187,22 @@ def load_object_mappings(batch_id):
         batch_id: The batch ID to load mappings for
     """
     try:
-        query = """
-            SELECT source_dokob, source_objky, target_dokob, target_objky
-            FROM dbo.migration_object_mapping
-            WHERE batch_id = :batch_id AND active = 1
-        """
         with misc_engine.begin() as con:
-            df = pd.read_sql(query, con, params={'batch_id': batch_id})
+            result = con.execute(text("""
+                SELECT source_dokob, source_objky, target_dokob, target_objky
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :batch_id AND active = 1
+            """), {'batch_id': batch_id}).fetchall()
         
-        if len(df) == 0:
+        if not result:
             print(f"[PREPARE] No object mappings configured for batch {batch_id}")
             return {}
         
         # Build lookup dict
         mappings = {}
-        for _, row in df.iterrows():
-            key = (str(row['source_dokob']).upper(), str(row['source_objky']))
-            mappings[key] = (str(row['target_dokob']).upper(), str(row['target_objky']))
+        for row in result:
+            key = (str(row[0]).upper(), str(row[1]))  # (source_dokob, source_objky)
+            mappings[key] = (str(row[2]).upper(), str(row[3]))  # (target_dokob, target_objky)
         
         print(f"[PREPARE] Loaded {len(mappings)} object mappings for batch {batch_id}")
         return mappings
@@ -615,7 +615,6 @@ def enrich_with_metadata(data_df):
     
     # Ensure expected columns exist (Excel may have different casing)
     cols = set(data_df.columns)
-    has_required = all(k in cols for k in ['documentnumber', 'documenttype', 'documentversion', 'documentpart'])
     
     # Check if Excel already has authorization_group column with values
     excel_has_auth_group = 'authorization_group' in cols
@@ -625,48 +624,9 @@ def enrich_with_metadata(data_df):
         excel_auth_filled = data_df['authorization_group'].notna().any() and \
                             (data_df['authorization_group'].astype(str).str.strip() != '').any()
     
-    # Build query for authorization groups only when required columns exist
-    # and Excel doesn't already have auth_group filled
-    if has_required and not excel_auth_filled:
-        # Remove existing empty authorization_group column to avoid duplicates
-        if excel_has_auth_group:
-            data_df.drop(columns=['authorization_group'], errors='ignore', inplace=True)
-        
-        conditions = []
-        for _, row in data_df.iterrows():
-            doknr = str(row.get('documentnumber', '')).replace("'", "''")
-            dokar = str(row.get('documenttype', '')).replace("'", "''")
-            dokvr = str(row.get('documentversion', '')).replace("'", "''")
-            doktl = str(row.get('documentpart', '')).replace("'", "''")
-            conditions.append(
-                f"(doknr='{doknr}' AND dokar='{dokar}' AND dokvr='{dokvr}' AND doktl='{doktl}')"
-            )
-        composite_filter = " OR ".join(conditions) if conditions else None
-        if composite_filter:
-            authgroup_query = f"""
-                SELECT doknr, dokar, dokvr, doktl, begru
-                FROM dil.draw
-                WHERE begru IS NOT NULL AND begru <> ''
-                    AND ({composite_filter})
-            """
-            try:
-                with dil_engine.begin() as con:
-                    auth_df = pd.read_sql(authgroup_query, con)
-                data_df = data_df.merge(
-                    auth_df,
-                    how='left',
-                    left_on=['documentnumber', 'documenttype', 'documentversion', 'documentpart'],
-                    right_on=['doknr', 'dokar', 'dokvr', 'doktl']
-                )
-                data_df.rename(columns={'begru': 'authorization_group'}, inplace=True)
-                data_df.drop(columns=['doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
-            except Exception as e:
-                print(f"[WARN] Failed to enrich authorization groups: {e}")
-                data_df['authorization_group'] = None
-        else:
-            data_df['authorization_group'] = None
-    elif not excel_has_auth_group:
-        # No required columns and no existing auth_group - initialize to None
+    # NOTE: Authorization Group (BEGRU) is now fetched from API Authoritygroup during Execute phase
+    # No DIL.DRAW query needed here - just initialize empty column if not provided in Excel
+    if not excel_auth_filled:
         data_df['authorization_group'] = None
     # else: Keep Excel authorization_group values as-is
     
@@ -675,8 +635,10 @@ def enrich_with_metadata(data_df):
     if translation_map:
         data_df = apply_translations(data_df, translation_map)
     
-    # Enrich with DOKOB and OBJKY from DIL.DRAD
-    data_df = enrich_drad_data(data_df)
+    # NOTE: DOKOB/OBJKY are now fetched from API ObjectlinksSet during Execute phase
+    # No DIL.DRAD query needed here - just initialize empty columns
+    data_df['source_dokob'] = None
+    data_df['source_objky'] = None
     
     # Initialize target DOKOB/OBJKY columns (will be filled when mappings are uploaded for this batch)
     data_df['target_dokob'] = None
@@ -688,8 +650,9 @@ def enrich_with_metadata(data_df):
     # Enrich with file sizes from DIL.DMS_FILE_SIZE
     data_df = enrich_file_sizes(data_df)
     
-    # Enrich with filenames from DIL.DRAW (workaround for missing extensions in API)
-    data_df = enrich_filenames_from_draw(data_df)
+    # NOTE: Filenames are now extracted from API Docpath during Execute phase
+    # No DIL.DRAW query needed here - the API provides full path with extension
+    data_df['source_filename'] = None
     
     # Compute target document numbers (X55- prefix)
     # Set target document number to source for manual IDs, empty for auto-generated IDs

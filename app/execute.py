@@ -45,10 +45,70 @@ from app.process import (
     write_sap_system
 )
 from app.logger import get_logger
+from app.prepare import load_object_mappings
 
 cfg = Config.load()
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
+
+# Import DIL engine for DRAW fallback (optional - may not be available in all environments)
+try:
+    from app_config import DilEngine
+    dil_db = DilEngine.load()
+    dil_engine = dil_db.engine
+    DIL_AVAILABLE = True
+except Exception:
+    DIL_AVAILABLE = False
+    dil_engine = None
+
+
+def get_filename_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> str:
+    """
+    Fallback: Get filename with extension from DIL.DRAW.filep.
+    Used when API Docpath doesn't contain a valid file extension.
+    
+    Args:
+        doknr: Document number (e.g., '0000000000000010002006217')
+        dokar: Document type (e.g., 'IY1')
+        dokvr: Document version (e.g., '00')
+        doktl: Document part (e.g., '000')
+    
+    Returns:
+        Filename with extension, or empty string if not found.
+    """
+    if not DIL_AVAILABLE or not dil_engine:
+        return ''
+    
+    try:
+        query = f"""
+            SELECT filep
+            FROM dil.DRAW
+            WHERE doknr = '{doknr}'
+              AND dokar = '{dokar}'
+              AND dokvr = '{str(dokvr).zfill(2)}'
+              AND doktl = '{str(doktl).zfill(3)}'
+        """
+        with dil_engine.begin() as con:
+            result = con.execute(text(query)).fetchone()
+        
+        if result and result[0]:
+            filep = str(result[0]).strip()
+            # filep is the full filename with extension
+            if '.' in filep:
+                return filep
+    except Exception as e:
+        print(f"[WARN] DRAW fallback failed: {e}")
+    
+    return ''
+
+
+def has_valid_extension(filename: str) -> bool:
+    """Check if filename has a valid file extension (not just numbers)."""
+    if not filename or '.' not in filename:
+        return False
+    ext = filename.rsplit('.', 1)[-1].lower()
+    # Extension should be 2-5 chars and not all numbers
+    return 2 <= len(ext) <= 5 and not ext.isdigit()
 
 
 # Pacing mode: 'response' = wait for API response, 'time' = time-based delays
@@ -794,6 +854,60 @@ def execute_single_document(staging_record, session_snapshot):
         first_doc = documents[2][0] if documents[2] else {}
         doc_loioid = first_doc.get('LOIOID')
         doc_description = first_doc.get('Description') or first_doc.get('DocumentDescription')
+        doc_authgroup = first_doc.get('Authoritygroup')  # BEGRU from API
+        
+        # Extract ObjectlinksSet from API response (replaces DIL.DRAD query)
+        object_links = first_doc.get('_ObjectlinksSet', [])
+        api_dokob = None
+        api_objky = None
+        if object_links:
+            # Take first object link (a document can have multiple links)
+            first_link = object_links[0]
+            api_dokob = first_link.get('Objecttype')  # API uses CamelCase
+            api_objky = first_link.get('Objectkey')
+        
+        # Apply object mapping on-the-fly to get target_dokob/target_objky
+        # NOTE: Object mappings are loaded per batch and cached within this function scope
+        target_dokob = staging_record.get('target_dokob')  # May already be set from manual entry
+        target_objky = staging_record.get('target_objky')
+        
+        if api_dokob and api_objky and not (target_dokob and target_objky):
+            # Load mappings for this batch and lookup target values
+            try:
+                mappings = load_object_mappings(batch_id)
+                if mappings:
+                    key = (str(api_dokob).upper(), str(api_objky))
+                    if key in mappings:
+                        target_dokob, target_objky = mappings[key]
+                        logger.debug(f"Object mapping found: {key} -> ({target_dokob}, {target_objky})", category="OBJLINK")
+                    else:
+                        logger.debug(f"No object mapping found for {key}", category="OBJLINK")
+            except Exception as e:
+                logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
+        
+        # Update staging with API metadata (DOKOB, OBJKY, Authoritygroup) and resolved target values
+        if api_dokob or api_objky or doc_authgroup or target_dokob or target_objky:
+            try:
+                with misc_engine.begin() as con:
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET source_dokob = COALESCE(:dokob, source_dokob),
+                            source_objky = COALESCE(:objky, source_objky),
+                            authorization_group = COALESCE(:authgroup, authorization_group),
+                            target_dokob = COALESCE(:target_dokob, target_dokob),
+                            target_objky = COALESCE(:target_objky, target_objky)
+                        WHERE id = :staging_id
+                    """), {
+                        'staging_id': staging_id, 
+                        'dokob': api_dokob, 
+                        'objky': api_objky,
+                        'authgroup': doc_authgroup,
+                        'target_dokob': target_dokob,
+                        'target_objky': target_objky
+                    })
+                logger.debug(f"Updated from API: DOKOB={api_dokob}, OBJKY={api_objky}, BEGRU={doc_authgroup}, target=({target_dokob},{target_objky})", category="EXECUTE")
+            except Exception as e:
+                logger.debug(f"Failed to update API metadata: {e}", category="EXECUTE")
         
         # Process each file in the document container
         doc_created = False
@@ -875,25 +989,38 @@ def execute_single_document(staging_record, session_snapshot):
                 save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue
             
-            # Get filename from API Docpath
-            api_filename = _sanitize_filename(document.get('Docpath', '').split('/')[-1] or '')
+            # Get filename from API Docpath (full path with extension)
+            # Example: C:\Users\HoltzTh\Desktop\BMS Fertig\330236529 Prüfung 2015-2019.pdf
+            docpath = document.get('Docpath', '') or ''
+            # Handle both Windows (\\) and Unix (/) path separators
+            api_filename = _sanitize_filename(docpath.replace('\\', '/').split('/')[-1] or '')
             
-            # Workaround: If API filename has no extension, try to get it from staging record
-            # (which was populated from DIL.DRAW.filep during Prepare)
+            # Fallback to staging filename if API doesn't provide one
             staging_filename = staging_record.get('filename', '') or ''
             
-            if api_filename and '.' not in api_filename and staging_filename and '.' in staging_filename:
-                # API has no extension but staging has one - extract extension from staging
-                staging_ext = '.' + staging_filename.rsplit('.', 1)[-1]
-                filename = api_filename + staging_ext
-                logger.debug(f"Added extension from DRAW: {api_filename} -> {filename}", category="EXECUTE")
-            elif api_filename:
+            if api_filename:
                 filename = api_filename
             elif staging_filename:
-                # No API filename at all, use staging filename
                 filename = staging_filename
             else:
                 filename = 'unnamed'
+            
+            # CRITICAL: Check if filename has a valid extension
+            # If not, try to get the proper filename from DIL.DRAW
+            # This happens when API returns timestamp-based filenames like '1558619205557'
+            if not has_valid_extension(filename):
+                draw_filename = get_filename_from_draw(
+                    staging_record.get('source_documentnumber', ''),
+                    staging_record.get('source_documenttype', ''),
+                    staging_record.get('source_documentversion', ''),
+                    staging_record.get('source_documentpart', '')
+                )
+                if draw_filename and has_valid_extension(draw_filename):
+                    logger.info(f"Using DRAW fallback filename: {draw_filename} (API had: {filename})", category="READ")
+                    filename = draw_filename
+                else:
+                    # Try to guess extension from content-type header or content
+                    logger.warning(f"No valid extension found for: {filename}", category="READ")
             
             # Update metadata fields in staging table (once, on first successful file read)
             if not metadata_updated:
@@ -972,9 +1099,13 @@ def execute_single_document(staging_record, session_snapshot):
                     logger.debug("Omitting document number from payload - target system will auto-generate", category="CREATE")
                 
                 # Add authorization group if available
-                if staging_record.get('authorization_group'):
-                    dms_payload['AuthorizationGroup'] = staging_record['authorization_group']
-                    logger.debug(f"Using authorization group: {staging_record['authorization_group']}", category="CREATE")
+                # NOTE: doc_authgroup may come from:
+                #   1. API response (Authoritygroup field) - extracted above
+                #   2. Pre-existing value in staging_record (from manual entry or rules)
+                effective_authgroup = doc_authgroup or staging_record.get('authorization_group')
+                if effective_authgroup:
+                    dms_payload['AuthorizationGroup'] = effective_authgroup
+                    logger.debug(f"Using authorization group: {effective_authgroup}", category="CREATE")
                 
                 logger.info(f"Creating document info record", category="CREATE")
                 create_resp = server_session.post(create_url, json=dms_payload)
@@ -1015,8 +1146,10 @@ def execute_single_document(staging_record, session_snapshot):
                         """), {'staging_id': staging_id})
                     
                     # Create Object Link if target mapping is available
-                    target_dokob = staging_record.get('target_dokob')
-                    target_objky = staging_record.get('target_objky')
+                    # NOTE: target_dokob and target_objky were already resolved above from:
+                    #   1. staging_record (if manually set before)
+                    #   2. Object mapping lookup using source_dokob/source_objky from API
+                    # So we use the variables directly, not re-read from staging_record
                     
                     if target_dokob and target_objky:
                         try:

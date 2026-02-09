@@ -3673,7 +3673,7 @@ def load_dms_objects():
         
         # Define queries per DOKOB - executed sequentially for better performance
         # Exclusion rules applied:
-        # - ALL: Exclude if DRAW.FILEP is empty (no file attached → nothing to migrate)
+        # - ALL: Exclude if no DMS_DOC2LOIO entry (no file in Content Repository → nothing to migrate)
         # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
         # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
         # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
@@ -3696,10 +3696,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'IFLOT': f"""
@@ -3715,10 +3715,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'MPLA': f"""
@@ -3730,10 +3730,10 @@ def load_dms_objects():
                 WHERE drad.DOKOB = 'MPLA' 
                   AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'PMPLKO': f"""
@@ -3747,10 +3747,10 @@ def load_dms_objects():
                 WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                   AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'PMAUFK': f"""
@@ -3766,10 +3766,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'PMAFVC': f"""
@@ -3789,10 +3789,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'PMQMEL': f"""
@@ -3809,10 +3809,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'SMQMEL': f"""
@@ -3829,10 +3829,10 @@ def load_dms_objects():
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'STKO_DOC': f"""
@@ -3843,10 +3843,10 @@ def load_dms_objects():
                 WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                   AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """,
             'STPO_DOC': f"""
@@ -3858,10 +3858,10 @@ def load_dms_objects():
                 WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                   AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
                   AND EXISTS (
-                      SELECT 1 FROM DIL.DRAW draw
-                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                      SELECT 1 FROM DIL.DMS_DOC2LOIO d2l
+                      WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL
+                        AND d2l.MANDT = '100'
                   )
             """
         }
@@ -3965,8 +3965,6 @@ def load_dms_objects_stream():
             werke_filter = "', '".join(selected_werke)
             
             # Define queries per DOKOB with exclusion rules
-            # Queries use LEFT JOIN DRAW to include FILEP column - filtering happens in Python
-            # This allows counting no-file records without extra queries
             # Exclusion rules (status-based, applied in SQL):
             # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
             # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
@@ -3976,13 +3974,13 @@ def load_dms_objects_stream():
             # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
             # - PLKO: Exclude if PLKO.LOEKZ = 'X'
             # Post-filter (applied in Python):
-            # - ALL: Exclude if DRAW.FILEP is empty (no file attached)
-            # Scalar subquery avoids LEFT JOIN row duplication from MANDT
+            # - ALL: Exclude if no entry in DMS_DOC2LOIO (no file in Content Repository)
+            # Scalar subquery: checks DMS_DOC2LOIO for file existence
             _has_file_sql = """CASE WHEN EXISTS (
-                        SELECT 1 FROM DIL.DRAW draw 
-                        WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR 
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL 
-                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                        SELECT 1 FROM DIL.DMS_DOC2LOIO d2l 
+                        WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR 
+                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL 
+                        AND d2l.MANDT = '100'
                     ) THEN 1 ELSE 0 END as HAS_FILE"""
             
             queries = {
@@ -4186,7 +4184,7 @@ def load_dms_objects_stream():
             stats = {}
             stats_total = {}  # Total counts without exclusion
             stats_excluded = {}  # Excluded counts (status-based)
-            stats_no_file = {}  # Records without file (DRAW.FILEP empty)
+            stats_no_file = {}  # Records without file (no DMS_DOC2LOIO entry)
             total_queries = len(queries)
             
             with dil_db.engine.begin() as con:

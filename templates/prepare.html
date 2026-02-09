@@ -44,14 +44,53 @@
     .werke-checkbox.selected .werke-count { color: rgba(255,255,255,0.8); }
     .quick-filter-btn { margin: 2px; }
     .quick-filter-btn.active { background-color: #28a745 !important; border-color: #28a745 !important; }
-    .dokob-stats-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-    .dokob-stat-badge {
-        display: inline-flex; align-items: center; background: #f8f9fa;
-        border: 1px solid #dee2e6; border-radius: 4px; padding: 4px 10px; font-size: 0.8rem;
+    /* --- Summary row --- */
+    .dokob-stats-grid { display: flex; flex-direction: column; gap: 10px; }
+    .stats-summary-row {
+        display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 8px;
+        border-bottom: 1px solid #dee2e6;
     }
-    .dokob-stat-badge .dokob-name { font-weight: 600; margin-right: 6px; color: #495057; }
-    .dokob-stat-badge .dokob-count { color: #28a745; font-weight: 700; }
-    .dokob-stat-badge .dokob-excluded { color: #dc3545; font-size: 0.7rem; margin-left: 4px; }
+    .stats-summary-card {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 14px; border-radius: 6px; font-size: 0.9rem; font-weight: 600;
+        border: 2px solid; min-width: 140px;
+    }
+    .stats-summary-card .summary-count { font-size: 1.15rem; font-weight: 700; }
+    .stats-summary-card .summary-sub { font-size: 0.78rem; font-weight: 400; opacity: 0.75; }
+    .summary-batch  { background: #d4edda; border-color: #28a745; color: #155724; }
+    .summary-nofile { background: #fff3cd; border-color: #e67e00; color: #856404; }
+    .summary-status { background: #f8d7da; border-color: #dc3545; color: #721c24; }
+
+    /* --- Per-DOKOB cards --- */
+    .stats-dokob-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dokob-card {
+        display: flex; flex-direction: column; background: #f8f9fa;
+        border: 1px solid #dee2e6; border-radius: 6px;
+        padding: 6px 12px; min-width: 120px; font-size: 0.85rem;
+    }
+    .dokob-card-name {
+        font-weight: 700; font-size: 0.8rem; color: #495057;
+        margin-bottom: 3px; letter-spacing: 0.3px;
+    }
+    .dokob-card-numbers { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .dokob-num {
+        display: inline-flex; align-items: center; gap: 3px;
+        font-weight: 600; white-space: nowrap;
+    }
+    .dokob-num.batch  { color: #28a745; font-size: 0.95rem; }
+    .dokob-num.nofile { color: #e67e00; font-size: 0.82rem; }
+    .dokob-num.status { color: #dc3545; font-size: 0.82rem; }
+    .dokob-num i { font-size: 0.7rem; }
+
+    /* --- DB status excluded info --- */
+    .badge-no-file {
+        background: #fff3cd; color: #856404; border: 1px solid #ffc107;
+        font-size: 0.8rem; font-weight: 600; padding: 4px 10px;
+    }
+    .badge-status-excl {
+        background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;
+        font-size: 0.8rem; font-weight: 600; padding: 4px 10px;
+    }
 </style>
 {% endblock %}
 
@@ -142,6 +181,7 @@
                             <span id="dbStatus" class="badge badge-secondary">
                                 <i class="fas fa-database"></i> Lokale DB: <span id="dbCount">0</span> Objekte
                             </span>
+                            <span id="dbExcludedInfo" class="ml-1" style="display:none;"></span>
                         </div>
                         <div>
                             <button id="btnLoadData" class="btn btn-success" onclick="loadDMSObjects()">
@@ -690,7 +730,7 @@ function loadDMSObjects() {
 
     const params = new URLSearchParams({ werke: selected.join(','), auto_save: 'true' });
     const es = new EventSource(`/api/dms/load-stream?${params}`);
-    let curStats = {}, curExcl = {};
+    let curStats = {}, curExcl = {}, curNoFile = {};
 
     es.onmessage = function(event) {
         const data = JSON.parse(event.data);
@@ -702,8 +742,11 @@ function loadDMSObjects() {
             case 'step_complete':
                 curStats[data.dokob] = data.count;
                 curExcl[data.dokob] = data.excluded || 0;
-                showDmsProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()} (${data.time})`);
-                renderDokobBadges(curStats, curExcl);
+                curNoFile[data.dokob] = data.no_file || 0;
+                const nfInfo = data.no_file > 0 ? ` 🗎-${data.no_file.toLocaleString()}` : '';
+                const exInfo = data.excluded > 0 ? ` (-${data.excluded.toLocaleString()})` : '';
+                showDmsProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()}${exInfo}${nfInfo} (${data.time})`);
+                renderDokobBadges(curStats, curExcl, curNoFile);
                 break;
             case 'complete':
                 es.close();
@@ -713,8 +756,8 @@ function loadDMSObjects() {
                 setTimeout(() => {
                     hideDmsProgress();
                     displayResults(data.data);
-                    renderDokobBadges(data.stats, data.stats_excluded || {});
-                    loadDBStatus();
+                    renderDokobBadges(data.stats, data.stats_excluded || {}, data.stats_no_file || {});
+                    updateDBStatusFull(data.count, data.stats_excluded || {}, data.stats_no_file || {});
                 }, 500);
                 break;
             case 'error':
@@ -749,24 +792,87 @@ function displayResults(data) {
     $('#dmsResultsRow').show();
 }
 
-function renderDokobBadges(stats, excluded) {
+function renderDokobBadges(stats, excluded, noFile) {
     const container = $('#detailedStats'); container.empty();
-    let totalExcl = 0;
-    for (const v of Object.values(excluded || {})) totalExcl += (typeof v === 'number' ? v : 0);
-    Object.entries(stats).filter(([k,v]) => k !== 'total' && typeof v === 'number').sort((a,b) => b[1]-a[1]).forEach(([dokob, count]) => {
-        const excl = (excluded || {})[dokob] || 0;
-        const tot = count + excl, pct = tot > 0 ? ((excl/tot)*100).toFixed(1) : 0;
-        const exclHtml = excl > 0 ? `<span class="dokob-excluded" title="${excl.toLocaleString()} ausgeschl. (${pct}%)">-${excl.toLocaleString()}</span>` : '';
-        container.append(`<div class="dokob-stat-badge"><span class="dokob-name">${dokob}</span><span class="dokob-count">${count.toLocaleString()}</span>${exclHtml}</div>`);
-    });
-    if (totalExcl > 0) container.append(`<div class="dokob-stat-badge" style="background:#fff3cd;border-color:#ffc107;"><span class="dokob-name"><i class="fas fa-filter"></i> Ausgeschlossen</span><span style="color:#856404;font-weight:700;">${totalExcl.toLocaleString()}</span></div>`);
+    excluded = excluded || {}; noFile = noFile || {};
+    let totalCount = 0, totalExcl = 0, totalNoFile = 0;
+    for (const [k, v] of Object.entries(stats)) {
+        if (k !== 'total' && typeof v === 'number') {
+            totalCount += v; totalExcl += (excluded[k] || 0); totalNoFile += (noFile[k] || 0);
+        }
+    }
+    const grandTotal = totalCount + totalExcl + totalNoFile;
+
+    // --- Summary row ---
+    let summaryHtml = '<div class="stats-summary-row">';
+    summaryHtml += `<div class="stats-summary-card summary-batch">
+        <i class="fas fa-rocket"></i>
+        <span class="summary-count">${totalCount.toLocaleString()}</span>
+        <span>Batch</span>
+        <span class="summary-sub">von ${grandTotal.toLocaleString()}</span>
+    </div>`;
+    if (totalNoFile > 0) {
+        summaryHtml += `<div class="stats-summary-card summary-nofile">
+            <i class="fas fa-file-excel"></i>
+            <span class="summary-count">${totalNoFile.toLocaleString()}</span>
+            <span>Ohne Datei</span>
+        </div>`;
+    }
+    if (totalExcl > 0) {
+        summaryHtml += `<div class="stats-summary-card summary-status">
+            <i class="fas fa-ban"></i>
+            <span class="summary-count">${totalExcl.toLocaleString()}</span>
+            <span>Status</span>
+        </div>`;
+    }
+    summaryHtml += '</div>';
+    container.append(summaryHtml);
+
+    // --- Per-DOKOB cards ---
+    const entries = Object.entries(stats)
+        .filter(([k, v]) => k !== 'total' && typeof v === 'number')
+        .map(([dokob, count]) => [dokob, count, excluded[dokob] || 0, noFile[dokob] || 0])
+        .filter(([d, c, e, n]) => c > 0 || e > 0 || n > 0)
+        .sort((a, b) => (b[1]+b[2]+b[3]) - (a[1]+a[2]+a[3]));
+    if (entries.length > 0) {
+        let rowHtml = '<div class="stats-dokob-row">';
+        entries.forEach(([dokob, count, excl, nf]) => {
+            let nums = `<span class="dokob-num batch">${count.toLocaleString()}</span>`;
+            if (nf > 0) nums += `<span class="dokob-num nofile" title="${nf.toLocaleString()} ohne Datei"><i class="fas fa-file-excel"></i> ${nf.toLocaleString()}</span>`;
+            if (excl > 0) nums += `<span class="dokob-num status" title="${excl.toLocaleString()} Status-ausgeschlossen"><i class="fas fa-ban"></i> ${excl.toLocaleString()}</span>`;
+            rowHtml += `<div class="dokob-card">
+                <div class="dokob-card-name">${dokob}</div>
+                <div class="dokob-card-numbers">${nums}</div>
+            </div>`;
+        });
+        rowHtml += '</div>';
+        container.append(rowHtml);
+    }
     $('#dmsStatsRow').show();
 }
 
 function loadDBStatus() {
     fetch('/api/dms/status').then(r => r.json()).then(data => {
-        if (data.success) { $('#dbCount').text(data.count.toLocaleString()); $('#dbStatus').removeClass('badge-secondary').addClass('badge-success'); }
+        if (data.success) {
+            $('#dbCount').text(data.count.toLocaleString());
+            if (data.count > 0) { $('#dbStatus').removeClass('badge-secondary').addClass('badge-success'); }
+            else { $('#dbStatus').removeClass('badge-success').addClass('badge-secondary'); }
+        }
     }).catch(() => $('#dbStatus').removeClass('badge-success').addClass('badge-secondary'));
+}
+
+function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
+    $('#dbCount').text(batchCount.toLocaleString());
+    if (batchCount > 0) { $('#dbStatus').removeClass('badge-secondary').addClass('badge-success'); }
+    else { $('#dbStatus').removeClass('badge-success').addClass('badge-warning'); }
+    let totalNoFile = 0, totalExcluded = 0;
+    for (const v of Object.values(statsNoFile || {})) { if (typeof v === 'number') totalNoFile += v; }
+    for (const v of Object.values(statsExcluded || {})) { if (typeof v === 'number') totalExcluded += v; }
+    let parts = [];
+    if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${totalNoFile.toLocaleString()} ohne Datei</span>`);
+    if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${totalExcluded.toLocaleString()} Status</span>`);
+    if (parts.length > 0) { $('#dbExcludedInfo').html(parts.join(' ')).show(); }
+    else { $('#dbExcludedInfo').hide(); }
 }
 
 function exportData() {

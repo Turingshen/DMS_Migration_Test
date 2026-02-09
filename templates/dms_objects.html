@@ -229,14 +229,14 @@
                         <tr class="table-warning">
                             <td><code>ALLE</code></td>
                             <td>Alle Objekttypen</td>
-                            <td>DRAW.FILEP leer (keine Datei angehängt) → 🗎 ohne Datei</td>
+                            <td>Kein Eintrag in DMS_DOC2LOIO (keine Datei im Content Repository) → 🗎 ohne Datei</td>
                         </tr>
                     </tbody>
                 </table>
                 <div class="alert alert-info mb-0">
                     <i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong>
                     JEST.INACT muss leer sein (''), damit der Status aktiv ist.
-                    Container ohne Datei (DRAW.FILEP leer) werden separat gezählt und ausgeschlossen.
+                    Dokumente ohne Datei (kein DMS_DOC2LOIO-Eintrag) werden separat gezählt und ausgeschlossen.
                 </div>
             </div>
             <div class="modal-footer">
@@ -1043,7 +1043,7 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
     // Per-DOKOB badges (only those with any data)
     entries.forEach(([dokob, count, excluded, noFile]) => {
         const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
-        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei (DRAW.FILEP leer)"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
+        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei (kein DMS_DOC2LOIO)"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
         container.append(`
             <div class="dokob-stat-badge">
                 <span class="dokob-name">${dokob}</span>

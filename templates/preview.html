@@ -2,8 +2,42 @@
 
 {% block title %}Preview Migration Batch{% endblock %}
 
+{% block head %}
+<style>
+    .workflow-steps { display: flex; align-items: center; margin-bottom: 25px; }
+    .workflow-step {
+        display: flex; align-items: center; padding: 8px 18px;
+        border-radius: 20px; font-weight: 600; font-size: 0.85rem;
+        background: #e9ecef; color: #6c757d;
+    }
+    .workflow-step.active { background: #007bff; color: #fff; }
+    .workflow-step.done   { background: #28a745; color: #fff; }
+    .workflow-arrow { margin: 0 10px; color: #adb5bd; font-size: 1.2rem; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid mt-4">
+
+    <!-- Workflow Step Indicator -->
+    <div class="workflow-steps">
+        <a href="/prepare" class="workflow-step done text-decoration-none" title="Neuen Batch erstellen">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> Batch erstellen
+        </a>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step active">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Enrich &amp; Preview
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <a href="/batch/{{ batch_id }}/object-mapping" class="workflow-step text-decoration-none" title="Object Mapping">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Object Mapping
+        </a>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Execute
+        </div>
+    </div>
+
     <div class="row">
         <div class="col-12">
             <h2>Preview Migration Batch</h2>

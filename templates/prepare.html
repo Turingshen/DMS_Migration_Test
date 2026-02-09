@@ -1,57 +1,210 @@
 {% extends "base_simple.html" %}
 
-{% block title %}Prepare Migration Batch{% endblock %}
+{% block title %}New Migration Batch{% endblock %}
 
 {% block head %}
 <!-- CodeMirror CSS -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
-<!-- CodeMirror Theme -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/monokai.min.css">
+<style>
+    /* ── Workflow Steps ── */
+    .workflow-steps { display: flex; align-items: center; margin-bottom: 25px; }
+    .workflow-step {
+        display: flex; align-items: center; padding: 8px 18px;
+        border-radius: 20px; font-weight: 600; font-size: 0.85rem;
+        background: #e9ecef; color: #6c757d;
+    }
+    .workflow-step.active { background: #007bff; color: #fff; }
+    .workflow-step.done   { background: #28a745; color: #fff; }
+    .workflow-step .step-num {
+        width: 24px; height: 24px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.3); margin-right: 8px; font-size: 0.8rem;
+    }
+    .workflow-arrow { margin: 0 10px; color: #adb5bd; font-size: 1.2rem; }
+
+    /* ── Tab styling ── */
+    .nav-tabs .nav-link { font-weight: 600; }
+    .nav-tabs .nav-link.active { background: #f8f9fa; border-bottom-color: #f8f9fa; }
+    .tab-content { background: #f8f9fa; border: 1px solid #dee2e6; border-top: none; border-radius: 0 0 6px 6px; padding: 20px; }
+
+    /* ── DMS Objekte Tab ── */
+    .werke-grid {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 6px; max-height: 260px; overflow-y: auto; padding: 10px;
+    }
+    .werke-checkbox {
+        display: flex; align-items: center; padding: 4px 8px;
+        background: #fff; border: 1px solid #dee2e6; border-radius: 4px;
+        font-size: 0.85rem; cursor: pointer; transition: all 0.15s;
+    }
+    .werke-checkbox:hover { background: #f8f9fa; border-color: #28a745; }
+    .werke-checkbox.selected { background: #28a745; border-color: #28a745; color: white; }
+    .werke-checkbox .werke-count { margin-left: auto; font-size: 0.7rem; color: #6c757d; }
+    .werke-checkbox.selected .werke-count { color: rgba(255,255,255,0.8); }
+    .quick-filter-btn { margin: 2px; }
+    .quick-filter-btn.active { background-color: #28a745 !important; border-color: #28a745 !important; }
+    .dokob-stats-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dokob-stat-badge {
+        display: inline-flex; align-items: center; background: #f8f9fa;
+        border: 1px solid #dee2e6; border-radius: 4px; padding: 4px 10px; font-size: 0.8rem;
+    }
+    .dokob-stat-badge .dokob-name { font-weight: 600; margin-right: 6px; color: #495057; }
+    .dokob-stat-badge .dokob-count { color: #28a745; font-weight: 700; }
+    .dokob-stat-badge .dokob-excluded { color: #dc3545; font-size: 0.7rem; margin-left: 4px; }
+</style>
 {% endblock %}
 
 {% block content %}
 <div class="container-fluid mt-4">
-    <div class="row">
-        <div class="col-12">
-            <h2>Prepare Migration Batch</h2>
-            <p class="text-muted">Step 1: Load and prepare document data for migration</p>
+
+    <!-- Workflow Step Indicator -->
+    <div class="workflow-steps">
+        <div class="workflow-step active">
+            <span class="step-num">1</span> Batch erstellen
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step">
+            <span class="step-num">2</span> Enrich &amp; Preview
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step">
+            <span class="step-num">3</span> Object Mapping
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step">
+            <span class="step-num">4</span> Execute
         </div>
     </div>
 
-    <div class="row mt-4">
-        <div class="col-md-8 offset-md-2">
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">Select Data Source</h5>
-                </div>
-                <div class="card-body">
-                    <form id="prepareForm">
-                        <div class="form-group">
-                            <label>Data Source</label>
-                            <div class="custom-control custom-radio">
-                                <input type="radio" id="sourceDil" name="dataSource" class="custom-control-input" value="dil" checked>
-                                <label class="custom-control-label" for="sourceDil">
-                                    Query VI-DIL
-                                </label>
-                            </div>
-                            <div class="custom-control custom-radio">
-                                <input type="radio" id="sourceDatastore" name="dataSource" class="custom-control-input" value="datastore">
-                                <label class="custom-control-label" for="sourceDatastore">
-                                    Query Datastore
-                                </label>
-                            </div>
-                            <div class="custom-control custom-radio">
-                                <input type="radio" id="sourceFile" name="dataSource" class="custom-control-input" value="file">
-                                <label class="custom-control-label" for="sourceFile">
-                                    Upload Excel File
-                                </label>
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="fas fa-plus-circle"></i> New Migration Batch</h2>
+            <p class="text-muted">Wähle eine Datenquelle und erstelle einen neuen Migration-Batch</p>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!--  DATA SOURCE TABS                                      -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <ul class="nav nav-tabs" id="sourceTabs" role="tablist">
+                <li class="nav-item">
+                    <a class="nav-link active" id="tab-dms" data-toggle="tab" href="#pane-dms" role="tab">
+                        <i class="fas fa-database"></i> DMS Objekte
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="tab-sql" data-toggle="tab" href="#pane-sql" role="tab">
+                        <i class="fas fa-code"></i> SQL Query
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="tab-file" data-toggle="tab" href="#pane-file" role="tab">
+                        <i class="fas fa-file-excel"></i> Excel / CSV Upload
+                    </a>
+                </li>
+            </ul>
+
+            <div class="tab-content" id="sourceTabContent">
+
+                <!-- ════════════════════════════════════════════ -->
+                <!--  TAB 1: DMS Objekte                         -->
+                <!-- ════════════════════════════════════════════ -->
+                <div class="tab-pane fade show active" id="pane-dms" role="tabpanel">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <strong><i class="fas fa-industry"></i> Werke auswählen</strong>
+                            <span class="badge badge-light ml-2" id="selectedCount">0 ausgewählt</span>
+                            <button type="button" class="btn btn-sm btn-outline-info ml-2" data-toggle="modal" data-target="#exclusionRulesModal" title="Ausschluss-Regeln anzeigen">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                        </div>
+                        <div>
+                            <input type="text" id="werkeSearch" class="form-control form-control-sm d-inline-block"
+                                   style="width: 140px;" placeholder="Suchen..." oninput="filterWerke(this.value)">
+                            <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('EU')">EU</button>
+                            <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('NA')">NA</button>
+                            <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('AP')">AP</button>
+                            <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('SA')">SA</button>
+                            <button class="btn btn-sm btn-outline-warning ml-1" onclick="clearSelection()" title="Auswahl zurücksetzen">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="werke-grid" id="werkeContainer">
+                        <span class="text-muted p-3">Lade Werke...</span>
+                    </div>
+
+                    <div class="mt-3 d-flex justify-content-between align-items-center">
+                        <div>
+                            <span id="dbStatus" class="badge badge-secondary">
+                                <i class="fas fa-database"></i> Lokale DB: <span id="dbCount">0</span> Objekte
+                            </span>
+                        </div>
+                        <div>
+                            <button id="btnLoadData" class="btn btn-success" onclick="loadDMSObjects()">
+                                <i class="fas fa-download"></i> Daten laden &amp; speichern
+                            </button>
+                            <button class="btn btn-outline-secondary ml-1" onclick="exportData()" title="Als CSV exportieren">
+                                <i class="fas fa-file-csv"></i> CSV
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar (shared for load + batch creation) -->
+                    <div id="dmsProgressRow" class="mt-3" style="display:none;">
+                        <div class="progress" style="height: 25px;">
+                            <div id="dmsProgressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                                 role="progressbar" style="width:0%">
+                                <span id="dmsProgressText">0%</span>
                             </div>
                         </div>
+                        <small id="dmsProgressLabel" class="text-muted"></small>
+                    </div>
 
-                        <div id="querySection" style="display: block;">
-                            <div class="form-group">
-                                <label for="customQuery">SQL Query</label>
-                                <textarea class="form-control" id="customQuery" rows="10">SELECT TOP 1000
+                    <!-- DOKOB Stats (shown after data loaded) -->
+                    <div id="dmsStatsRow" class="mt-3" style="display:none;">
+                        <div class="dokob-stats-grid" id="detailedStats"></div>
+                    </div>
+
+                    <!-- Results preview -->
+                    <div id="dmsResultsRow" class="mt-3" style="display:none;">
+                        <div class="card">
+                            <div class="card-header bg-light py-2">
+                                <i class="fas fa-table"></i> Vorschau (max. 100 Einträge)
+                                <span class="float-right text-muted" id="tableInfo"></span>
+                            </div>
+                            <div class="card-body p-0" style="max-height:300px; overflow-y:auto;">
+                                <table class="table table-sm table-striped table-hover mb-0" id="resultsTable">
+                                    <thead class="thead-dark">
+                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th></tr>
+                                    </thead>
+                                    <tbody id="resultsBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ════════════════════════════════════════════ -->
+                <!--  TAB 2: SQL Query                           -->
+                <!-- ════════════════════════════════════════════ -->
+                <div class="tab-pane fade" id="pane-sql" role="tabpanel">
+                    <div class="form-group mb-2">
+                        <label><strong>Datenquelle</strong></label>
+                        <div class="custom-control custom-radio custom-control-inline">
+                            <input type="radio" id="srcDil" name="querySource" class="custom-control-input" value="dil" checked>
+                            <label class="custom-control-label" for="srcDil">VI-DIL (HANA)</label>
+                        </div>
+                        <div class="custom-control custom-radio custom-control-inline">
+                            <input type="radio" id="srcDatastore" name="querySource" class="custom-control-input" value="datastore">
+                            <label class="custom-control-label" for="srcDatastore">Datastore (MSSQL)</label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <textarea class="form-control" id="customQuery" rows="10">SELECT TOP 1000
     drad.doknr as documentnumber,
     drad.dokob,
     drad.objky,
@@ -63,324 +216,614 @@
 FROM dil.drad AS drad
 LEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno
 WHERE iflos.tplnr IS NOT NULL;</textarea>
-                                <small class="form-text text-muted">
-                                    Query must return columns: documentnumber, documenttype, documentversion, documentpart
-                                </small>
-                            </div>
-                        </div>
-
-                        <div id="fileUploadSection" style="display: none;">
-                            <div class="form-group">
-                                <label for="fileInput">Excel File</label>
-                                <div class="custom-file">
-                                    <input type="file" class="custom-file-input" id="fileInput" accept=".xlsx,.xls,.csv">
-                                    <label class="custom-file-label" for="fileInput">Choose file...</label>
-                                </div>
-                                <small class="form-text text-muted">
-                                    Required columns: Documentnumber, Documentpart, Documenttype, Documentversion
-                                </small>
-                            </div>
-                            <div class="alert alert-secondary mt-3">
-                                <i class="fas fa-file-excel"></i>
-                                <strong>Template herunterladen:</strong>
-                                <a href="/download_template" class="btn btn-sm btn-success ml-2">
-                                    <i class="fas fa-download"></i> migration_template.xlsx
-                                </a>
-                                <br><small class="text-muted mt-1 d-block">
-                                    Enthält alle erforderlichen Spalten und eine Anleitung.
-                                </small>
-                            </div>
-                        </div>
-
-                        <!-- Batch Metadata -->
-                        <hr class="my-4">
-                        <h6 class="text-muted mb-3"><i class="fas fa-tags"></i> Batch Metadata</h6>
-                        
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="form-group">
-                                    <label for="batchWave">Wave</label>
-                                    <select class="form-control" id="batchWave" name="wave">
-                                        <option value="">-- Select Wave --</option>
-                                        <option value="Wave 0">Wave 0</option>
-                                        <option value="Wave 1">Wave 1</option>
-                                        <option value="Wave 2">Wave 2</option>
-                                        <option value="Wave 3">Wave 3</option>
-                                        <option value="Wave 4">Wave 4</option>
-                                        <option value="Wave 5">Wave 5</option>
-                                        <option value="Wave 6">Wave 6</option>
-                                        <option value="Wave 7">Wave 7</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="form-group">
-                                    <label for="batchDescription">Description (max 40 characters)</label>
-                                    <input type="text" class="form-control" id="batchDescription" name="description" 
-                                           maxlength="40" placeholder="Short description...">
-                                    <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="batchNotes">Notes</label>
-                            <textarea class="form-control" id="batchNotes" name="notes" rows="3" 
-                                      placeholder="Detailed notes..."></textarea>
-                        </div>
-
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle"></i> 
-                            <strong>What happens next?</strong>
-                            <ul class="mb-0 mt-2">
-                                <li>Source documents will be loaded and enriched with metadata</li>
-                                <li>Authorization groups will be fetched from source system</li>
-                                <li>Data will be stored in staging database for validation</li>
-                            </ul>
-                        </div>
-
-                        <div class="form-group">
-                            <button type="submit" class="btn btn-primary btn-lg btn-block" id="prepareBtn">
-                                <i class="fas fa-cogs"></i> Prepare Migration Batch
-                            </button>
-                        </div>
-                    </form>
-
-                    <div id="progressSection" style="display: none;">
-                        <div class="progress" style="height: 30px;">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                 role="progressbar" 
-                                 style="width: 100%">
-                                Preparing data...
-                            </div>
-                        </div>
+                        <small class="form-text text-muted">
+                            Query muss mindestens zurückgeben: documentnumber, documenttype, documentversion, documentpart
+                        </small>
                     </div>
+                </div>
 
-                    <div id="resultSection" style="display: none;">
-                        <div class="alert" id="resultAlert"></div>
-                        <div id="resultDetails"></div>
+                <!-- ════════════════════════════════════════════ -->
+                <!--  TAB 3: Excel / CSV Upload                  -->
+                <!-- ════════════════════════════════════════════ -->
+                <div class="tab-pane fade" id="pane-file" role="tabpanel">
+                    <div class="form-group">
+                        <label for="fileInput">Excel / CSV Datei</label>
+                        <div class="custom-file">
+                            <input type="file" class="custom-file-input" id="fileInput" accept=".xlsx,.xls,.csv">
+                            <label class="custom-file-label" for="fileInput">Datei wählen...</label>
+                        </div>
+                        <small class="form-text text-muted">
+                            Pflichtfelder: Documentnumber, Documentpart, Documenttype, Documentversion
+                        </small>
+                    </div>
+                    <div class="alert alert-secondary mt-3">
+                        <i class="fas fa-file-excel"></i>
+                        <strong>Template herunterladen:</strong>
+                        <a href="/download_template" class="btn btn-sm btn-success ml-2">
+                            <i class="fas fa-download"></i> migration_template.xlsx
+                        </a>
+                        <br><small class="text-muted mt-1 d-block">Enthält alle erforderlichen Spalten und eine Anleitung.</small>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<script>
-function prepareMigration() {
-    const dataSource = document.querySelector('input[name="dataSource"]:checked').value;
-    const formData = new FormData();
-    
-    if (dataSource === 'file') {
-        const fileInput = document.getElementById('fileInput');
-        if (!fileInput.files[0]) {
-            alert('Please select a file');
-            return;
-        }
-        formData.append('file', fileInput.files[0]);
-        formData.append('use_file', 'true');
-    } else {
-        // Get query from CodeMirror editor
-        const customQuery = editor.getValue().trim();
-        if (!customQuery) {
-            alert('Please provide a SQL query');
-            return;
-        }
-        formData.append('use_file', 'false');
-        formData.append('custom_query', customQuery);
-        formData.append('query_source', dataSource); // 'dil' or 'datastore'
-    }
-    
-    // Add batch metadata
-    formData.append('wave', document.getElementById('batchWave').value);
-    formData.append('description', document.getElementById('batchDescription').value);
-    formData.append('notes', document.getElementById('batchNotes').value);
-
-    // Show progress
-    document.getElementById('prepareForm').style.display = 'none';
-    document.getElementById('progressSection').style.display = 'block';
-    document.getElementById('resultSection').style.display = 'none';
-
-    fetch('/prepare', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('progressSection').style.display = 'none';
-        document.getElementById('resultSection').style.display = 'block';
-        
-        if (data.success) {
-            showSuccess(data);
-        } else {
-            showError(data.error);
-        }
-    })
-    .catch(error => {
-        document.getElementById('progressSection').style.display = 'none';
-        document.getElementById('resultSection').style.display = 'block';
-        showError('Error: ' + error);
-    });
-}
-
-function showSuccess(data) {
-    const alert = document.getElementById('resultAlert');
-    alert.className = 'alert alert-success';
-    alert.innerHTML = `
-        <i class="fas fa-check-circle"></i> 
-        <strong>Migration batch prepared successfully!</strong>
-    `;
-    
-    const details = document.getElementById('resultDetails');
-    details.innerHTML = `
-        <div class="card">
-            <div class="card-body">
-                <h5>Batch Details</h5>
-                <table class="table table-sm">
-                    <tr>
-                        <th>Batch ID:</th>
-                        <td><code>${data.batch_id}</code></td>
-                    </tr>
-                    <tr>
-                        <th>Records Prepared:</th>
-                        <td>${data.record_count}</td>
-                    </tr>
-                    <tr>
-                        <th>Status:</th>
-                        <td><span class="badge badge-success">${data.status}</span></td>
-                    </tr>
-                </table>
-                
-                <div class="mt-3">
-                    <a href="/preview?batch_id=${data.batch_id}" class="btn btn-primary btn-lg">
-                        <i class="fas fa-arrow-right"></i> Continue to Preview
-                    </a>
-                    <a href="/" class="btn btn-secondary btn-lg">
-                        <i class="fas fa-home"></i> Back to Dashboard
-                    </a>
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!--  SHARED: Batch Metadata + Create Button                -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header"><h6 class="mb-0"><i class="fas fa-tags"></i> Batch Metadata</h6></div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label for="batchWave">Wave *</label>
+                                <select class="form-control" id="batchWave" name="wave" required>
+                                    <option value="">-- Wave auswählen --</option>
+                                    <option value="Wave 0">Wave 0</option>
+                                    <option value="Wave 1">Wave 1</option>
+                                    <option value="Wave 2">Wave 2</option>
+                                    <option value="Wave 3">Wave 3</option>
+                                    <option value="Wave 4">Wave 4</option>
+                                    <option value="Wave 5">Wave 5</option>
+                                    <option value="Wave 6">Wave 6</option>
+                                    <option value="Wave 7">Wave 7</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label for="batchDescription">Beschreibung (max 40 Zeichen)</label>
+                                <input type="text" class="form-control" id="batchDescription" name="description"
+                                       maxlength="40" placeholder="Kurzbeschreibung...">
+                                <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label for="batchNotes">Notizen</label>
+                                <textarea class="form-control" id="batchNotes" name="notes" rows="2"
+                                          placeholder="Detaillierte Notizen..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-lg btn-block" id="createBatchBtn" onclick="createBatch()">
+                        <i class="fas fa-rocket"></i> Migration Batch erstellen
+                    </button>
                 </div>
             </div>
         </div>
-    `;
-}
+    </div>
 
-function showError(errorMsg) {
-    const alert = document.getElementById('resultAlert');
-    alert.className = 'alert alert-danger';
-    alert.innerHTML = `
-        <i class="fas fa-exclamation-circle"></i> 
-        <strong>Error preparing migration batch:</strong><br>
-        ${errorMsg}
-    `;
-    
-    const details = document.getElementById('resultDetails');
-    details.innerHTML = `
-        <button onclick="location.reload()" class="btn btn-secondary">
-            <i class="fas fa-redo"></i> Try Again
-        </button>
-    `;
-}
-</script>
+    <!-- Result Section (after batch creation) -->
+    <div id="resultSection" class="mt-4" style="display:none;">
+        <div class="alert" id="resultAlert"></div>
+        <div id="resultDetails"></div>
+    </div>
+</div>
 
-<!-- CodeMirror JavaScript -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!--  EXCLUSION RULES MODAL (from DMS Objekte)                 -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="modal fade" id="exclusionRulesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="fas fa-filter"></i> Ausschluss-Regeln für DMS-Objekte</h5>
+                <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">DMS-Container werden nur geladen, wenn <strong>mindestens ein verknüpftes Objekt</strong> nicht gelöscht/geschlossen ist.</p>
+                <table class="table table-sm table-bordered">
+                    <thead class="thead-light"><tr><th>DOKOB</th><th>Beschreibung</th><th>Ausschluss wenn...</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>EQUI</code></td><td>Equipment</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>IFLOT</code></td><td>Techn. Platz</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMAUFK</code></td><td>PM-Auftrag</td><td>JEST Status: I0045 (TECO) + I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMQMEL</code></td><td>PM-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
+                        <tr><td><code>SMQMEL</code></td><td>Service-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMAFVC</code></td><td>PM-Vorgang</td><td>Wenn zugehöriger Auftrag TECO/gelöscht</td></tr>
+                        <tr><td><code>STKO_DOC</code></td><td>Stücklistenkopf</td><td>STKO.LOEKZ = 'X'</td></tr>
+                        <tr><td><code>STPO_DOC</code></td><td>Stücklistenpos.</td><td>STPO.LKENZ = 'X'</td></tr>
+                        <tr><td><code>PLKO</code></td><td>Arbeitsplan</td><td>PLKO.LOEKZ = 'X'</td></tr>
+                        <tr class="table-secondary"><td colspan="3"><em>Keine Filterung: QMQMEL, DRAW, MARA, MARC und alle anderen DOKOB</em></td></tr>
+                    </tbody>
+                </table>
+                <div class="alert alert-info mb-0"><i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong> JEST.INACT muss leer sein (''), damit der Status aktiv ist.</div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-secondary" data-dismiss="modal">Schließen</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!--  DOKOB FILTER MODAL (for DMS batch creation)              -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="modal fade" id="dokobFilterModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-filter"></i> DOKOB-Filter</h5>
+                <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <p>Es werden <strong id="dmsObjectCount">0</strong> DMS-Objekte für die Migration vorbereitet.</p>
+                <div class="form-group">
+                    <label><i class="fas fa-filter"></i> Objekttyp-Filter (DOKOB)</label>
+                    <div class="alert alert-light border" style="max-height:180px; overflow-y:auto;">
+                        <div id="dokobFilterContainer" class="d-flex flex-wrap gap-2">
+                            <span class="text-muted">Lade Objekttypen...</span>
+                        </div>
+                    </div>
+                    <small class="form-text text-muted">
+                        <span id="selectedDokobInfo">Alle Objekttypen ausgewählt</span>
+                        <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)">Alle</button> |
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)">Keine</button>
+                    </small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-success" onclick="createDMSBatchConfirmed()">
+                    <i class="fas fa-rocket"></i> Batch erstellen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CodeMirror -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/sql/sql.min.js"></script>
+
 <script>
-let queryEdited = false;
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
 let editor = null;
+let allWerke = [];
+let loadedData = [];
+let werkeData = {};
+let countryToRegion = {};
+let selectedDokobs = [];
+let queryEdited = false;
 let programmaticChange = false;
 
+const regionMap = {
+    'EU': ['DE','FR','IT','ES','PT','NL','BE','AT','CH','PL','CZ','HU','RO','BG','SK','SI','HR','RS','GR','FI','SE','NO','DK','IE','GB','UK','LU','EE','LV','LT'],
+    'NA': ['US','CA','MX'],
+    'SA': ['BR','AR','CL','CO','PE','VE','EC'],
+    'AP': ['CN','JP','KR','IN','TH','MY','SG','ID','PH','VN','TW','AU','NZ']
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize CodeMirror on the textarea
+    // CodeMirror init (SQL tab)
     editor = CodeMirror.fromTextArea(document.getElementById('customQuery'), {
-        mode: 'text/x-sql',
-        theme: 'monokai',
-        lineNumbers: true,
-        matchBrackets: true,
-        autoCloseBrackets: true,
+        mode: 'text/x-sql', theme: 'monokai', lineNumbers: true,
+        matchBrackets: true, autoCloseBrackets: true
     });
-    
-    // Set initial height
-    editor.setSize(null, 300);
-    
-    // Track edits in CodeMirror (but not programmatic changes)
-    editor.on('change', function(cm, change) {
-        if (!programmaticChange && !queryEdited) {
-            queryEdited = true;
-            // Disable all radio buttons to prevent accidental query replacement
-            document.querySelectorAll('input[name="dataSource"]').forEach(radio => {
-                radio.disabled = true;
-                radio.parentElement.style.opacity = '0.5';
-                radio.parentElement.style.cursor = 'not-allowed';
-            });
-        }
+    editor.setSize(null, 280);
+
+    // Refresh CodeMirror when SQL tab is shown (fix hidden tab rendering)
+    $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
+        if (e.target.id === 'tab-sql') editor.refresh();
     });
-    
-    // Toggle file upload section
-    document.querySelectorAll('input[name="dataSource"]').forEach(radio => {
+
+    // Track manual edits in CodeMirror
+    editor.on('change', function() {
+        if (!programmaticChange) queryEdited = true;
+    });
+
+    // Switch default query when source radio changes
+    document.querySelectorAll('input[name="querySource"]').forEach(radio => {
         radio.addEventListener('change', function() {
-            const fileSection = document.getElementById('fileUploadSection');
-            const querySection = document.getElementById('querySection');
-            const value = this.value;
-            
-            if (value === 'file') {
-                fileSection.style.display = 'block';
-                querySection.style.display = 'none';
+            if (queryEdited) return;
+            programmaticChange = true;
+            if (this.value === 'dil') {
+                editor.setValue("SELECT TOP 100\n    drad.doknr as documentnumber,\n    drad.dokob,\n    drad.objky,\n    drad.dokar as documenttype,\n    drad.dokvr as documentversion,\n    drad.doktl as documentpart,\n    drad.longtext_id,\n    iflos.strno\nFROM dil.drad AS drad\nLEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno\nWHERE iflos.tplnr IS NOT NULL;");
             } else {
-                fileSection.style.display = 'none';
-                querySection.style.display = 'block';
-                
-                // Update CodeMirror content when switching between query sources
-                if (!queryEdited) {
-                    let newQuery = '';
-                    if (value === 'dil') {
-                        newQuery = `SELECT TOP 100
-    drad.doknr as documentnumber,
-    drad.dokob,
-    drad.objky,
-    drad.dokar as documenttype,
-    drad.dokvr as documentversion,
-    drad.doktl as documentpart,
-    drad.longtext_id,
-    iflos.strno
-FROM dil.drad AS drad
-LEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno
-WHERE iflos.tplnr IS NOT NULL;`;
-                    } else if (value === 'datastore') {
-                        newQuery = `SELECT TOP 100
-    DOKNR as documentnumber,
-    DOKAR as documenttype,
-    DOKVR as documentversion,
-    DOKTL as documentpart
-FROM dbo.migration_selection;`;
-                    }
-                    // Mark as programmatic change to prevent triggering queryEdited
-                    programmaticChange = true;
-                    editor.setValue(newQuery);
-                    programmaticChange = false;
-                }
+                editor.setValue("SELECT TOP 100\n    DOKNR as documentnumber,\n    DOKAR as documenttype,\n    DOKVR as documentversion,\n    DOKTL as documentpart\nFROM dbo.migration_selection;");
             }
+            programmaticChange = false;
         });
     });
 
-    // Update file label
+    // File label
     document.getElementById('fileInput').addEventListener('change', function() {
-        const label = this.nextElementSibling;
-        const fileName = this.files[0] ? this.files[0].name : 'Choose file...';
-        label.textContent = fileName;
+        this.nextElementSibling.textContent = this.files[0] ? this.files[0].name : 'Datei wählen...';
     });
-    
-    // Character counter for description
+
+    // Char counter
     document.getElementById('batchDescription').addEventListener('input', function() {
         document.getElementById('descCharCount').textContent = this.value.length;
     });
 
-    // Handle form submission
-    document.getElementById('prepareForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        prepareMigration();
-    });
+    // Load Werke + DB status for DMS tab
+    loadWerke();
+    loadDBStatus();
 });
-</script>
 
+// ═══════════════════════════════════════════════════════════════
+//  MAIN: CREATE BATCH (dispatcher based on active tab)
+// ═══════════════════════════════════════════════════════════════
+function createBatch() {
+    const activeTab = document.querySelector('#sourceTabs .nav-link.active').id;
+    const wave = document.getElementById('batchWave').value;
+
+    if (!wave) { alert('Bitte eine Wave auswählen!'); return; }
+
+    if (activeTab === 'tab-dms')       createDMSBatch();
+    else if (activeTab === 'tab-sql')  createSQLBatch();
+    else if (activeTab === 'tab-file') createFileBatch();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PATH 1: DMS Objekte → Batch
+// ═══════════════════════════════════════════════════════════════
+function createDMSBatch() {
+    const count = parseInt($('#dbCount').text().replace(/[,.]/g, '')) || 0;
+    if (count === 0) {
+        alert('Keine DMS-Objekte in der lokalen Datenbank. Bitte zuerst Daten laden!');
+        return;
+    }
+    $('#dmsObjectCount').text(count.toLocaleString());
+    loadDokobStats();
+    $('#dokobFilterModal').modal('show');
+}
+
+function createDMSBatchConfirmed() {
+    if (selectedDokobs.length === 0) { alert('Bitte mindestens einen Objekttyp auswählen!'); return; }
+
+    const wave = document.getElementById('batchWave').value;
+    const description = document.getElementById('batchDescription').value.trim();
+    const notes = document.getElementById('batchNotes').value.trim();
+
+    $('#dokobFilterModal').modal('hide');
+    const btn = document.getElementById('createBatchBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 0%';
+    showDmsProgress(5, 'Starte Batch-Erstellung...');
+
+    const params = new URLSearchParams({ wave, description, notes, dokob_filter: selectedDokobs.join(',') });
+    const es = new EventSource(`/api/dms/create-batch-stream?${params}`);
+
+    es.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.type === 'status' || data.type === 'progress') {
+            showDmsProgress(data.percent || 50, data.message || 'Verarbeite...');
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${data.percent || 0}%`;
+        } else if (data.type === 'complete') {
+            es.close();
+            hideDmsProgress();
+            resetBtn();
+            showBatchResult(true, data);
+        } else if (data.type === 'error') {
+            es.close();
+            hideDmsProgress();
+            resetBtn();
+            showBatchResult(false, { error: data.message });
+        }
+    };
+    es.onerror = function() {
+        es.close(); hideDmsProgress(); resetBtn();
+        showBatchResult(false, { error: 'Verbindungsfehler' });
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PATH 2: SQL Query → Batch
+// ═══════════════════════════════════════════════════════════════
+function createSQLBatch() {
+    const query = editor.getValue().trim();
+    if (!query) { alert('Bitte eine SQL-Query eingeben'); return; }
+
+    const formData = new FormData();
+    formData.append('use_file', 'false');
+    formData.append('custom_query', query);
+    formData.append('query_source', document.querySelector('input[name="querySource"]:checked').value);
+    appendMetadata(formData);
+    submitPrepare(formData);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PATH 3: Excel / CSV Upload → Batch
+// ═══════════════════════════════════════════════════════════════
+function createFileBatch() {
+    const fileInput = document.getElementById('fileInput');
+    if (!fileInput.files[0]) { alert('Bitte eine Datei auswählen'); return; }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('use_file', 'true');
+    appendMetadata(formData);
+    submitPrepare(formData);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SHARED: Submit to /prepare (SQL + File paths)
+// ═══════════════════════════════════════════════════════════════
+function appendMetadata(formData) {
+    formData.append('wave', document.getElementById('batchWave').value);
+    formData.append('description', document.getElementById('batchDescription').value);
+    formData.append('notes', document.getElementById('batchNotes').value);
+}
+
+function submitPrepare(formData) {
+    const btn = document.getElementById('createBatchBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+    document.getElementById('resultSection').style.display = 'none';
+
+    fetch('/prepare', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => { resetBtn(); showBatchResult(data.success, data); })
+        .catch(error => { resetBtn(); showBatchResult(false, { error: String(error) }); });
+}
+
+function resetBtn() {
+    const btn = document.getElementById('createBatchBtn');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-rocket"></i> Migration Batch erstellen';
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RESULT DISPLAY
+// ═══════════════════════════════════════════════════════════════
+function showBatchResult(success, data) {
+    const section = document.getElementById('resultSection');
+    const alertEl = document.getElementById('resultAlert');
+    const details = document.getElementById('resultDetails');
+    section.style.display = 'block';
+    section.scrollIntoView({ behavior: 'smooth' });
+
+    if (success) {
+        alertEl.className = 'alert alert-success';
+        alertEl.innerHTML = '<i class="fas fa-check-circle"></i> <strong>Migration Batch erfolgreich erstellt!</strong>';
+        details.innerHTML = `
+            <div class="card">
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr><th>Batch ID:</th><td><code>${data.batch_id}</code></td></tr>
+                        <tr><th>Datensätze:</th><td>${(data.record_count || 0).toLocaleString()}</td></tr>
+                    </table>
+                    <div class="mt-3">
+                        <a href="/preview?batch_id=${data.batch_id}" class="btn btn-primary btn-lg">
+                            <i class="fas fa-arrow-right"></i> Weiter: Enrich &amp; Preview
+                        </a>
+                        <a href="/" class="btn btn-secondary btn-lg ml-2">
+                            <i class="fas fa-home"></i> Dashboard
+                        </a>
+                    </div>
+                </div>
+            </div>`;
+    } else {
+        alertEl.className = 'alert alert-danger';
+        alertEl.innerHTML = `<i class="fas fa-exclamation-circle"></i> <strong>Fehler:</strong> ${data.error || 'Unbekannter Fehler'}`;
+        details.innerHTML = '<button onclick="document.getElementById(\'resultSection\').style.display=\'none\'" class="btn btn-secondary"><i class="fas fa-redo"></i> Erneut versuchen</button>';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DMS OBJECTS: Werke Grid
+// ═══════════════════════════════════════════════════════════════
+function loadWerke() {
+    fetch('/api/dms/werke')
+        .then(r => r.json())
+        .then(data => { if (data.success) { allWerke = data.werke; initWerkeGrid(data.werke); } })
+        .catch(err => console.error('Error loading Werke:', err));
+}
+
+function initWerkeGrid(werke) {
+    const container = $('#werkeContainer');
+    container.empty();
+    werkeData = {};
+
+    werke.forEach(w => {
+        const werkCode = w.code || w.werk || '';
+        const country = werkCode.substring(0, 2).toUpperCase() || 'XX';
+        let region = 'OTHER';
+        for (const [r, countries] of Object.entries(regionMap)) {
+            if (countries.includes(country)) { region = r; break; }
+        }
+        countryToRegion[country] = region;
+        werkeData[werkCode] = { count: w.count || 0, country, region };
+    });
+
+    Object.keys(werkeData).sort((a, b) => a.localeCompare(b, 'de', { numeric: true })).forEach(werkCode => {
+        const d = werkeData[werkCode];
+        const countStr = d.count >= 1000 ? (d.count / 1000).toFixed(0) + 'k' : d.count;
+        const $el = $(`<div class="werke-checkbox" data-werk="${werkCode}" data-region="${d.region}">
+            <span class="werke-code">${werkCode}</span><span class="werke-count">${countStr}</span></div>`);
+        $el.on('click', function() { $(this).toggleClass('selected'); updateSelectedCount(); });
+        container.append($el);
+    });
+}
+
+function updateSelectedCount() {
+    $('#selectedCount').text(`${$('#werkeContainer .werke-checkbox.selected').length} ausgewählt`);
+}
+
+function filterWerke(term) {
+    term = term.toLowerCase();
+    $('#werkeContainer .werke-checkbox').each(function() {
+        $(this).toggle(String($(this).data('werk') || '').toLowerCase().includes(term));
+    });
+}
+
+function getSelectedWerke() {
+    const sel = [];
+    $('#werkeContainer .werke-checkbox.selected').each(function() { sel.push($(this).data('werk')); });
+    return sel;
+}
+
+function selectRegion(region) {
+    const $items = $(`#werkeContainer .werke-checkbox[data-region="${region}"]`);
+    const allSelected = $items.filter('.selected').length === $items.length;
+    $items.toggleClass('selected', !allSelected);
+    updateSelectedCount();
+}
+
+function clearSelection() {
+    $('#werkeContainer .werke-checkbox').removeClass('selected');
+    updateSelectedCount();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DMS OBJECTS: Load Data (SSE)
+// ═══════════════════════════════════════════════════════════════
+function loadDMSObjects() {
+    const selected = getSelectedWerke();
+    if (!selected.length) { alert('Bitte mindestens ein Werk auswählen!'); return; }
+
+    $('#resultsBody').empty();
+    loadedData = [];
+    $('#detailedStats').empty();
+    $('#dmsStatsRow, #dmsResultsRow').hide();
+    showDmsProgress(5, 'Verbinde mit DIL...');
+    $('#btnLoadData').prop('disabled', true);
+
+    const params = new URLSearchParams({ werke: selected.join(','), auto_save: 'true' });
+    const es = new EventSource(`/api/dms/load-stream?${params}`);
+    let curStats = {}, curExcl = {};
+
+    es.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        switch (data.type) {
+            case 'status':
+                showDmsProgress(data.percent, data.message); break;
+            case 'progress':
+                showDmsProgress(data.percent, `${data.message} (${data.step}/${data.total_steps})`); break;
+            case 'step_complete':
+                curStats[data.dokob] = data.count;
+                curExcl[data.dokob] = data.excluded || 0;
+                showDmsProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()} (${data.time})`);
+                renderDokobBadges(curStats, curExcl);
+                break;
+            case 'complete':
+                es.close();
+                $('#btnLoadData').prop('disabled', false);
+                loadedData = data.data;
+                showDmsProgress(100, 'Fertig!');
+                setTimeout(() => {
+                    hideDmsProgress();
+                    displayResults(data.data);
+                    renderDokobBadges(data.stats, data.stats_excluded || {});
+                    loadDBStatus();
+                }, 500);
+                break;
+            case 'error':
+                es.close();
+                $('#btnLoadData').prop('disabled', false);
+                hideDmsProgress();
+                alert('Fehler: ' + data.message);
+                break;
+        }
+    };
+    es.onerror = function() {
+        es.close(); $('#btnLoadData').prop('disabled', false);
+        hideDmsProgress(); alert('Verbindungsfehler zum Server');
+    };
+}
+
+function showDmsProgress(pct, label) {
+    $('#dmsProgressRow').show();
+    $('#dmsProgressBar').css('width', pct + '%');
+    $('#dmsProgressText').text(pct + '%');
+    $('#dmsProgressLabel').text(label);
+}
+function hideDmsProgress() { $('#dmsProgressRow').hide(); }
+
+function displayResults(data) {
+    const tbody = $('#resultsBody'); tbody.empty();
+    if (!data || !data.length) { tbody.append('<tr><td colspan="7" class="text-center">Keine Daten</td></tr>'); return; }
+    data.slice(0, 100).forEach(r => {
+        tbody.append(`<tr><td>${r.dokar||''}</td><td><code>${r.doknr||''}</code></td><td>${r.dokvr||''}</td><td>${r.doktl||''}</td><td><span class="badge badge-info">${r.dokob||''}</span></td><td><small>${r.objky||''}</small></td><td><span class="badge badge-secondary">${r.werk||''}</span></td></tr>`);
+    });
+    $('#tableInfo').html(`Vorschau: 100 von ${data.length.toLocaleString()}`);
+    $('#dmsResultsRow').show();
+}
+
+function renderDokobBadges(stats, excluded) {
+    const container = $('#detailedStats'); container.empty();
+    let totalExcl = 0;
+    for (const v of Object.values(excluded || {})) totalExcl += (typeof v === 'number' ? v : 0);
+    Object.entries(stats).filter(([k,v]) => k !== 'total' && typeof v === 'number').sort((a,b) => b[1]-a[1]).forEach(([dokob, count]) => {
+        const excl = (excluded || {})[dokob] || 0;
+        const tot = count + excl, pct = tot > 0 ? ((excl/tot)*100).toFixed(1) : 0;
+        const exclHtml = excl > 0 ? `<span class="dokob-excluded" title="${excl.toLocaleString()} ausgeschl. (${pct}%)">-${excl.toLocaleString()}</span>` : '';
+        container.append(`<div class="dokob-stat-badge"><span class="dokob-name">${dokob}</span><span class="dokob-count">${count.toLocaleString()}</span>${exclHtml}</div>`);
+    });
+    if (totalExcl > 0) container.append(`<div class="dokob-stat-badge" style="background:#fff3cd;border-color:#ffc107;"><span class="dokob-name"><i class="fas fa-filter"></i> Ausgeschlossen</span><span style="color:#856404;font-weight:700;">${totalExcl.toLocaleString()}</span></div>`);
+    $('#dmsStatsRow').show();
+}
+
+function loadDBStatus() {
+    fetch('/api/dms/status').then(r => r.json()).then(data => {
+        if (data.success) { $('#dbCount').text(data.count.toLocaleString()); $('#dbStatus').removeClass('badge-secondary').addClass('badge-success'); }
+    }).catch(() => $('#dbStatus').removeClass('badge-success').addClass('badge-secondary'));
+}
+
+function exportData() {
+    if (!loadedData.length) { alert('Keine Daten zum Exportieren!'); return; }
+    const headers = ['dokar','doknr','dokvr','doktl','dokob','objky','werk'];
+    let csv = headers.map(h => h.toUpperCase()).join(';') + '\n';
+    loadedData.forEach(r => { csv += headers.map(h => r[h]||'').join(';') + '\n'; });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `dms_objects_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DOKOB FILTER (for DMS batch creation)
+// ═══════════════════════════════════════════════════════════════
+function loadDokobStats() {
+    fetch('/api/dms/dokob-stats').then(r => r.json()).then(data => {
+        if (data.success && data.dokobs && data.dokobs.length > 0) {
+            selectedDokobs = data.dokobs.map(d => d.dokob);
+            renderDokobFilter(data.dokobs); updateDokobInfo();
+        } else { $('#dokobFilterContainer').html('<span class="text-muted">Keine Objekttypen gefunden</span>'); }
+    });
+}
+
+function renderDokobFilter(dokobs) {
+    const container = $('#dokobFilterContainer'); container.empty();
+    dokobs.forEach(item => {
+        const checked = selectedDokobs.includes(item.dokob);
+        const badge = $(`<label class="badge badge-${checked?'success':'secondary'} mr-1 mb-1" style="cursor:pointer;padding:6px 10px;">
+            <input type="checkbox" class="dokob-checkbox mr-1" value="${item.dokob}" ${checked?'checked':''} style="display:none;">
+            ${item.dokob} <small>(${item.count.toLocaleString()})</small></label>`);
+        badge.on('click', function() {
+            const dokob = $(this).find('input').val();
+            if (selectedDokobs.includes(dokob)) { selectedDokobs = selectedDokobs.filter(d => d !== dokob); $(this).removeClass('badge-success').addClass('badge-secondary'); }
+            else { selectedDokobs.push(dokob); $(this).removeClass('badge-secondary').addClass('badge-success'); }
+            updateDokobInfo();
+        });
+        container.append(badge);
+    });
+}
+
+function selectAllDokob(all) {
+    if (all) { $('.dokob-checkbox').each(function() { const d=$(this).val(); if(!selectedDokobs.includes(d)) selectedDokobs.push(d); $(this).closest('label').removeClass('badge-secondary').addClass('badge-success'); }); }
+    else { selectedDokobs = []; $('.dokob-checkbox').each(function() { $(this).closest('label').removeClass('badge-success').addClass('badge-secondary'); }); }
+    updateDokobInfo();
+}
+
+function updateDokobInfo() {
+    const total = $('.dokob-checkbox').length, sel = selectedDokobs.length;
+    if (sel === 0) $('#selectedDokobInfo').html('<span class="text-danger">⚠️ Keine Objekttypen!</span>');
+    else if (sel === total) $('#selectedDokobInfo').text('Alle Objekttypen ausgewählt');
+    else $('#selectedDokobInfo').text(`${sel} von ${total} Objekttypen`);
+    let c = 0;
+    $('.dokob-checkbox').each(function() {
+        if (selectedDokobs.includes($(this).val())) { const m = $(this).closest('label').text().match(/\(([\d,.]+)\)/); if (m) c += parseInt(m[1].replace(/[,.]/g, '')) || 0; }
+    });
+    $('#dmsObjectCount').text(c.toLocaleString());
+}
+</script>
 {% endblock %}

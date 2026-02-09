@@ -366,6 +366,8 @@ def init_staging_tables(engine):
                     ALTER TABLE dbo.migration_staging ADD link_error NVARCHAR(MAX) NULL;
                 IF COL_LENGTH('dbo.migration_staging', 'link_completed_at') IS NULL
                     ALTER TABLE dbo.migration_staging ADD link_completed_at DATETIME2 NULL;
+                -- Backfill NULL link_status to 'pending' for existing records
+                UPDATE dbo.migration_staging SET link_status = 'pending' WHERE link_status IS NULL;
             """))
             print("[DB_INIT] Ensured migration_staging has link_status/link_error/link_completed_at columns")
         except Exception as e:

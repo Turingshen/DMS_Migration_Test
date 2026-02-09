@@ -42,7 +42,7 @@ from app.process import (
     write_sap_system
 )
 from app.logger import get_logger
-from app.prepare import load_object_mappings
+from app.prepare import load_object_mappings, apply_object_mappings_for_batch
 
 cfg = Config.load()
 misc_db = MiscEngine.load()
@@ -2333,7 +2333,7 @@ def load_linkable_records(batch_id, record_ids=None):
         WHERE batch_id = :batch_id
             AND execution_status IN ('success', 'partial')
             AND ISNULL(container_created, 0) = 1
-            AND link_status IN ('pending', 'link_failed')
+            AND ISNULL(link_status, 'pending') IN ('pending', 'link_failed')
             AND target_dokob IS NOT NULL AND target_dokob != ''
             AND target_objky IS NOT NULL AND target_objky != ''
     """
@@ -2477,6 +2477,16 @@ def execute_linking(batch_id, record_ids=None):
             'csrf_token_time': http_session.get('csrf_token_time', 0),
             'max_workers': max_workers,
         }
+        
+        # Auto-apply object mappings to staging before loading
+        # This ensures target_dokob/target_objky are populated even if mappings
+        # were uploaded AFTER the upload phase completed
+        try:
+            applied = apply_object_mappings_for_batch(batch_id)
+            if applied > 0:
+                print(f"[LINK] Auto-applied object mappings to {applied} staging records")
+        except Exception as e:
+            print(f"[LINK_WARN] Could not auto-apply mappings: {e}")
         
         # Load linkable records
         records_df = load_linkable_records(batch_id, record_ids)

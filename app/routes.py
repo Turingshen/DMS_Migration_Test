@@ -188,11 +188,11 @@ def get_batches():
                     SUM(CASE WHEN execution_status IN ('success', 'failed', 'partial') THEN 1 ELSE 0 END) as executed_count,
                     SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
                     SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                    SUM(CASE WHEN link_status = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
+                    SUM(CASE WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
                     SUM(CASE WHEN link_status = 'linked' THEN 1 ELSE 0 END) as link_linked,
                     SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
-                    SUM(CASE WHEN link_status IN ('linked', 'link_exists', 'link_failed', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
+                    SUM(CASE WHEN ISNULL(link_status, 'pending') IN ('linked', 'link_exists', 'link_failed', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
                 FROM dbo.migration_staging
                 GROUP BY batch_id
             ) s ON b.batch_id = s.batch_id
@@ -1924,7 +1924,7 @@ def get_link_progress(batch_id):
                     SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
                     SUM(CASE WHEN link_status = 'linking' THEN 1 ELSE 0 END) as linking_now,
-                    SUM(CASE WHEN link_status = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
+                    SUM(CASE WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
                     SUM(CASE WHEN execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
                 FROM dbo.migration_staging
                 WHERE batch_id = '{batch_id}'
@@ -3390,12 +3390,22 @@ def upload_batch_object_mapping(batch_id):
                     })
                     added += 1
         
+        # Auto-apply mappings to staging records immediately after upload
+        staging_applied = 0
+        try:
+            from app.prepare import apply_object_mappings_for_batch
+            staging_applied = apply_object_mappings_for_batch(batch_id)
+        except Exception as e:
+            print(f"[WARN] Auto-apply after upload failed: {e}")
+        
+        apply_msg = f', {staging_applied} auf Staging angewendet' if staging_applied > 0 else ''
         return jsonify({
             'success': True,
-            'message': f'Upload complete: {added} added, {updated} updated, {skipped} skipped',
+            'message': f'Upload complete: {added} added, {updated} updated, {skipped} skipped{apply_msg}',
             'added': added,
             'updated': updated,
-            'skipped': skipped
+            'skipped': skipped,
+            'staging_applied': staging_applied
         })
         
     except Exception as e:

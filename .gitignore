@@ -18,14 +18,19 @@ flask_session/
 # User data
 userdata/
 
-# Test files
-test_*.py
-check_*.py
+# Debug/Analysis scripts (in root, not in tests/)
+/test_*.py
+/check_*.py
+/analyze_*.py
+/step*.py
 
 # Data files
 *.xlsx
 *.xls
 *.csv
+
+# Archive folder (old scripts)
+archive/
 
 # IDE
 .vscode/

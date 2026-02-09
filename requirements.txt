@@ -9,3 +9,7 @@ Werkzeug==3.0.1
 pymssql==2.2.11
 hdbcli==2.19.21
 sqlalchemy-hana==0.5.0
+
+# Testing
+pytest>=9.0.0
+pytest-cov>=7.0.0

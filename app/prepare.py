@@ -77,107 +77,6 @@ def load_translations():
         return []
 
 
-def enrich_drad_data(data_df):
-    """
-    Enrich dataframe with DOKOB and OBJKY from DIL.DRAD table.
-    Uses document keys (documentnumber, documenttype, documentversion, documentpart) to lookup object links.
-    
-    DOKOB = Object Type (e.g., IFLOT, PMQMEL, PMAUFK)
-    OBJKY = Object Key (e.g., Functional Location, Notification Number, Order Number)
-    
-    Returns dataframe with added 'dokob' and 'objky' columns.
-    """
-    required_cols = ['documentnumber', 'documenttype', 'documentversion', 'documentpart']
-    cols = [c.lower() for c in data_df.columns]
-    
-    if not all(k in cols for k in required_cols):
-        print("[PREPARE] Missing document key columns for DRAD lookup")
-        if 'dokob' not in data_df.columns:
-            data_df['dokob'] = None
-        if 'objky' not in data_df.columns:
-            data_df['objky'] = None
-        return data_df
-    
-    if len(data_df) == 0:
-        data_df['dokob'] = None
-        data_df['objky'] = None
-        return data_df
-    
-    print(f"[PREPARE] Looking up DRAD data (DOKOB, OBJKY) for {len(data_df)} documents...")
-    
-    try:
-        # Build WHERE clause conditions for batch lookup
-        conditions = []
-        for _, row in data_df.iterrows():
-            doknr = str(row.get('documentnumber', '')).replace("'", "''")
-            dokar = str(row.get('documenttype', '')).replace("'", "''")
-            dokvr = str(row.get('documentversion', '')).replace("'", "''").zfill(2)
-            doktl = str(row.get('documentpart', '')).replace("'", "''").zfill(3)
-            conditions.append(
-                f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
-            )
-        
-        # Query in chunks to avoid SQL statement size limits
-        chunk_size = 200
-        all_drad = []
-        
-        for i in range(0, len(conditions), chunk_size):
-            chunk = conditions[i:i + chunk_size]
-            where_clause = " OR ".join(chunk)
-            query = f"""
-                SELECT DOKNR, DOKAR, DOKVR, DOKTL, DOKOB, OBJKY
-                FROM DIL.DRAD
-                WHERE ({where_clause})
-            """
-            with dil_engine.begin() as con:
-                chunk_df = pd.read_sql(query, con)
-            all_drad.append(chunk_df)
-        
-        if all_drad:
-            drad_df = pd.concat(all_drad, ignore_index=True)
-            drad_df.columns = [c.lower() for c in drad_df.columns]
-            
-            # A document can be linked to multiple objects - take the first one for now
-            drad_df = drad_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
-            
-            # Prepare data_df columns for merge
-            data_df['_doknr'] = data_df['documentnumber'].astype(str)
-            data_df['_dokar'] = data_df['documenttype'].astype(str)
-            data_df['_dokvr'] = data_df['documentversion'].astype(str).str.zfill(2)
-            data_df['_doktl'] = data_df['documentpart'].astype(str).str.zfill(3)
-            
-            # Only select the columns we need from drad_df for merge
-            drad_merge = drad_df[['doknr', 'dokar', 'dokvr', 'doktl', 'dokob', 'objky']].copy()
-            drad_merge = drad_merge.rename(columns={'dokob': 'source_dokob', 'objky': 'source_objky'})
-            
-            # Merge to get DOKOB and OBJKY
-            data_df = data_df.merge(
-                drad_merge,
-                how='left',
-                left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
-                right_on=['doknr', 'dokar', 'dokvr', 'doktl']
-            )
-            
-            # Clean up temporary columns
-            data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl', 
-                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
-            
-            found_count = data_df['source_dokob'].notna().sum()
-            print(f"[PREPARE] Found DRAD data for {found_count}/{len(data_df)} documents")
-        else:
-            data_df['source_dokob'] = None
-            data_df['source_objky'] = None
-            
-    except Exception as e:
-        print(f"[WARN] Failed to enrich DRAD data: {e}")
-        if 'source_dokob' not in data_df.columns:
-            data_df['source_dokob'] = None
-        if 'source_objky' not in data_df.columns:
-            data_df['source_objky'] = None
-    
-    return data_df
-
-
 def load_object_mappings(batch_id):
     """
     Load active object mappings for a specific batch from database.
@@ -252,8 +151,6 @@ def apply_object_mappings_for_batch(batch_id):
     except Exception as e:
         print(f"[WARN] Failed to apply object mappings: {e}")
         return 0
-    
-    return data_df
 
 
 def enrich_loio_ids(data_df):
@@ -413,89 +310,6 @@ def enrich_file_sizes(data_df):
     except Exception as e:
         print(f"[WARN] Failed to enrich file sizes: {e}")
         data_df['file_size_bytes'] = None
-    
-    return data_df
-
-
-def enrich_filenames_from_draw(data_df):
-    """
-    Enrich dataframe with filenames from DIL.DRAW.filep.
-    This is a workaround for documents where the API doesn't return the file extension.
-    The filep field in DRAW contains the full filename with extension.
-    
-    Returns dataframe with added 'source_filename' column.
-    """
-    required_cols = ['documentnumber', 'documenttype', 'documentversion', 'documentpart']
-    if not all(col in data_df.columns for col in required_cols):
-        print("[PREPARE] Missing columns for DRAW filename lookup")
-        data_df['source_filename'] = None
-        return data_df
-    
-    print(f"[PREPARE] Looking up filenames from DRAW for {len(data_df)} documents...")
-    
-    try:
-        # Build list of document keys for lookup
-        doc_keys = []
-        for _, row in data_df.iterrows():
-            doknr = str(row['documentnumber'])
-            dokar = str(row['documenttype'])
-            dokvr = str(row['documentversion']).zfill(2)
-            doktl = str(row['documentpart']).zfill(3)
-            doc_keys.append((doknr, dokar, dokvr, doktl))
-        
-        # Chunk the queries to avoid too large IN clauses
-        chunk_size = 300
-        all_filenames = []
-        
-        for i in range(0, len(doc_keys), chunk_size):
-            chunk = doc_keys[i:i + chunk_size]
-            conditions = [
-                f"(doknr = '{k[0]}' AND dokar = '{k[1]}' AND dokvr = '{k[2]}' AND doktl = '{k[3]}')"
-                for k in chunk
-            ]
-            where_clause = " OR ".join(conditions)
-            
-            query = f"""
-                SELECT doknr, dokar, dokvr, doktl, filep
-                FROM dil.DRAW
-                WHERE {where_clause}
-            """
-            with dil_engine.begin() as con:
-                chunk_df = pd.read_sql(query, con)
-            all_filenames.append(chunk_df)
-        
-        if all_filenames:
-            filename_df = pd.concat(all_filenames, ignore_index=True)
-            filename_df.columns = [c.lower() for c in filename_df.columns]
-            
-            # Prepare merge columns
-            data_df['_doknr'] = data_df['documentnumber'].astype(str)
-            data_df['_dokar'] = data_df['documenttype'].astype(str)
-            data_df['_dokvr'] = data_df['documentversion'].astype(str).str.zfill(2)
-            data_df['_doktl'] = data_df['documentpart'].astype(str).str.zfill(3)
-            
-            # Merge to get filenames
-            data_df = data_df.merge(
-                filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep']],
-                how='left',
-                left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
-                right_on=['doknr', 'dokar', 'dokvr', 'doktl']
-            )
-            data_df.rename(columns={'filep': 'source_filename'}, inplace=True)
-            data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
-                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
-            
-            # Count how many filenames we found
-            found_count = data_df['source_filename'].notna().sum()
-            with_ext = data_df['source_filename'].dropna().apply(lambda x: '.' in str(x)).sum()
-            print(f"[PREPARE] Found {found_count} filenames in DRAW, {with_ext} with extension")
-        else:
-            data_df['source_filename'] = None
-            
-    except Exception as e:
-        print(f"[WARN] Failed to enrich filenames from DRAW: {e}")
-        if 'source_filename' not in data_df.columns:
-            data_df['source_filename'] = None
     
     return data_df
 

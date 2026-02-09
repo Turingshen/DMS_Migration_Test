@@ -4,12 +4,10 @@ Reads from staging database and performs API calls.
 """
 
 import pandas as pd
-import datetime as dt
 import time
 import requests
 import threading
 from concurrent.futures import ThreadPoolExecutor
-import asyncio
 from sqlalchemy import text
 from flask import session as http_session
 
@@ -39,7 +37,6 @@ from app.process import (
     _classify_error,
     get_error_description,
     MAX_API_WORKERS,
-    ADD_UP_TO,
     MAX_DESC_LEN,
     read_sap_system,
     write_sap_system

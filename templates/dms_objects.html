@@ -71,6 +71,27 @@
         font-size: 0.7rem;
         margin-left: 4px;
     }
+    .dokob-stat-badge .dokob-no-file {
+        color: #e67e00;
+        font-size: 0.7rem;
+        margin-left: 4px;
+    }
+    .badge-no-file {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffc107;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 3px 8px;
+    }
+    .badge-status-excl {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 3px 8px;
+    }
     .dokob-stat-badge .dokob-percent {
         color: #6c757d;
         font-size: 0.7rem;
@@ -325,6 +346,7 @@
             <span id="dbStatus" class="badge badge-secondary">
                 <i class="fas fa-database"></i> Lokale DB: <span id="dbCount">0</span> Objekte
             </span>
+            <span id="dbExcludedInfo" class="ml-1" style="display:none;"></span>
         </div>
     </div>
 
@@ -830,7 +852,8 @@ function loadDMSObjects() {
                     $('#progressRow').hide();
                     displayResults({ data: data.data, count: data.count });
                     updateStats(data.stats, data.stats_excluded || {}, data.stats_no_file || {});
-                    loadDBStatus();
+                    // Update DB badge with full breakdown
+                    updateDBStatusFull(data.count, data.stats_excluded || {}, data.stats_no_file || {});
                     $('#statsRow').show();
                     $('#resultsRow').show();
                 }, 500);
@@ -865,29 +888,53 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
     container.empty();
     
     // Calculate totals
-    let total = 0;
+    let totalCount = 0;
     let totalExcluded = 0;
     let totalNoFile = 0;
     for (const [key, value] of Object.entries(stats)) {
         if (typeof value === 'number') {
-            total += value;
+            totalCount += value;
             totalExcluded += (statsExcluded[key] || 0);
             totalNoFile += (statsNoFile[key] || 0);
         }
     }
+    const grandTotal = totalCount + totalExcluded + totalNoFile;
     
-    // Sort by count descending
+    // Live summary badge
+    container.append(`
+        <div class="dokob-stat-badge" style="background: #d4edda; border-color: #28a745; border-width: 2px;">
+            <span class="dokob-name"><i class="fas fa-rocket"></i> Batch</span>
+            <span class="dokob-count" style="font-size: 1rem;">${totalCount.toLocaleString()}</span>
+            <span style="color: #6c757d; font-size: 0.7rem; margin-left: 4px;">von ${grandTotal.toLocaleString()}</span>
+        </div>
+    `);
+    if (totalNoFile > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #e67e00; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-file-excel" style="color: #e67e00;"></i> Ohne Datei</span>
+                <span style="color: #e67e00; font-weight: 700;">${totalNoFile.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    if (totalExcluded > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #f8d7da; border-color: #dc3545; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-ban" style="color: #dc3545;"></i> Status</span>
+                <span style="color: #dc3545; font-weight: 700;">${totalExcluded.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    
+    // Per-DOKOB badges
     const entries = Object.entries(stats)
         .filter(([key, value]) => typeof value === 'number')
-        .sort((a, b) => b[1] - a[1]);
+        .map(([dokob, count]) => [dokob, count, statsExcluded[dokob] || 0, statsNoFile[dokob] || 0])
+        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0 || nf > 0)
+        .sort((a, b) => (b[1] + b[2] + b[3]) - (a[1] + a[2] + a[3]));
     
-    entries.forEach(([dokob, count]) => {
-        const excluded = statsExcluded[dokob] || 0;
-        const noFile = statsNoFile[dokob] || 0;
-        const totalForDokob = count + excluded + noFile;
-        const excludedPercent = totalForDokob > 0 ? ((excluded / totalForDokob) * 100).toFixed(1) : 0;
-        const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen (gelöscht/geschlossen)">⊘${excluded.toLocaleString()}</span>` : '';
-        const noFileHtml = noFile > 0 ? `<span class="dokob-excluded" style="color: #e67e00;" title="${noFile.toLocaleString()} ohne Datei (DRAW.FILEP leer)">🗎${noFile.toLocaleString()}</span>` : '';
+    entries.forEach(([dokob, count, excluded, noFile]) => {
+        const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
+        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
         container.append(`
             <div class="dokob-stat-badge">
                 <span class="dokob-name">${dokob}</span>
@@ -897,19 +944,6 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
             </div>
         `);
     });
-    
-    // Add total excluded summary if any
-    if (totalExcluded > 0 || totalNoFile > 0) {
-        let summaryParts = [];
-        if (totalNoFile > 0) summaryParts.push(`🗎 ${totalNoFile.toLocaleString()} ohne Datei`);
-        if (totalExcluded > 0) summaryParts.push(`⊘ ${totalExcluded.toLocaleString()} Status`);
-        container.append(`
-            <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #ffc107;">
-                <span class="dokob-name"><i class="fas fa-filter"></i> Ausgeschlossen</span>
-                <span style="color: #856404; font-weight: 700;">${summaryParts.join(' | ')}</span>
-            </div>
-        `);
-    }
     
     $('#statsRow').show();
 }
@@ -958,29 +992,58 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
     container.empty();
     
     // Calculate totals
+    let totalCount = 0;
     let totalExcluded = 0;
     let totalNoFile = 0;
-    for (const [key, value] of Object.entries(statsExcluded)) {
-        if (typeof value === 'number') {
-            totalExcluded += value;
+    for (const [key, value] of Object.entries(stats)) {
+        if (key !== 'total' && typeof value === 'number') {
+            totalCount += value;
+            totalExcluded += (statsExcluded[key] || 0);
+            totalNoFile += (statsNoFile[key] || 0);
         }
     }
-    for (const [key, value] of Object.entries(statsNoFile)) {
-        if (typeof value === 'number') {
-            totalNoFile += value;
-        }
-    }
+    const grandTotal = totalCount + totalExcluded + totalNoFile;
     
-    // Sort by count descending (exclude 'total')
+    // Sort by total relevance (count + excluded + nofile) descending
     const entries = Object.entries(stats)
         .filter(([key, value]) => key !== 'total' && typeof value === 'number')
-        .sort((a, b) => b[1] - a[1]);
+        .map(([dokob, count]) => [dokob, count, statsExcluded[dokob] || 0, statsNoFile[dokob] || 0])
+        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0 || nf > 0)
+        .sort((a, b) => (b[1] + b[2] + b[3]) - (a[1] + a[2] + a[3]));
     
-    entries.forEach(([dokob, count]) => {
-        const excluded = statsExcluded[dokob] || 0;
-        const noFile = statsNoFile[dokob] || 0;
-        const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen (gelöscht/geschlossen)">⊘${excluded.toLocaleString()}</span>` : '';
-        const noFileHtml = noFile > 0 ? `<span class="dokob-excluded" style="color: #e67e00;" title="${noFile.toLocaleString()} ohne Datei (DRAW.FILEP leer)">🗎${noFile.toLocaleString()}</span>` : '';
+    // Summary badge first: Batch size
+    container.append(`
+        <div class="dokob-stat-badge" style="background: #d4edda; border-color: #28a745; border-width: 2px;">
+            <span class="dokob-name"><i class="fas fa-rocket"></i> Batch</span>
+            <span class="dokob-count" style="font-size: 1rem;">${totalCount.toLocaleString()}</span>
+            <span style="color: #6c757d; font-size: 0.7rem; margin-left: 4px;">von ${grandTotal.toLocaleString()} Gesamt</span>
+        </div>
+    `);
+    
+    // No-file exclusion badge
+    if (totalNoFile > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #e67e00; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-file-excel" style="color: #e67e00;"></i> Ohne Datei</span>
+                <span style="color: #e67e00; font-weight: 700; font-size: 1rem;">${totalNoFile.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    
+    // Status exclusion badge
+    if (totalExcluded > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #f8d7da; border-color: #dc3545; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-ban" style="color: #dc3545;"></i> Status</span>
+                <span style="color: #dc3545; font-weight: 700; font-size: 1rem;">${totalExcluded.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    
+    // Per-DOKOB badges (only those with any data)
+    entries.forEach(([dokob, count, excluded, noFile]) => {
+        const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
+        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei (DRAW.FILEP leer)"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
         container.append(`
             <div class="dokob-stat-badge">
                 <span class="dokob-name">${dokob}</span>
@@ -990,19 +1053,6 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
             </div>
         `);
     });
-    
-    // Add total excluded summary if any
-    if (totalExcluded > 0 || totalNoFile > 0) {
-        let summaryParts = [];
-        if (totalNoFile > 0) summaryParts.push(`🗎 ${totalNoFile.toLocaleString()} ohne Datei`);
-        if (totalExcluded > 0) summaryParts.push(`⊘ ${totalExcluded.toLocaleString()} Status`);
-        container.append(`
-            <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #ffc107;">
-                <span class="dokob-name"><i class="fas fa-filter"></i> Ausgeschlossen</span>
-                <span style="color: #856404; font-weight: 700;">${summaryParts.join(' | ')}</span>
-            </div>
-        `);
-    }
 }
 
 function resetStats() {
@@ -1017,7 +1067,11 @@ function loadDBStatus() {
         .then(data => {
             if (data.success) {
                 $('#dbCount').text(data.count.toLocaleString());
-                $('#dbStatus').removeClass('badge-secondary').addClass('badge-success');
+                if (data.count > 0) {
+                    $('#dbStatus').removeClass('badge-secondary').addClass('badge-success');
+                } else {
+                    $('#dbStatus').removeClass('badge-success').addClass('badge-secondary');
+                }
                 // Enable migration batch button if data exists
                 $('#btnMigrationBatch').prop('disabled', data.count === 0);
             }
@@ -1026,6 +1080,32 @@ function loadDBStatus() {
             $('#dbStatus').removeClass('badge-success').addClass('badge-secondary');
             $('#btnMigrationBatch').prop('disabled', true);
         });
+}
+
+function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
+    // Update DB count
+    $('#dbCount').text(batchCount.toLocaleString());
+    if (batchCount > 0) {
+        $('#dbStatus').removeClass('badge-secondary').addClass('badge-success');
+    } else {
+        $('#dbStatus').removeClass('badge-success').addClass('badge-warning');
+    }
+    $('#btnMigrationBatch').prop('disabled', batchCount === 0);
+    
+    // Build exclusion info badges
+    let totalNoFile = 0, totalExcluded = 0;
+    for (const v of Object.values(statsNoFile)) { if (typeof v === 'number') totalNoFile += v; }
+    for (const v of Object.values(statsExcluded)) { if (typeof v === 'number') totalExcluded += v; }
+    
+    let parts = [];
+    if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${totalNoFile.toLocaleString()} ohne Datei</span>`);
+    if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${totalExcluded.toLocaleString()} Status</span>`);
+    
+    if (parts.length > 0) {
+        $('#dbExcludedInfo').html(parts.join(' ')).show();
+    } else {
+        $('#dbExcludedInfo').hide();
+    }
 }
 
 function exportData() {

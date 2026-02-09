@@ -3977,15 +3977,22 @@ def load_dms_objects_stream():
             # - PLKO: Exclude if PLKO.LOEKZ = 'X'
             # Post-filter (applied in Python):
             # - ALL: Exclude if DRAW.FILEP is empty (no file attached)
+            # Scalar subquery avoids LEFT JOIN row duplication from MANDT
+            _has_file_sql = """CASE WHEN EXISTS (
+                        SELECT 1 FROM DIL.DRAW draw 
+                        WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR 
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL 
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                    ) THEN 1 ELSE 0 END as HAS_FILE"""
+            
             queries = {
                 'EQUI': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
-                           equz.IWERK as WERK, draw.FILEP
+                           equz.IWERK as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
                     JOIN DIL.EQUI equi ON drad.OBJKY = equi.EQUNR
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3996,11 +4003,10 @@ def load_dms_objects_stream():
                 """,
                 'IFLOT': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           iflot.IWERK as WERK, draw.FILEP
+                           iflot.IWERK as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -4011,35 +4017,32 @@ def load_dms_objects_stream():
                 """,
                 'MPLA': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK, draw.FILEP
+                           COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
                     LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'MPLA' 
                       AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
                 """,
                 'PMPLKO': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           plko.WERKS as WERK, draw.FILEP
+                           plko.WERKS as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.PLKO plko ON 
                         LEFT(drad.OBJKY, 1) = plko.PLNTY AND
                         SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
                         RIGHT(drad.OBJKY, 2) = plko.PLNAL
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                       AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
                 """,
                 'PMAUFK': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           aufk.WERKS as WERK, draw.FILEP
+                           aufk.WERKS as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -4050,15 +4053,14 @@ def load_dms_objects_stream():
                 """,
                 'PMAFVC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           afvc.WERKS as WERK, draw.FILEP
+                           afvc.WERKS as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.AFVC afvc ON 
                         SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
                         SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
                     JOIN DIL.AFKO afko ON afvc.AUFPL = afko.AUFPL
                     JOIN DIL.AUFK aufk ON afko.AUFNR = aufk.AUFNR
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -4069,12 +4071,11 @@ def load_dms_objects_stream():
                 """,
                 'PMQMEL': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           qmih.IWERK as WERK, draw.FILEP
+                           qmih.IWERK as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
                     JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -4085,12 +4086,11 @@ def load_dms_objects_stream():
                 """,
                 'SMQMEL': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           qmih.IWERK as WERK, draw.FILEP
+                           qmih.IWERK as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
                     JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'SMQMEL' AND qmih.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -4101,22 +4101,20 @@ def load_dms_objects_stream():
                 """,
                 'STKO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           stko.WRKAN as WERK, draw.FILEP
+                           stko.WRKAN as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                       AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
                 """,
                 'STPO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           stko.WRKAN as WERK, draw.FILEP
+                           stko.WRKAN as WERK,
+                           {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
                     JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
-                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
-                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                       AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
                 """
@@ -4202,13 +4200,11 @@ def load_dms_objects_stream():
                         df = pd.read_sql(query, con)
                         df.columns = [c.lower() for c in df.columns]
                         
-                        # Split: rows with file vs without file
+                        # Split: rows with file vs without file (HAS_FILE = 1/0 from scalar subquery)
                         total_after_status = len(df)
-                        if 'filep' in df.columns:
-                            df_with_file = df[df['filep'].notna() & (df['filep'].astype(str).str.strip() != '')]
+                        if 'has_file' in df.columns:
+                            df_with_file = df[df['has_file'] == 1].drop(columns=['has_file'])
                             no_file_count = total_after_status - len(df_with_file)
-                            # Drop FILEP column before saving (not needed in output)
-                            df_with_file = df_with_file.drop(columns=['filep'])
                         else:
                             df_with_file = df
                             no_file_count = 0
@@ -4256,14 +4252,20 @@ def load_dms_objects_stream():
             
             # Auto-save to SQLite
             saved = False
-            if auto_save and data_list:
+            if auto_save:
                 try:
                     import sqlite3
                     os.makedirs('userdata', exist_ok=True)
                     db_path = 'userdata/dms_objects.db'
                     conn = sqlite3.connect(db_path)
-                    df_save = pd.DataFrame(data_list)
-                    df_save.to_sql('dms_objects', conn, if_exists='replace', index=False)
+                    if data_list:
+                        df_save = pd.DataFrame(data_list)
+                        df_save.to_sql('dms_objects', conn, if_exists='replace', index=False)
+                    else:
+                        # Clear old data when new load returns 0 results
+                        cursor = conn.cursor()
+                        cursor.execute("DROP TABLE IF EXISTS dms_objects")
+                        conn.commit()
                     conn.close()
                     saved = True
                     print(f"[DMS Load] Auto-saved {len(data_list)} records to {db_path}")

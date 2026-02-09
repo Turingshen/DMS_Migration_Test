@@ -1,6 +1,6 @@
 {% extends "base_simple.html" %}
 
-{% block title %}Migration Rules - Document Migration{% endblock %}
+{% block title %}Migrationsregeln - Dokument-Migration{% endblock %}
 
 {% block head %}
 <style>
@@ -43,28 +43,28 @@
 <div class="container-fluid mt-4">
     <div class="row">
         <div class="col-12">
-            <h2><i class="fas fa-exchange-alt"></i> Migration Rules</h2>
-            <p class="text-muted">Define transformations and overwrites with optional conditions</p>
+            <h2><i class="fas fa-exchange-alt"></i> Migrationsregeln</h2>
+            <p class="text-muted">Transformationen und Überschreibungen mit optionalen Bedingungen definieren</p>
             
             <button class="btn btn-primary btn-add" data-toggle="modal" data-target="#addRuleModal">
-                <i class="fas fa-plus"></i> Add New Rule
+                <i class="fas fa-plus"></i> Neue Regel hinzufügen
             </button>
             
             <div class="table-responsive translation-table">
                 <table class="table table-striped table-bordered" id="translationsTable">
                     <thead class="thead-dark">
                         <tr>
-                            <th>Order</th>
-                            <th>Type</th>
-                            <th>Source Column</th>
-                            <th>Target Column</th>
-                            <th>Source Value</th>
-                            <th>Target Value</th>
-                            <th>Condition</th>
-                            <th>Notes</th>
-                            <th>Created By</th>
-                            <th>Created At</th>
-                            <th>Actions</th>
+                            <th>Reihenfolge</th>
+                            <th>Typ</th>
+                            <th>Quellspalte</th>
+                            <th>Zielspalte</th>
+                            <th>Quellwert</th>
+                            <th>Zielwert</th>
+                            <th>Bedingung</th>
+                            <th>Notizen</th>
+                            <th>Erstellt von</th>
+                            <th>Erstellt am</th>
+                            <th>Aktionen</th>
                         </tr>
                     </thead>
                     <tbody id="translationsBody">
@@ -87,7 +87,7 @@
     <div class="modal-dialog" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Add Migration Rule</h5>
+                <h5 class="modal-title">Migrationsregel hinzufügen</h5>
                 <button type="button" class="close" data-dismiss="modal">
                     <span>&times;</span>
                 </button>
@@ -95,16 +95,16 @@
             <div class="modal-body">
                 <form id="addRuleForm">
                     <div class="form-group">
-                        <label for="ruleType">Rule Type *</label>
+                        <label for="ruleType">Regeltyp *</label>
                         <select class="form-control" id="ruleType" required>
                             <option value="translation">Translation</option>
                             <option value="overwrite">Overwrite</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="sourceColumn">Source Column</label>
+                        <label for="sourceColumn">Quellspalte</label>
                         <select class="form-control" id="sourceColumn">
-                            <option value="">-- Select --</option>
+                            <option value="">-- Auswählen --</option>
                             <option value="source_documenttype">Document Type (source_documenttype)</option>
                             <option value="source_documentnumber">Document Number (source_documentnumber)</option>
                             <option value="source_documentversion">Document Version (source_documentversion)</option>
@@ -117,9 +117,9 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="targetColumn">Target Column *</label>
+                        <label for="targetColumn">Zielspalte *</label>
                         <select class="form-control" id="targetColumn" required>
-                            <option value="">-- Select --</option>
+                            <option value="">-- Auswählen --</option>
                             <option value="target_documenttype">Document Type (target_documenttype)</option>
                             <option value="target_documentnumber">Document Number (target_documentnumber)</option>
                             <option value="target_documentversion">Document Version (target_documentversion)</option>
@@ -130,49 +130,49 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="sourceValue">Source Value</label>
+                        <label for="sourceValue">Quellwert</label>
                         <input type="text" class="form-control" id="sourceValue"
                                placeholder="e.g., L22">
                     </div>
                     <div class="form-group">
-                        <label for="targetValue">Target Value *</label>
+                        <label for="targetValue">Zielwert *</label>
                         <input type="text" class="form-control" id="targetValue" required 
                                placeholder="e.g., L00">
                     </div>
                     <div class="d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0">Optional Condition</h6>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleConditionBtn">Add Condition</button>
+                        <h6 class="mb-0">Optionale Bedingung</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleConditionBtn">Bedingung hinzufügen</button>
                     </div>
                     <div id="conditionSection" class="condition-wrapper" style="display:none;">
-                        <div class="condition-help">Apply this rule only when the condition matches.</div>
+                        <div class="condition-help">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
                         <div class="form-group mt-2">
-                            <label for="conditionColumn">Condition Column</label>
+                            <label for="conditionColumn">Bedingungsspalte</label>
                             <input type="text" class="form-control" id="conditionColumn" placeholder="e.g., source_description">
                         </div>
                         <div class="form-group">
-                            <label for="conditionOperator">Condition Operator</label>
+                            <label for="conditionOperator">Bedingungsoperator</label>
                             <select class="form-control" id="conditionOperator">
-                                <option value="contains">contains</option>
-                                <option value="not_contains">does not contain</option>
-                                <option value="equals">equals</option>
-                                <option value="not_equal">not equal</option>
+                                <option value="contains">enthält</option>
+                                <option value="not_contains">enthält nicht</option>
+                                <option value="equals">gleich</option>
+                                <option value="not_equal">ungleich</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="conditionValue">Condition Value</label>
+                            <label for="conditionValue">Bedingungswert</label>
                             <input type="text" class="form-control" id="conditionValue" placeholder="e.g., gasket">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="notes">Notes</label>
+                        <label for="notes">Notizen</label>
                         <textarea class="form-control" id="notes" rows="2" 
-                                  placeholder="Optional description"></textarea>
+                                  placeholder="Optionale Beschreibung"></textarea>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="saveRule()">Save</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-primary" onclick="saveRule()">Speichern</button>
             </div>
         </div>
     </div>
@@ -183,7 +183,7 @@
     <div class="modal-dialog" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Edit Migration Rule</h5>
+                <h5 class="modal-title">Migrationsregel bearbeiten</h5>
                 <button type="button" class="close" data-dismiss="modal">
                     <span>&times;</span>
                 </button>
@@ -192,13 +192,13 @@
                 <form id="editRuleForm">
                     <input type="hidden" id="editRuleId">
                     <div class="form-group">
-                        <label>Rule Type</label>
+                        <label>Regeltyp</label>
                         <input type="text" class="form-control" id="editRuleType" disabled>
                     </div>
                     <div class="form-group">
-                        <label>Source Column</label>
+                        <label>Quellspalte</label>
                         <select class="form-control" id="editSourceColumn">
-                            <option value="">-- Select --</option>
+                            <option value="">-- Auswählen --</option>
                             <option value="source_documenttype">Document Type (source_documenttype)</option>
                             <option value="source_documentnumber">Document Number (source_documentnumber)</option>
                             <option value="source_documentversion">Document Version (source_documentversion)</option>
@@ -211,9 +211,9 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Target Column</label>
+                        <label>Zielspalte</label>
                         <select class="form-control" id="editTargetColumn">
-                            <option value="">-- Select --</option>
+                            <option value="">-- Auswählen --</option>
                             <option value="target_documenttype">Document Type (target_documenttype)</option>
                             <option value="target_documentnumber">Document Number (target_documentnumber)</option>
                             <option value="target_documentversion">Document Version (target_documentversion)</option>
@@ -224,46 +224,46 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Source Value</label>
+                        <label>Quellwert</label>
                         <input type="text" class="form-control" id="editSourceValue" disabled>
                     </div>
                     <div class="form-group">
-                        <label for="editTargetValue">Target Value *</label>
+                        <label for="editTargetValue">Zielwert *</label>
                         <input type="text" class="form-control" id="editTargetValue" required>
                     </div>
                     <div class="d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0">Optional Condition</h6>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleEditConditionBtn">Add Condition</button>
+                        <h6 class="mb-0">Optionale Bedingung</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleEditConditionBtn">Bedingung hinzufügen</button>
                     </div>
                     <div id="editConditionSection" class="condition-wrapper" style="display:none;">
-                        <div class="condition-help">Apply this rule only when the condition matches.</div>
+                        <div class="condition-help">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
                         <div class="form-group mt-2">
-                            <label for="editConditionColumn">Condition Column</label>
+                            <label for="editConditionColumn">Bedingungsspalte</label>
                             <input type="text" class="form-control" id="editConditionColumn">
                         </div>
                         <div class="form-group">
-                            <label for="editConditionOperator">Condition Operator</label>
+                            <label for="editConditionOperator">Bedingungsoperator</label>
                             <select class="form-control" id="editConditionOperator">
-                                <option value="contains">contains</option>
-                                <option value="not_contains">does not contain</option>
-                                <option value="equals">equals</option>
-                                <option value="not_equal">not equal</option>
+                                <option value="contains">enthält</option>
+                                <option value="not_contains">enthält nicht</option>
+                                <option value="equals">gleich</option>
+                                <option value="not_equal">ungleich</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="editConditionValue">Condition Value</label>
+                            <label for="editConditionValue">Bedingungswert</label>
                             <input type="text" class="form-control" id="editConditionValue">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="editNotes">Notes</label>
+                        <label for="editNotes">Notizen</label>
                         <textarea class="form-control" id="editNotes" rows="2"></textarea>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="updateRule()">Update</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-primary" onclick="updateRule()">Aktualisieren</button>
             </div>
         </div>
     </div>
@@ -289,7 +289,7 @@ $(document).ready(function() {
         const section = $('#conditionSection');
         const isHidden = section.is(':hidden');
         section.toggle(isHidden);
-        $(this).text(isHidden ? 'Remove Condition' : 'Add Condition');
+        $(this).text(isHidden ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
         if (!isHidden) {
             // Clearing values when removing condition
             $('#conditionColumn').val('');
@@ -303,7 +303,7 @@ $(document).ready(function() {
         const section = $('#editConditionSection');
         const isHidden = section.is(':hidden');
         section.toggle(isHidden);
-        $(this).text(isHidden ? 'Remove Condition' : 'Add Condition');
+        $(this).text(isHidden ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
         if (!isHidden) {
             // Clearing values when removing condition
             $('#editConditionColumn').val('');
@@ -318,10 +318,10 @@ function loadRules() {
         if (response.success) {
             displayRules(response.rules || []);
         } else {
-            showError('Failed to load migration rules: ' + response.error);
+            showError('Migrationsregeln konnten nicht geladen werden: ' + response.error);
         }
     }).fail(function(xhr) {
-        showError('Failed to load migration rules: ' + xhr.responseText);
+        showError('Migrationsregeln konnten nicht geladen werden: ' + xhr.responseText);
     });
 }
 
@@ -330,7 +330,7 @@ function displayRules(rules) {
     tbody.empty();
     
     if (rules.length === 0) {
-        tbody.append('<tr><td colspan="11" class="text-center text-muted">No migration rules defined yet</td></tr>');
+        tbody.append('<tr><td colspan="11" class="text-center text-muted">Noch keine Migrationsregeln definiert</td></tr>');
         return;
     }
     
@@ -355,11 +355,11 @@ function displayRules(rules) {
                 <td>${escapeHtml(t.created_by || 'system')}</td>
                 <td>${createdAt}</td>
                 <td>
-                    <i class="fas fa-arrow-up edit-icon" title="Move Up" onclick="moveRuleUp(${t.id})"></i>
-                    <i class="fas fa-arrow-down edit-icon" title="Move Down" onclick="moveRuleDown(${t.id})"></i>
-                    <i class="fas fa-edit edit-icon" title="Edit" onclick="editRule(${t.id})"></i>
-                    <i class="fas fa-copy edit-icon" title="Clone" onclick="cloneRule(${t.id})"></i>
-                    <i class="fas fa-trash delete-icon" title="Delete" onclick="deleteRule(${t.id})"></i>
+                    <i class="fas fa-arrow-up edit-icon" title="Nach oben" onclick="moveRuleUp(${t.id})"></i>
+                    <i class="fas fa-arrow-down edit-icon" title="Nach unten" onclick="moveRuleDown(${t.id})"></i>
+                    <i class="fas fa-edit edit-icon" title="Bearbeiten" onclick="editRule(${t.id})"></i>
+                    <i class="fas fa-copy edit-icon" title="Duplizieren" onclick="cloneRule(${t.id})"></i>
+                    <i class="fas fa-trash delete-icon" title="Löschen" onclick="deleteRule(${t.id})"></i>
                 </td>
             </tr>
         `;
@@ -382,12 +382,12 @@ function saveRule() {
     
     if (data.rule_type === 'translation') {
         if (!data.source_column || !data.target_column || data.target_value === null || data.target_value === undefined) {
-            showError('source_column, target_column and target_value are required');
+            showError('source_column, target_column und target_value sind erforderlich');
             return;
         }
     } else {
         if (!data.target_column || data.target_value === null || data.target_value === undefined) {
-            showError('target_column and target_value are required for overwrite');
+            showError('target_column und target_value sind für Überschreibungen erforderlich');
             return;
         }
     }
@@ -401,15 +401,15 @@ function saveRule() {
             if (response.success) {
                 $('#addRuleModal').modal('hide');
                 $('#addRuleForm')[0].reset();
-                showSuccess('Rule added successfully');
+                showSuccess('Regel erfolgreich hinzugefügt');
                 loadRules();
             } else {
-                showError('Failed to add rule: ' + response.error);
+                showError('Regel konnte nicht hinzugefügt werden: ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Failed to add rule: ' + error);
+            showError('Regel konnte nicht hinzugefügt werden: ' + error);
         }
     });
 }
@@ -437,7 +437,7 @@ function editRule(id) {
                 // Show condition section if the rule has a condition
                 const hasCondition = !!(rule.condition_column && rule.condition_value);
                 $('#editConditionSection').toggle(hasCondition);
-                $('#toggleEditConditionBtn').text(hasCondition ? 'Remove Condition' : 'Add Condition');
+                $('#toggleEditConditionBtn').text(hasCondition ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
                 $('#editRuleModal').modal('show');
             }
         }
@@ -463,7 +463,7 @@ function cloneRule(id) {
                 // Show condition section if the rule has a condition
                 const hasCondition = !!(rule.condition_column && rule.condition_value);
                 $('#conditionSection').toggle(hasCondition);
-                $('#toggleConditionBtn').text(hasCondition ? 'Remove Condition' : 'Add Condition');
+                $('#toggleConditionBtn').text(hasCondition ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
                 $('#addRuleModal').modal('show');
             }
         }
@@ -483,7 +483,7 @@ function updateRule() {
     };
     
     if (data.target_value === null || data.target_value === undefined) {
-        showError('Target value is required');
+        showError('Zielwert ist erforderlich');
         return;
     }
     
@@ -495,21 +495,21 @@ function updateRule() {
         success: function(response) {
             if (response.success) {
                 $('#editRuleModal').modal('hide');
-                showSuccess('Rule updated successfully');
+                showSuccess('Regel erfolgreich aktualisiert');
                 loadRules();
             } else {
-                showError('Failed to update rule: ' + response.error);
+                showError('Regel konnte nicht aktualisiert werden: ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Failed to update rule: ' + error);
+            showError('Regel konnte nicht aktualisiert werden: ' + error);
         }
     });
 }
 
 function deleteRule(id) {
-    if (!confirm('Are you sure you want to delete this migration rule?')) {
+    if (!confirm('Diese Migrationsregel wirklich löschen?')) {
         return;
     }
     
@@ -518,15 +518,15 @@ function deleteRule(id) {
         method: 'POST',
         success: function(response) {
             if (response.success) {
-                showSuccess('Rule deleted successfully');
+                showSuccess('Regel erfolgreich gelöscht');
                 loadRules();
             } else {
-                showError('Failed to delete rule: ' + response.error);
+                showError('Regel konnte nicht gelöscht werden: ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Failed to delete rule: ' + error);
+            showError('Regel konnte nicht gelöscht werden: ' + error);
         }
     });
 }
@@ -539,12 +539,12 @@ function moveRuleUp(id) {
             if (response.success) {
                 loadRules();
             } else {
-                showError(response.error || 'Failed to move rule up');
+                showError(response.error || 'Regel konnte nicht verschoben werden');
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Failed to move rule up: ' + error);
+            showError('Regel konnte nicht verschoben werden: ' + error);
         }
     });
 }
@@ -557,12 +557,12 @@ function moveRuleDown(id) {
             if (response.success) {
                 loadRules();
             } else {
-                showError(response.error || 'Failed to move rule down');
+                showError(response.error || 'Regel konnte nicht verschoben werden');
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Failed to move rule down: ' + error);
+            showError('Regel konnte nicht verschoben werden: ' + error);
         }
     });
 }
@@ -583,7 +583,7 @@ function showSuccess(message) {
 }
 
 function showError(message) {
-    alert('Error: ' + message);
+    alert('Fehler: ' + message);
 }
 </script>
 {% endblock %}

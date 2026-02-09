@@ -1,6 +1,6 @@
 {% extends "base_simple.html" %}
 
-{% block title %}New Migration Batch{% endblock %}
+{% block title %}Neuer Migration-Batch{% endblock %}
 
 {% block head %}
 <!-- CodeMirror CSS -->
@@ -65,21 +65,21 @@
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <div class="workflow-step">
-            <span class="step-num">2</span> Enrich &amp; Preview
+            <span class="step-num">2</span> Anreichern &amp; Vorschau
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <div class="workflow-step">
-            <span class="step-num">3</span> Object Mapping
+            <span class="step-num">3</span> Objekt-Zuordnung
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <div class="workflow-step">
-            <span class="step-num">4</span> Execute
+            <span class="step-num">4</span> Ausführen
         </div>
     </div>
 
     <div class="row">
         <div class="col-12">
-            <h2><i class="fas fa-plus-circle"></i> New Migration Batch</h2>
+            <h2><i class="fas fa-plus-circle"></i> Neuer Migration-Batch</h2>
             <p class="text-muted">Wähle eine Datenquelle und erstelle einen neuen Migration-Batch</p>
         </div>
     </div>
@@ -255,7 +255,7 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
     <div class="row mt-4">
         <div class="col-12">
             <div class="card">
-                <div class="card-header"><h6 class="mb-0"><i class="fas fa-tags"></i> Batch Metadata</h6></div>
+                <div class="card-header"><h6 class="mb-0"><i class="fas fa-tags"></i> Batch-Metadaten</h6></div>
                 <div class="card-body">
                     <div class="row">
                         <div class="col-md-4">
@@ -557,7 +557,7 @@ function appendMetadata(formData) {
 function submitPrepare(formData) {
     const btn = document.getElementById('createBatchBtn');
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Wird erstellt...';
     document.getElementById('resultSection').style.display = 'none';
 
     fetch('/prepare', { method: 'POST', body: formData })
@@ -594,10 +594,10 @@ function showBatchResult(success, data) {
                     </table>
                     <div class="mt-3">
                         <a href="/preview?batch_id=${data.batch_id}" class="btn btn-primary btn-lg">
-                            <i class="fas fa-arrow-right"></i> Weiter: Enrich &amp; Preview
+                            <i class="fas fa-arrow-right"></i> Weiter: Anreichern &amp; Vorschau
                         </a>
                         <a href="/" class="btn btn-secondary btn-lg ml-2">
-                            <i class="fas fa-home"></i> Dashboard
+                            <i class="fas fa-home"></i> Übersicht
                         </a>
                     </div>
                 </div>

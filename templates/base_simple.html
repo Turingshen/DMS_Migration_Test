@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Document Migration">
+    <meta name="description" content="Dokument-Migration">
     <meta name="author" content="SAP PM Service Tools">
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
     
@@ -40,14 +40,14 @@
     
     {% block head %}{% endblock %}
     
-    <title>{% block title %}Document Migration{% endblock %} - SAP PM Tools</title>
+    <title>{% block title %}Dokument-Migration{% endblock %} - SAP PM Tools</title>
 </head>
 <body>
     <!-- Simple Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
-                <i class="fas fa-exchange-alt"></i> Document Migration
+                <i class="fas fa-exchange-alt"></i> Dokument-Migration
             </a>
             <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -56,22 +56,22 @@
                 <ul class="navbar-nav mr-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="/">
-                            <i class="fas fa-home"></i> Dashboard
+                            <i class="fas fa-home"></i> Übersicht
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/prepare">
-                            <i class="fas fa-plus-circle"></i> New Batch
+                            <i class="fas fa-plus-circle"></i> Neuer Batch
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/rules">
-                            <i class="fas fa-tasks"></i> Rules
+                            <i class="fas fa-tasks"></i> Regeln
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/settings">
-                            <i class="fas fa-cog"></i> Settings
+                            <i class="fas fa-cog"></i> Einstellungen
                         </a>
                     </li>
                 </ul>
@@ -79,11 +79,11 @@
                     <!-- Migration Direction Indicator -->
                     <li class="nav-item">
                         <span class="nav-link" style="cursor: default;">
-                            <span class="badge badge-info" title="Source: {{ source_system_label }}">
+                            <span class="badge badge-info" title="Quelle: {{ source_system_label }}">
                                 <i class="fas fa-download"></i> {{ source_system | upper }}
                             </span>
                             <i class="fas fa-arrow-right text-light mx-1"></i>
-                            <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}" title="Target: {{ target_system_label }}">
+                            <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}" title="Ziel: {{ target_system_label }}">
                                 <i class="fas fa-upload"></i> {{ target_system | upper }}
                             </span>
                         </span>
@@ -118,12 +118,12 @@
                             </div>
                             <div class="dropdown-divider"></div>
                             <a class="dropdown-item" href="/login">
-                                <i class="fas fa-sign-in-alt"></i> Login / Refresh Session
+                                <i class="fas fa-sign-in-alt"></i> Anmelden / Session erneuern
                             </a>
                         </div>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/" title="Back to Main App">
+                        <a class="nav-link" href="/" title="Zurück zur Hauptseite">
                             <i class="fas fa-arrow-left"></i>
                         </a>
                     </li>
@@ -140,7 +140,7 @@
     <!-- Footer -->
     <footer class="footer mt-auto py-3 bg-light">
         <div class="container text-center">
-            <span class="text-muted">Document Migration v2.0 - SAP PM Service Tools</span>
+            <span class="text-muted">Dokument-Migration v2.0 - SAP PM Service Tools</span>
         </div>
     </footer>
 

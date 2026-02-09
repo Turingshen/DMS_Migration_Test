@@ -46,6 +46,11 @@ CREATE TABLE dbo.migration_staging (
     execution_completed_at DATETIME2,
     execution_error NVARCHAR(MAX),
     
+    -- Object link status (Phase 2)
+    link_status VARCHAR(50) DEFAULT 'pending',
+    link_error NVARCHAR(MAX),
+    link_completed_at DATETIME2,
+    
     -- Flags
     user_approved BIT DEFAULT 0,
     skip_migration BIT DEFAULT 0,
@@ -54,6 +59,7 @@ CREATE TABLE dbo.migration_staging (
     INDEX idx_batch_id (batch_id),
     INDEX idx_validation_status (validation_status),
     INDEX idx_execution_status (execution_status),
+    INDEX idx_link_status (link_status),
     INDEX idx_user_approved (user_approved)
 );
 """
@@ -70,11 +76,13 @@ CREATE TABLE dbo.migration_batch (
     successful_records INT DEFAULT 0,
     failed_records INT DEFAULT 0,
     status VARCHAR(50) DEFAULT 'prepared',
+    migration_phase VARCHAR(20) DEFAULT 'upload',
     description NVARCHAR(40),
     notes NVARCHAR(MAX),
     wave VARCHAR(10),
     
     INDEX idx_status (status),
+    INDEX idx_migration_phase (migration_phase),
     INDEX idx_created_at (created_at)
 );
 """
@@ -348,3 +356,27 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has container_created column")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add container_created column: {e}")
+        
+        # Phase 2: Object link tracking columns
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'link_status') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD link_status VARCHAR(50) DEFAULT 'pending';
+                IF COL_LENGTH('dbo.migration_staging', 'link_error') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD link_error NVARCHAR(MAX) NULL;
+                IF COL_LENGTH('dbo.migration_staging', 'link_completed_at') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD link_completed_at DATETIME2 NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has link_status/link_error/link_completed_at columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add link columns: {e}")
+        
+        # Phase tracking for batch table
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'migration_phase') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD migration_phase VARCHAR(20) DEFAULT 'upload';
+            """))
+            print("[DB_INIT] Ensured migration_batch has migration_phase column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add migration_phase column: {e}")

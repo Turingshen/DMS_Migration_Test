@@ -1142,42 +1142,8 @@ def execute_single_document(staging_record, session_snapshot):
                             WHERE id = :staging_id
                         """), {'staging_id': staging_id})
                     
-                    # Create Object Link if target mapping is available
-                    # NOTE: target_dokob and target_objky were already resolved above from:
-                    #   1. staging_record (if manually set before)
-                    #   2. Object mapping lookup using source_dokob/source_objky from API
-                    # So we use the variables directly, not re-read from staging_record
-                    
-                    if target_dokob and target_objky:
-                        try:
-                            logger.info(f"Creating object link: {target_dokob}/{target_objky}", category="OBJLINK")
-                            
-                            object_link_url = f"{doc_base_url}/A_DocumentInfoRecordObjLink"
-                            server_session.headers.update({'Content-Type': 'application/json'})
-                            
-                            object_link_payload = {
-                                'DocumentInfoRecordDocType': doc_type,
-                                'DocumentInfoRecordDocNumber': doc_number,
-                                'DocumentInfoRecordDocVersion': doc_version,
-                                'DocumentInfoRecordDocPart': doc_part,
-                                'DocumentInfoRecordToObjLnkObjectType': target_dokob,
-                                'DocumentInfoRecordToObjLnkObjectKey': target_objky
-                            }
-                            
-                            link_resp = server_session.post(object_link_url, json=object_link_payload)
-                            
-                            if link_resp.status_code in (200, 201):
-                                logger.info(f"Object link created successfully: {target_dokob}/{target_objky}", category="OBJLINK")
-                            elif link_resp.status_code in (400, 409) and 'exist' in (link_resp.text.lower() if link_resp.text else ''):
-                                logger.warning(f"Object link already exists: {target_dokob}/{target_objky}", category="OBJLINK")
-                            else:
-                                error_info = _extract_error_fields(link_resp)
-                                logger.warning(f"Object link creation failed ({link_resp.status_code}): {error_info.get('detail', 'Unknown error')}", 
-                                              category="OBJLINK", details=error_info)
-                                # Don't fail the whole migration for object link errors - continue with file upload
-                        except Exception as link_ex:
-                            logger.warning(f"Exception creating object link: {link_ex}", category="OBJLINK")
-                            # Continue with file upload even if object link fails
+                    # NOTE: Object Link creation is now Phase 2 (execute_linking)
+                    # Phase 1 only creates the container and uploads files
                     
                 elif create_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
                     logger.warning(f"Document already exists, continuing: {doc_number}", category="CREATE")
@@ -1627,6 +1593,7 @@ def execute_migration(batch_id, record_ids=None):
             con.execute(text(f"""
                 UPDATE dbo.migration_batch
                 SET status = 'executing',
+                    migration_phase = 'upload',
                     total_records = {total_records},
                     executed_records = 0,
                     successful_records = 0,
@@ -2019,6 +1986,7 @@ def execute_migration(batch_id, record_ids=None):
             con.execute(text(f"""
                 UPDATE dbo.migration_batch
                 SET status = '{final_status}',
+                    migration_phase = 'upload_done',
                     executed_records = {total_executed},
                     successful_records = {cumulative_success},
                     failed_records = {cumulative_failed + cumulative_partial}
@@ -2229,6 +2197,479 @@ def execute_migration(batch_id, record_ids=None):
         
         # Release the lock on error
         clear_migration_lock(batch_id)
+        
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+# ============================================================================
+# PHASE 2: Object Link Creation (Verlinkung)
+# ============================================================================
+# Phase 2 is separate from the upload phase. It creates Object Links
+# (A_DocumentInfoRecordObjLink) for containers that were successfully uploaded
+# in Phase 1. Phase 2 can run independently and in parallel since it only
+# makes lightweight API calls (no file transfer).
+# ============================================================================
+
+# Separate lock and cancel tracking for linking (independent of upload)
+_linking_lock = threading.Lock()
+_active_linkings = {}   # batch_id -> start_time
+_link_cancel_requested = {}  # batch_id -> True/False
+
+LINK_PACKAGE_SIZE = 100  # Larger packages than upload since linking is lightweight
+
+
+def is_linking_running(batch_id):
+    """Check if a linking operation is currently running for this batch."""
+    global _active_linkings
+    with _linking_lock:
+        if batch_id in _active_linkings:
+            start_time = _active_linkings[batch_id]
+            elapsed_minutes = (time.time() - start_time) / 60
+            return True, f"Verlinkung läuft seit {elapsed_minutes:.1f} Minuten"
+    return False, None
+
+
+def set_linking_lock(batch_id):
+    """Set the linking lock for a batch."""
+    global _active_linkings
+    with _linking_lock:
+        _active_linkings[batch_id] = time.time()
+        if VERBOSE_TERMINAL_LOGGING:
+            print(f"[LINK_LOCK] Acquired lock for batch {batch_id}")
+
+
+def clear_linking_lock(batch_id):
+    """Remove the linking lock for a batch."""
+    global _active_linkings
+    with _linking_lock:
+        if batch_id in _active_linkings:
+            del _active_linkings[batch_id]
+            if VERBOSE_TERMINAL_LOGGING:
+                print(f"[LINK_LOCK] Released lock for batch {batch_id}")
+
+
+def request_link_cancel(batch_id):
+    """Request cancellation of a running linking operation."""
+    global _link_cancel_requested
+    _link_cancel_requested[batch_id] = True
+    print(f"[LINK_CANCEL] Cancellation requested for batch {batch_id}")
+    return True
+
+
+def is_link_cancel_requested(batch_id):
+    """Check if cancellation was requested for linking."""
+    global _link_cancel_requested
+    return _link_cancel_requested.get(batch_id, False)
+
+
+def clear_link_cancel_request(batch_id):
+    """Clear the link cancel request flag for a batch."""
+    global _link_cancel_requested
+    if batch_id in _link_cancel_requested:
+        del _link_cancel_requested[batch_id]
+
+
+def update_link_status(staging_id, status, error=None):
+    """Update link_status for a staging record.
+    
+    Args:
+        staging_id: The staging record ID
+        status: 'pending', 'linking', 'linked', 'link_failed', 'link_exists', 'skipped'
+        error: Error message (optional)
+    """
+    try:
+        completed_clause = ""
+        if status in ('linked', 'link_failed', 'link_exists', 'skipped'):
+            completed_clause = ", link_completed_at = GETUTCDATE()"
+        
+        update_query = f"""
+            UPDATE dbo.migration_staging
+            SET link_status = :status,
+                link_error = :error
+                {completed_clause}
+            WHERE id = :staging_id
+        """
+        
+        with misc_engine.begin() as con:
+            con.execute(text(update_query), {
+                'status': status,
+                'error': str(error) if error else None,
+                'staging_id': staging_id
+            })
+    except Exception as e:
+        print(f"[LINK_UPDATE_ERROR] Failed to update staging_id={staging_id}: {e}")
+
+
+def load_linkable_records(batch_id, record_ids=None):
+    """Load records that are eligible for linking (Phase 2).
+    
+    Records must have:
+      - execution_status IN ('success', 'partial') — container was uploaded
+      - container_created = 1 — container confirmed
+      - link_status IN ('pending', 'link_failed') — not yet linked (or retry)
+      - target_dokob and target_objky populated — mapping available
+    """
+    base_query = """
+        SELECT 
+            id,
+            batch_id,
+            source_documentnumber,
+            source_documentpart,
+            source_documenttype,
+            source_documentversion,
+            target_documentnumber,
+            target_documentpart,
+            target_documenttype,
+            target_documentversion,
+            target_dokob,
+            target_objky,
+            link_status,
+            link_error,
+            container_created
+        FROM dbo.migration_staging
+        WHERE batch_id = :batch_id
+            AND execution_status IN ('success', 'partial')
+            AND ISNULL(container_created, 0) = 1
+            AND link_status IN ('pending', 'link_failed')
+            AND target_dokob IS NOT NULL AND target_dokob != ''
+            AND target_objky IS NOT NULL AND target_objky != ''
+    """
+    
+    if record_ids:
+        ids_str = ','.join(str(rid) for rid in record_ids)
+        base_query += f" AND id IN ({ids_str})"
+    
+    base_query += " ORDER BY id"
+    
+    with misc_engine.begin() as con:
+        df = pd.read_sql(text(base_query), con, params={'batch_id': batch_id})
+    
+    return df
+
+
+def link_single_record(staging_record, session_snapshot):
+    """Create Object Link for a single staging record (Phase 2).
+    
+    Makes a lightweight POST to A_DocumentInfoRecordObjLink.
+    No file transfer — only metadata.
+    
+    Returns:
+        dict with 'staging_id', 'status', 'error' (optional), 'status_code' (optional)
+    """
+    staging_id = staging_record['id']
+    batch_id = staging_record.get('batch_id')
+    logger = get_logger(batch_id=batch_id, staging_id=staging_id)
+    
+    doc_type = staging_record['target_documenttype']
+    doc_number = staging_record['target_documentnumber']
+    doc_version = staging_record['target_documentversion']
+    doc_part = staging_record['target_documentpart']
+    target_dokob = staging_record['target_dokob']
+    target_objky = staging_record['target_objky']
+    
+    # Mark as linking
+    update_link_status(staging_id, 'linking')
+    
+    try:
+        # Create worker-specific session
+        server_session = requests.Session()
+        prepare_session_headers(server_session, session_snapshot, write_sap_system)
+        server_session.headers.update({'Content-Type': 'application/json'})
+        
+        # Build Object Link URL and payload
+        doc_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+        object_link_url = f"{doc_base_url}/A_DocumentInfoRecordObjLink"
+        
+        object_link_payload = {
+            'DocumentInfoRecordDocType': doc_type,
+            'DocumentInfoRecordDocNumber': doc_number,
+            'DocumentInfoRecordDocVersion': doc_version,
+            'DocumentInfoRecordDocPart': doc_part,
+            'DocumentInfoRecordToObjLnkObjectType': target_dokob,
+            'DocumentInfoRecordToObjLnkObjectKey': target_objky
+        }
+        
+        logger.info(f"Creating object link: {target_dokob}/{target_objky}", category="OBJLINK")
+        
+        link_resp = server_session.post(object_link_url, json=object_link_payload)
+        body_txt_lower = link_resp.text.lower() if link_resp.text else ''
+        
+        if link_resp.status_code in (200, 201):
+            logger.info(f"Object link created: {target_dokob}/{target_objky}", category="OBJLINK")
+            update_link_status(staging_id, 'linked')
+            return {
+                'staging_id': staging_id,
+                'status': 'linked',
+                'status_code': link_resp.status_code
+            }
+        
+        elif link_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
+            logger.info(f"Object link already exists: {target_dokob}/{target_objky}", category="OBJLINK")
+            update_link_status(staging_id, 'link_exists')
+            return {
+                'staging_id': staging_id,
+                'status': 'link_exists',
+                'status_code': link_resp.status_code
+            }
+        
+        else:
+            error_info = _extract_error_fields(link_resp)
+            error_msg = f"LINK_FAIL_{link_resp.status_code}"
+            if error_info.get('detail'):
+                error_msg += f": {error_info['detail']}"
+            logger.warning(f"Object link failed ({link_resp.status_code}): {error_info.get('detail', 'Unknown')}", category="OBJLINK")
+            update_link_status(staging_id, 'link_failed', error_msg)
+            return {
+                'staging_id': staging_id,
+                'status': 'link_failed',
+                'error': error_msg,
+                'status_code': link_resp.status_code
+            }
+    
+    except Exception as e:
+        logger.error(f"Exception creating object link: {e}", category="OBJLINK")
+        update_link_status(staging_id, 'link_failed', str(e))
+        return {
+            'staging_id': staging_id,
+            'status': 'link_failed',
+            'error': str(e)
+        }
+
+
+def execute_linking(batch_id, record_ids=None):
+    """Execute Phase 2: Object Link creation for a batch.
+    
+    Creates Object Links (A_DocumentInfoRecordObjLink) for all eligible records.
+    Eligible = container uploaded successfully + target_dokob/target_objky populated.
+    
+    Uses parallel execution with ThreadPoolExecutor (lightweight API calls).
+    Supports cancellation, circuit breaker, and package-based processing.
+    
+    Args:
+        batch_id: The batch ID
+        record_ids: Optional list of specific staging record IDs (for selected execution)
+    
+    Returns:
+        dict with success status, statistics, errors
+    """
+    # Check if linking is already running
+    running, msg = is_linking_running(batch_id)
+    if running:
+        return {'success': False, 'error': msg}
+    
+    # Set lock
+    set_linking_lock(batch_id)
+    clear_link_cancel_request(batch_id)
+    
+    try:
+        # Get settings from session
+        max_workers = http_session.get('max_workers', MAX_API_WORKERS)
+        
+        # Snapshot session values
+        session_snapshot = {
+            'bearer_token': http_session.get('bearer_token'),
+            'sap_system': http_session.get('sap_system'),
+            'x_csrf_token': http_session.get('x-csrf-token'),
+            'cookies': http_session.get('cookies'),
+            'csrf_token_time': http_session.get('csrf_token_time', 0),
+            'max_workers': max_workers,
+        }
+        
+        # Load linkable records
+        records_df = load_linkable_records(batch_id, record_ids)
+        
+        if len(records_df) == 0:
+            clear_linking_lock(batch_id)
+            return {
+                'success': False,
+                'error': 'Keine verlinkbaren Datensätze gefunden. Voraussetzungen: Upload erfolgreich, Container angelegt, Objekt-Mapping vorhanden, noch nicht verlinkt.'
+            }
+        
+        total_records = len(records_df)
+        print(f"[LINK_START] Batch {batch_id}: {total_records} records for linking, {max_workers} workers")
+        
+        # Update batch phase
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET migration_phase = 'linking',
+                    status = CASE WHEN status IN ('completed', 'completed_with_errors', 'upload_done') 
+                                  THEN 'linking' ELSE status END
+                WHERE batch_id = '{batch_id}'
+            """))
+        
+        # Progress tracking
+        batch_start_time = time.time()
+        completed_count = 0
+        linked_count = 0
+        exists_count = 0
+        failed_count = 0
+        
+        # Circuit breaker
+        consecutive_auth_errors = 0
+        circuit_breaker_tripped = False
+        cancel_reason = None
+        
+        # Convert to list for package processing
+        records_list = list(records_df.iterrows())
+        effective_package_size = LINK_PACKAGE_SIZE
+        total_packages = (len(records_list) + effective_package_size - 1) // effective_package_size
+        
+        results = []
+        
+        for package_num in range(total_packages):
+            # Check cancellation
+            if is_link_cancel_requested(batch_id):
+                cancel_reason = "User requested cancellation"
+                print(f"[LINK_CANCEL] Linking cancelled before package {package_num + 1}/{total_packages}")
+                break
+            
+            # Check circuit breaker
+            if circuit_breaker_tripped:
+                break
+            
+            # Token health check
+            if TOKEN_REFRESH_AVAILABLE:
+                remaining = get_token_remaining_seconds()
+                if remaining is not None and remaining < 600:
+                    print(f"[LINK_TOKEN] Token expires in {remaining}s, attempting refresh...")
+                    is_valid, error = ensure_valid_token()
+                    if not is_valid:
+                        circuit_breaker_tripped = True
+                        cancel_reason = f"Token expired and refresh failed: {error}"
+                        print(f"[LINK_TOKEN] {cancel_reason}")
+                        break
+                    else:
+                        session_snapshot['bearer_token'] = http_session.get('bearer_token')
+                        print(f"[LINK_TOKEN] Token refreshed successfully")
+            
+            # Get package records
+            start_idx = package_num * effective_package_size
+            end_idx = min(start_idx + effective_package_size, len(records_list))
+            package_records = records_list[start_idx:end_idx]
+            
+            print(f"[LINK_PACKAGE {package_num + 1}/{total_packages}] Processing records {start_idx + 1}-{end_idx}")
+            
+            # Execute package in parallel
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for _, row in package_records:
+                    record_dict = row.to_dict()
+                    future = executor.submit(link_single_record, record_dict, session_snapshot)
+                    futures[future] = record_dict['id']
+                
+                for future in futures:
+                    try:
+                        result = future.result(timeout=120)  # 2 min timeout per link
+                        results.append(result)
+                        completed_count += 1
+                        
+                        status = result.get('status', '')
+                        if status == 'linked':
+                            linked_count += 1
+                            consecutive_auth_errors = 0
+                        elif status == 'link_exists':
+                            exists_count += 1
+                            consecutive_auth_errors = 0
+                        elif status == 'link_failed':
+                            failed_count += 1
+                            # Check for auth errors (circuit breaker)
+                            status_code = result.get('status_code', 0)
+                            if status_code in CIRCUIT_BREAKER_ERRORS:
+                                consecutive_auth_errors += 1
+                                if consecutive_auth_errors >= CIRCUIT_BREAKER_THRESHOLD:
+                                    circuit_breaker_tripped = True
+                                    cancel_reason = f"Circuit breaker: {CIRCUIT_BREAKER_THRESHOLD} consecutive auth errors"
+                                    print(f"[LINK_CIRCUIT] {cancel_reason}")
+                                    break
+                            else:
+                                consecutive_auth_errors = 0
+                    
+                    except Exception as exc:
+                        staging_id = futures[future]
+                        update_link_status(staging_id, 'link_failed', str(exc))
+                        results.append({'staging_id': staging_id, 'status': 'link_failed', 'error': str(exc)})
+                        completed_count += 1
+                        failed_count += 1
+            
+            # Update progress in batch table
+            with misc_engine.begin() as con:
+                con.execute(text(f"""
+                    UPDATE dbo.migration_batch
+                    SET executed_records = {completed_count}
+                    WHERE batch_id = '{batch_id}'
+                """))
+        
+        # Final statistics
+        duration = time.time() - batch_start_time
+        
+        # Determine final phase
+        if cancel_reason:
+            final_phase = 'link_cancelled'
+            final_status = 'link_cancelled'
+        elif failed_count > 0:
+            final_phase = 'completed'
+            final_status = 'link_completed_with_errors'
+        else:
+            final_phase = 'completed'
+            final_status = 'link_completed'
+        
+        # Update batch
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET migration_phase = '{final_phase}',
+                    status = '{final_status}'
+                WHERE batch_id = '{batch_id}'
+            """))
+        
+        # Format duration
+        if duration >= 3600:
+            duration_formatted = f"{int(duration // 3600)}h {int((duration % 3600) // 60)}m {int(duration % 60)}s"
+        elif duration >= 60:
+            duration_formatted = f"{int(duration // 60)}m {int(duration % 60)}s"
+        else:
+            duration_formatted = f"{int(duration)}s"
+        
+        print(f"[LINK_DONE] Batch {batch_id}: {linked_count} linked, {exists_count} already existed, {failed_count} failed ({duration_formatted})")
+        
+        clear_linking_lock(batch_id)
+        
+        return {
+            'success': True,
+            'batch_id': batch_id,
+            'total_records': total_records,
+            'completed': completed_count,
+            'linked': linked_count,
+            'already_existed': exists_count,
+            'failed': failed_count,
+            'duration_seconds': round(duration, 2),
+            'duration_formatted': duration_formatted,
+            'cancel_reason': cancel_reason,
+            'results': results
+        }
+    
+    except Exception as e:
+        print(f"[LINK_ERROR] Batch {batch_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Update batch phase on error
+        try:
+            with misc_engine.begin() as con:
+                con.execute(text(f"""
+                    UPDATE dbo.migration_batch
+                    SET migration_phase = 'link_error',
+                        status = 'link_error'
+                    WHERE batch_id = '{batch_id}'
+                """))
+        except Exception:
+            pass
+        
+        clear_linking_lock(batch_id)
         
         return {
             'success': False,

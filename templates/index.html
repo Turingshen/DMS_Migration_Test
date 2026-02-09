@@ -34,13 +34,15 @@
                                     <th>Ausgeführt</th>
                                     <th>Erfolgreich</th>
                                     <th>Fehler</th>
+                                    <th>Phase</th>
+                                    <th>Verlinkung</th>
                                     <th>Status</th>
                                     <th>Aktionen</th>
                                 </tr>
                             </thead>
                             <tbody id="batchesBody">
                                 <tr>
-                                    <td colspan="11" class="text-center">
+                                    <td colspan="13" class="text-center">
                                         <div class="spinner-border" role="status">
                                             <span class="sr-only">Laden...</span>
                                         </div>
@@ -259,12 +261,14 @@ function displayBatches(batches) {
     const tbody = document.getElementById('batchesBody');
     
     if (batches.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="text-center">Keine Batches vorhanden. Erstelle einen neuen Migration-Batch.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="13" class="text-center">Keine Batches vorhanden. Erstelle einen neuen Migration-Batch.</td></tr>';
         return;
     }
     
     tbody.innerHTML = batches.map(batch => {
         const statusBadge = getStatusBadge(batch.status);
+        const phaseBadge = getPhaseBadge(batch.migration_phase, batch.status);
+        const linkInfo = getLinkInfo(batch);
         const actions = getActionButtons(batch);
         const descriptionDisplay = batch.description 
             ? `<span title="${escapeHtml(batch.notes || '')}">${escapeHtml(batch.description)}</span>` 
@@ -281,6 +285,8 @@ function displayBatches(batches) {
                 <td>${batch.executed_records || 0}</td>
                 <td class="text-success">${batch.successful_records || 0}</td>
                 <td class="text-danger">${batch.failed_records || 0}</td>
+                <td>${phaseBadge}</td>
+                <td>${linkInfo}</td>
                 <td>${statusBadge}</td>
                 <td>${actions}</td>
             </tr>
@@ -291,12 +297,58 @@ function displayBatches(batches) {
 function getStatusBadge(status) {
     const badges = {
         'prepared': '<span class="badge badge-info">Vorbereitet</span>',
-        'executing': '<span class="badge badge-warning">Wird ausgeführt</span>',
+        'executing': '<span class="badge badge-warning"><i class="fas fa-spinner fa-spin"></i> Wird ausgeführt</span>',
         'completed': '<span class="badge badge-success">Abgeschlossen</span>',
         'completed_with_errors': '<span class="badge badge-warning">Abgeschlossen (mit Fehlern)</span>',
-        'failed': '<span class="badge badge-danger">Fehlgeschlagen</span>'
+        'failed': '<span class="badge badge-danger">Fehlgeschlagen</span>',
+        'linking': '<span class="badge badge-info"><i class="fas fa-spinner fa-spin"></i> Wird verlinkt</span>',
+        'link_completed': '<span class="badge badge-success">Verlinkt</span>',
+        'link_completed_with_errors': '<span class="badge badge-warning">Verlinkt (mit Fehlern)</span>',
+        'link_cancelled': '<span class="badge badge-secondary">Verlinkung abgebrochen</span>',
+        'link_error': '<span class="badge badge-danger">Verlinkungsfehler</span>'
     };
     return badges[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+function getPhaseBadge(phase, status) {
+    if (!phase) {
+        if (status === 'prepared') return '<span class="badge badge-light">—</span>';
+        return '<span class="badge badge-secondary">Upload</span>';
+    }
+    const phases = {
+        'upload': '<span class="badge badge-primary"><i class="fas fa-upload"></i> Upload</span>',
+        'upload_done': '<span class="badge badge-success"><i class="fas fa-check"></i> Upload ✓</span>',
+        'linking': '<span class="badge badge-info"><i class="fas fa-link fa-spin"></i> Verlinkung</span>',
+        'completed': '<span class="badge badge-success"><i class="fas fa-check-double"></i> Fertig</span>',
+        'link_cancelled': '<span class="badge badge-secondary"><i class="fas fa-stop"></i> Abgebrochen</span>',
+        'link_error': '<span class="badge badge-danger"><i class="fas fa-exclamation"></i> Fehler</span>'
+    };
+    return phases[phase] || '<span class="badge badge-secondary">' + phase + '</span>';
+}
+
+function getLinkInfo(batch) {
+    const total = batch.link_total || 0;
+    if (total === 0) {
+        return '<span class="text-muted" title="Kein Objekt-Mapping vorhanden">—</span>';
+    }
+    
+    const linked = (batch.link_linked || 0) + (batch.link_exists || 0);
+    const failed = batch.link_failed || 0;
+    const pending = batch.link_pending || 0;
+    const pct = Math.round(linked / total * 100);
+    
+    let color = 'bg-secondary';
+    if (linked === total) color = 'bg-success';
+    else if (linked > 0) color = 'bg-info';
+    else if (failed > 0) color = 'bg-danger';
+    
+    return `
+        <div title="Verlinkt: ${linked} | Fehler: ${failed} | Offen: ${pending} / Gesamt: ${total}">
+            <div class="progress" style="height: 16px; min-width: 60px;">
+                <div class="progress-bar ${color}" style="width: ${pct}%">${linked}/${total}</div>
+            </div>
+        </div>
+    `;
 }
 
 function getActionButtons(batch) {

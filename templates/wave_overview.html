@@ -1,0 +1,396 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Wellen-Übersicht{% endblock %}
+
+{% block head %}
+<style>
+    .wave-column {
+        min-width: 280px;
+        max-width: 350px;
+    }
+    .wave-header {
+        font-weight: 700;
+        font-size: 1.1rem;
+        padding: 10px 15px;
+        border-radius: 8px 8px 0 0;
+    }
+    .batch-card {
+        border-left: 4px solid #dee2e6;
+        transition: all 0.2s ease;
+        cursor: pointer;
+    }
+    .batch-card:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        transform: translateY(-1px);
+    }
+    .batch-card.phase-upload { border-left-color: #007bff; }
+    .batch-card.phase-upload_done { border-left-color: #28a745; }
+    .batch-card.phase-linking { border-left-color: #17a2b8; }
+    .batch-card.phase-completed { border-left-color: #28a745; }
+    .batch-card.phase-prepared { border-left-color: #6c757d; }
+    .batch-card.phase-error { border-left-color: #dc3545; }
+
+    .phase-progress {
+        display: flex;
+        gap: 2px;
+        margin-top: 6px;
+    }
+    .phase-bar {
+        height: 6px;
+        border-radius: 3px;
+        flex: 1;
+        transition: background-color 0.3s;
+    }
+    .phase-bar.done { background-color: #28a745; }
+    .phase-bar.active { background-color: #007bff; animation: pulse 1.5s infinite; }
+    .phase-bar.pending { background-color: #dee2e6; }
+    .phase-bar.error { background-color: #dc3545; }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    .wave-stats {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    .kanban-container {
+        display: flex;
+        gap: 16px;
+        overflow-x: auto;
+        padding-bottom: 15px;
+    }
+    .unassigned-section {
+        background: #fff3cd;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h2><i class="fas fa-stream"></i> Wellen-Übersicht</h2>
+                    <p class="text-muted mb-0">Überblick über alle Migrationswellen und deren Fortschritt</p>
+                </div>
+                <div>
+                    <button class="btn btn-outline-secondary" onclick="loadWaveData()" title="Aktualisieren">
+                        <i class="fas fa-sync-alt"></i> Aktualisieren
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Statistics -->
+    <div class="row mb-3" id="summaryRow">
+        <div class="col-md-2">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <h4 id="totalBatches" class="mb-0">-</h4>
+                    <small class="text-muted">Batches</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <h4 id="totalDocs" class="mb-0">-</h4>
+                    <small class="text-muted">Dokumente</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center border-success">
+                <div class="card-body py-2">
+                    <h4 id="totalUploaded" class="mb-0 text-success">-</h4>
+                    <small class="text-muted">Hochgeladen</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center border-info">
+                <div class="card-body py-2">
+                    <h4 id="totalLinked" class="mb-0 text-info">-</h4>
+                    <small class="text-muted">Verlinkt</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center border-danger">
+                <div class="card-body py-2">
+                    <h4 id="totalFailed" class="mb-0 text-danger">-</h4>
+                    <small class="text-muted">Fehler</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center border-warning">
+                <div class="card-body py-2">
+                    <h4 id="totalPending" class="mb-0 text-warning">-</h4>
+                    <small class="text-muted">Ausstehend</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Kanban Board -->
+    <div class="kanban-container" id="kanbanBoard">
+        <div class="text-center w-100 py-5">
+            <div class="spinner-border" role="status">
+                <span class="sr-only">Laden...</span>
+            </div>
+            <p class="text-muted mt-2">Lade Wellen-Daten...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadWaveData();
+    // Auto-refresh every 30 seconds
+    setInterval(loadWaveData, 30000);
+});
+
+async function loadWaveData() {
+    try {
+        const response = await fetch('/batches');
+        const data = await response.json();
+
+        if (!data.success) {
+            document.getElementById('kanbanBoard').innerHTML =
+                '<div class="alert alert-danger">Fehler: ' + data.error + '</div>';
+            return;
+        }
+
+        const batches = data.batches || [];
+        renderSummary(batches);
+        renderKanban(batches);
+    } catch (error) {
+        document.getElementById('kanbanBoard').innerHTML =
+            '<div class="alert alert-danger">Verbindungsfehler: ' + error + '</div>';
+    }
+}
+
+function renderSummary(batches) {
+    let totalDocs = 0, totalUploaded = 0, totalLinked = 0, totalFailed = 0, totalPending = 0;
+
+    batches.forEach(b => {
+        totalDocs += (b.total_records || 0);
+        totalUploaded += (b.successful_records || 0);
+        totalLinked += (b.link_linked || 0) + (b.link_exists || 0);
+        totalFailed += (b.failed_records || 0) + (b.link_failed || 0);
+        // Pending: total minus executed
+        const executed = b.executed_records || 0;
+        const total = b.total_records || 0;
+        totalPending += Math.max(0, total - executed);
+    });
+
+    document.getElementById('totalBatches').textContent = batches.length;
+    document.getElementById('totalDocs').textContent = totalDocs.toLocaleString();
+    document.getElementById('totalUploaded').textContent = totalUploaded.toLocaleString();
+    document.getElementById('totalLinked').textContent = totalLinked.toLocaleString();
+    document.getElementById('totalFailed').textContent = totalFailed.toLocaleString();
+    document.getElementById('totalPending').textContent = totalPending.toLocaleString();
+}
+
+function renderKanban(batches) {
+    // Group by wave
+    const waves = {};
+    batches.forEach(b => {
+        const wave = b.wave || 'Nicht zugeordnet';
+        if (!waves[wave]) waves[wave] = [];
+        waves[wave].push(b);
+    });
+
+    // Sort wave keys (Wave 0, Wave 1, ..., then unassigned last)
+    const sortedWaves = Object.keys(waves).sort((a, b) => {
+        if (a === 'Nicht zugeordnet') return 1;
+        if (b === 'Nicht zugeordnet') return -1;
+        return a.localeCompare(b, undefined, { numeric: true });
+    });
+
+    const board = document.getElementById('kanbanBoard');
+
+    if (sortedWaves.length === 0) {
+        board.innerHTML = '<div class="text-center w-100 py-5 text-muted">Keine Batches vorhanden</div>';
+        return;
+    }
+
+    board.innerHTML = sortedWaves.map(waveName => {
+        const waveBatches = waves[waveName];
+        const isUnassigned = waveName === 'Nicht zugeordnet';
+
+        // Wave-level aggregation
+        let wTotal = 0, wUploaded = 0, wLinked = 0, wFailed = 0;
+        waveBatches.forEach(b => {
+            wTotal += (b.total_records || 0);
+            wUploaded += (b.successful_records || 0);
+            wLinked += (b.link_linked || 0) + (b.link_exists || 0);
+            wFailed += (b.failed_records || 0);
+        });
+        const wPct = wTotal > 0 ? Math.round(wUploaded / wTotal * 100) : 0;
+        const lPct = wTotal > 0 ? Math.round(wLinked / wTotal * 100) : 0;
+
+        return `
+            <div class="wave-column flex-shrink-0">
+                <div class="wave-header ${isUnassigned ? 'bg-warning text-dark' : 'bg-dark text-white'}">
+                    ${waveName}
+                    <span class="float-right badge badge-light">${waveBatches.length}</span>
+                </div>
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body p-2">
+                        <!-- Wave Progress -->
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between wave-stats">
+                                <span>Upload: ${wPct}%</span>
+                                <span>Verlinkung: ${lPct}%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-success" style="width: ${wPct}%"></div>
+                            </div>
+                            <div class="progress mt-1" style="height: 4px;">
+                                <div class="progress-bar bg-info" style="width: ${lPct}%"></div>
+                            </div>
+                            <div class="wave-stats text-right mt-1">
+                                ${wUploaded}/${wTotal} Docs | ${wLinked} verlinkt
+                                ${wFailed > 0 ? `| <span class="text-danger">${wFailed} Fehler</span>` : ''}
+                            </div>
+                        </div>
+
+                        <!-- Batch Cards -->
+                        ${waveBatches.map(b => renderBatchCard(b)).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderBatchCard(batch) {
+    const phase = batch.migration_phase || 'prepared';
+    const phaseClass = getPhaseClass(phase);
+    const total = batch.total_records || 0;
+    const success = batch.successful_records || 0;
+    const failed = batch.failed_records || 0;
+    const linkLinked = (batch.link_linked || 0) + (batch.link_exists || 0);
+    const linkTotal = batch.link_total || 0;
+    const linkFailed = batch.link_failed || 0;
+
+    const uploadPct = total > 0 ? Math.round(success / total * 100) : 0;
+    const linkPct = linkTotal > 0 ? Math.round(linkLinked / linkTotal * 100) : 0;
+
+    // Phase progress bars: Prepare → Upload → Linking
+    const phaseSteps = getPhaseSteps(phase, batch.status);
+
+    return `
+        <div class="card batch-card ${phaseClass} mb-2" onclick="window.location.href='/preview?batch_id=${batch.batch_id}'">
+            <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <strong style="font-size: 0.85rem;">${batch.description || batch.batch_id}</strong>
+                        <div class="wave-stats">${total} Dokumente</div>
+                    </div>
+                    <span class="badge ${getStatusBadgeClass(batch.status)}" style="font-size: 0.7rem;">
+                        ${getStatusLabel(batch.status)}
+                    </span>
+                </div>
+
+                <!-- Two-row progress: Upload + Linking -->
+                <div class="mt-2">
+                    <div class="d-flex justify-content-between wave-stats">
+                        <span><i class="fas fa-upload"></i> ${success}/${total}</span>
+                        <span>${uploadPct}%</span>
+                    </div>
+                    <div class="progress" style="height: 5px;">
+                        <div class="progress-bar bg-success" style="width: ${uploadPct}%"></div>
+                        ${failed > 0 ? `<div class="progress-bar bg-danger" style="width: ${total > 0 ? Math.round(failed / total * 100) : 0}%"></div>` : ''}
+                    </div>
+                </div>
+                ${linkTotal > 0 ? `
+                <div class="mt-1">
+                    <div class="d-flex justify-content-between wave-stats">
+                        <span><i class="fas fa-link"></i> ${linkLinked}/${linkTotal}</span>
+                        <span>${linkPct}%${linkFailed > 0 ? ' <span class="text-danger">(' + linkFailed + ' err)</span>' : ''}</span>
+                    </div>
+                    <div class="progress" style="height: 4px;">
+                        <div class="progress-bar bg-info" style="width: ${linkPct}%"></div>
+                        ${linkFailed > 0 ? `<div class="progress-bar bg-danger" style="width: ${linkTotal > 0 ? Math.round(linkFailed / linkTotal * 100) : 0}%"></div>` : ''}
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Phase indicator -->
+                <div class="phase-progress">
+                    ${phaseSteps.map(s => `<div class="phase-bar ${s}"></div>`).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function getPhaseClass(phase) {
+    const map = {
+        'prepared': 'phase-prepared',
+        'upload': 'phase-upload',
+        'upload_done': 'phase-upload_done',
+        'linking': 'phase-linking',
+        'completed': 'phase-completed',
+        'link_cancelled': 'phase-error',
+        'link_error': 'phase-error'
+    };
+    return map[phase] || 'phase-prepared';
+}
+
+function getPhaseSteps(phase, status) {
+    // 3 bars: Prepare | Upload | Linking
+    switch (phase) {
+        case 'completed': return ['done', 'done', 'done'];
+        case 'linking': return ['done', 'done', 'active'];
+        case 'upload_done': return ['done', 'done', 'pending'];
+        case 'upload': return ['done', 'active', 'pending'];
+        case 'link_cancelled':
+        case 'link_error': return ['done', 'done', 'error'];
+        default:
+            if (status === 'executing') return ['done', 'active', 'pending'];
+            if (status === 'completed' || status === 'completed_with_errors') return ['done', 'done', 'pending'];
+            return ['done', 'pending', 'pending'];
+    }
+}
+
+function getStatusBadgeClass(status) {
+    const map = {
+        'prepared': 'badge-secondary',
+        'executing': 'badge-warning',
+        'completed': 'badge-success',
+        'completed_with_errors': 'badge-warning',
+        'failed': 'badge-danger',
+        'linking': 'badge-info',
+        'link_completed': 'badge-success',
+        'link_completed_with_errors': 'badge-warning',
+        'link_cancelled': 'badge-secondary',
+        'link_error': 'badge-danger'
+    };
+    return map[status] || 'badge-secondary';
+}
+
+function getStatusLabel(status) {
+    const map = {
+        'prepared': 'Vorbereitet',
+        'executing': 'Upload...',
+        'completed': 'Hochgeladen',
+        'completed_with_errors': 'Upload (Fehler)',
+        'failed': 'Fehlgeschlagen',
+        'linking': 'Verlinke...',
+        'link_completed': 'Fertig',
+        'link_completed_with_errors': 'Verlinkt (Fehler)',
+        'link_cancelled': 'Abgebrochen',
+        'link_error': 'Link-Fehler'
+    };
+    return map[status] || status;
+}
+</script>
+{% endblock %}

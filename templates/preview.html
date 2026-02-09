@@ -36,6 +36,10 @@
         <div class="workflow-step">
             <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Ausführen
         </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step" id="workflowStep5">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">5</span> Verlinkung
+        </div>
     </div>
 
     <div class="row">
@@ -141,6 +145,16 @@
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
                             <i class="fas fa-redo"></i> Fehler wiederholen
                         </button>
+                        <span class="border-left mx-2" style="height:30px; display:inline-block;"></span>
+                        <button onclick="linkAll()" class="btn btn-success" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen">
+                            <i class="fas fa-link"></i> Alle verlinken
+                        </button>
+                        <button onclick="linkSelected()" class="btn btn-success" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen">
+                            <i class="fas fa-link"></i> Ausgewählte verlinken
+                        </button>
+                        <button onclick="cancelLinking()" class="btn btn-danger" id="cancelLinkBtn" style="display: none;">
+                            <i class="fas fa-stop"></i> Verlinkung abbrechen
+                        </button>
                     </div>
                 </div>
                 <div class="card-body">
@@ -189,6 +203,7 @@
                                     <th data-column="mime_type">MIME Type</th>
                                     <th data-column="auth_group">Auth Group</th>
                                     <th data-column="execution">Execution</th>
+                                    <th data-column="link_status">Link Status</th>
                                     <th data-column="error_category">Error Category</th>
                                     <th data-column="created_at">Created At</th>
                                     <th data-column="created_by">Created By</th>
@@ -277,6 +292,10 @@
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_execution" value="execution" checked>
                     <label class="form-check-label" for="col_execution">Ausführungsstatus</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_link_status" value="link_status" checked>
+                    <label class="form-check-label" for="col_link_status">Link-Status</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_error_category" value="error_category" checked>
@@ -947,6 +966,7 @@ function displayRecords(records) {
                 <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
+                <td data-column="link_status">${getLinkStatusBadge(record.link_status, record.execution_status, record.target_dokob)}</td>
                 <td data-column="error_category">${getErrorCategoryBadge(record.error_category)}</td>
                 <td data-column="created_at"><small>${createdAt}</small></td>
                 <td data-column="created_by"><small>${record.created_by || '-'}</small></td>
@@ -976,6 +996,25 @@ function getExecutionBadge(status) {
         'pending': '<span class="badge badge-secondary">Ausstehend</span>'
     };
     return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
+}
+
+function getLinkStatusBadge(linkStatus, execStatus, targetDokob) {
+    // If not uploaded yet or no mapping, show dash
+    if (!execStatus || execStatus === 'pending' || execStatus === 'failed') {
+        return '<span class="text-muted">—</span>';
+    }
+    if (!targetDokob) {
+        return '<span class="badge badge-light" title="Kein Objekt-Mapping">—</span>';
+    }
+    const map = {
+        'pending': '<span class="badge badge-secondary" title="Bereit zur Verlinkung"><i class="fas fa-clock"></i> Offen</span>',
+        'linking': '<span class="badge badge-info" title="Wird verlinkt"><i class="fas fa-spinner fa-spin"></i> Verlinkt...</span>',
+        'linked': '<span class="badge badge-success" title="Verlinkt"><i class="fas fa-check"></i> Verlinkt</span>',
+        'link_exists': '<span class="badge badge-success" title="Link existiert bereits"><i class="fas fa-check-double"></i> Existiert</span>',
+        'link_failed': '<span class="badge badge-danger" title="Verlinkung fehlgeschlagen"><i class="fas fa-times"></i> Fehler</span>',
+        'skipped': '<span class="badge badge-light" title="Übersprungen">Übersprungen</span>'
+    };
+    return map[linkStatus] || '<span class="badge badge-secondary">' + (linkStatus || 'pending') + '</span>';
 }
 
 // Error Category Details (from Python get_error_details)
@@ -1075,6 +1114,7 @@ function selectAll() {
 function updateSelectionInfo() {
     document.getElementById('selectionInfo').textContent = `${selectedRecords.size} Datensätze ausgewählt`;
     document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
+    document.getElementById('linkSelectedBtn').disabled = selectedRecords.size === 0;
 }
 
 // Progress polling for execution
@@ -1366,6 +1406,180 @@ function executeSelected() {
         alert('Fehler bei der Migration: ' + error);
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+    });
+}
+
+// ============================================================================
+// Phase 2: Linking Functions
+// ============================================================================
+
+let linkProgressInterval = null;
+
+function startLinkProgressPolling() {
+    if (linkProgressInterval) clearInterval(linkProgressInterval);
+    linkProgressInterval = setInterval(() => {
+        fetch(`/batch/${batchId}/link-progress`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const pct = data.progress_pct || 0;
+                    showProgressBar();
+                    const bar = document.getElementById('progressBar');
+                    bar.style.width = pct + '%';
+                    bar.textContent = pct + '%';
+                    document.getElementById('progressStats').textContent =
+                        `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
+                    document.getElementById('progressDetails').textContent =
+                        `Phase: ${data.migration_phase || '—'}`;
+                    document.getElementById('progressETA').textContent = '';
+                }
+            })
+            .catch(() => {});
+    }, 2000);
+}
+
+function stopLinkProgressPolling() {
+    if (linkProgressInterval) {
+        clearInterval(linkProgressInterval);
+        linkProgressInterval = null;
+    }
+}
+
+function linkAll() {
+    if (!confirm('Objektlinks für alle verlinkbaren Datensätze erstellen?\n\nVoraussetzung: Upload erfolgreich, Objekt-Mapping vorhanden.')) {
+        return;
+    }
+
+    const btn = document.getElementById('linkAllBtn');
+    const cancelBtn = document.getElementById('cancelLinkBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird verlinkt...';
+    cancelBtn.style.display = 'inline-block';
+
+    startLinkProgressPolling();
+
+    fetch('/execute_linking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batchId })
+    })
+    .then(response => response.json())
+    .then(data => {
+        stopLinkProgressPolling();
+        hideProgressBar();
+        cancelBtn.style.display = 'none';
+
+        if (data.success) {
+            let msg = `Verlinkung abgeschlossen!\n\n`;
+            msg += `Gesamt: ${data.total_records}\n`;
+            msg += `Verlinkt: ${data.linked}\n`;
+            msg += `Bereits vorhanden: ${data.already_existed}\n`;
+            msg += `Fehlgeschlagen: ${data.failed}\n`;
+            msg += `Dauer: ${data.duration_formatted}`;
+            if (data.cancel_reason) msg += `\n\nHinweis: ${data.cancel_reason}`;
+            alert(msg);
+            loadRecords();
+        } else if (data.login_required) {
+            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+            window.location.href = '/';
+        } else {
+            alert('Verlinkung fehlgeschlagen: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-link"></i> Alle verlinken';
+    })
+    .catch(error => {
+        stopLinkProgressPolling();
+        hideProgressBar();
+        cancelBtn.style.display = 'none';
+        alert('Fehler bei der Verlinkung: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-link"></i> Alle verlinken';
+    });
+}
+
+function linkSelected() {
+    if (selectedRecords.size === 0) {
+        alert('Bitte Datensätze auswählen');
+        return;
+    }
+
+    if (!confirm(`Objektlinks für ${selectedRecords.size} ausgewählte Datensätze erstellen?`)) {
+        return;
+    }
+
+    const btn = document.getElementById('linkSelectedBtn');
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Verlinke ${selectedRecords.size}...`;
+
+    startLinkProgressPolling();
+
+    fetch('/execute_linking_selected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            batch_id: batchId,
+            record_ids: Array.from(selectedRecords)
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        stopLinkProgressPolling();
+        hideProgressBar();
+
+        if (data.success) {
+            let msg = `Verlinkung abgeschlossen!\n\n`;
+            msg += `Verlinkt: ${data.linked}\n`;
+            msg += `Bereits vorhanden: ${data.already_existed}\n`;
+            msg += `Fehlgeschlagen: ${data.failed}`;
+            alert(msg);
+            selectedRecords.clear();
+            loadRecords();
+        } else if (data.login_required) {
+            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+            window.location.href = '/';
+        } else {
+            alert('Verlinkung fehlgeschlagen: ' + data.error);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-link"></i> Ausgewählte verlinken';
+    })
+    .catch(error => {
+        stopLinkProgressPolling();
+        hideProgressBar();
+        alert('Fehler bei der Verlinkung: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-link"></i> Ausgewählte verlinken';
+    });
+}
+
+function cancelLinking() {
+    if (!confirm('Verlinkung wirklich abbrechen?\n\nBereits verlinkte Datensätze bleiben erhalten.')) {
+        return;
+    }
+
+    const cancelBtn = document.getElementById('cancelLinkBtn');
+    cancelBtn.disabled = true;
+    cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird abgebrochen...';
+
+    fetch(`/batch/${batchId}/cancel-linking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            cancelBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Abbruch angefordert...';
+        } else {
+            alert('Abbruch fehlgeschlagen: ' + data.error);
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Verlinkung abbrechen';
+        }
+    })
+    .catch(error => {
+        alert('Fehler beim Abbrechen: ' + error);
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Verlinkung abbrechen';
     });
 }
 

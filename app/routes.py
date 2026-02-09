@@ -11,7 +11,10 @@ from werkzeug.utils import secure_filename
 from sqlalchemy import text
 
 from app.prepare import prepare_migration
-from app.execute import execute_migration, request_cancel, is_cancel_requested, is_migration_running
+from app.execute import (
+    execute_migration, request_cancel, is_cancel_requested, is_migration_running,
+    execute_linking, request_link_cancel, is_linking_running, is_link_cancel_requested
+)
 from app.process import read_sap_system, write_sap_system
 from app_config import Config, MiscEngine
 from app.db_schema import init_staging_tables
@@ -145,6 +148,12 @@ def index():
     return render_template('index.html', **get_template_context())
 
 
+@migrate_bp.route('/wave-overview')
+def wave_overview():
+    """Wave overview page - Kanban view of migration waves and their progress."""
+    return render_template('wave_overview.html', **get_template_context())
+
+
 @migrate_bp.route('/batches', methods=['GET'])
 def get_batches():
     """Get list of all migration batches."""
@@ -159,12 +168,18 @@ def get_batches():
                 b.description,
                 b.notes,
                 b.wave,
+                b.migration_phase,
                 COALESCE(s.total_count, b.total_records) as total_records,
                 b.approved_records,
                 COALESCE(s.executed_count, b.executed_records) as executed_records,
                 COALESCE(s.success_count, b.successful_records) as successful_records,
                 COALESCE(s.failed_count, b.failed_records) as failed_records,
-                b.status
+                b.status,
+                COALESCE(s.link_pending, 0) as link_pending,
+                COALESCE(s.link_linked, 0) as link_linked,
+                COALESCE(s.link_exists, 0) as link_exists,
+                COALESCE(s.link_failed, 0) as link_failed,
+                COALESCE(s.link_total, 0) as link_total
             FROM dbo.migration_batch b
             LEFT JOIN (
                 SELECT 
@@ -172,7 +187,12 @@ def get_batches():
                     COUNT(*) as total_count,
                     SUM(CASE WHEN execution_status IN ('success', 'failed', 'partial') THEN 1 ELSE 0 END) as executed_count,
                     SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count
+                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                    SUM(CASE WHEN link_status = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
+                    SUM(CASE WHEN link_status = 'linked' THEN 1 ELSE 0 END) as link_linked,
+                    SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
+                    SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
+                    SUM(CASE WHEN link_status IN ('linked', 'link_exists', 'link_failed', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
                 FROM dbo.migration_staging
                 GROUP BY batch_id
             ) s ON b.batch_id = s.batch_id
@@ -1355,6 +1375,7 @@ def get_batch_progress(batch_id):
             SELECT 
                 batch_id,
                 status,
+                migration_phase,
                 total_records,
                 executed_records,
                 successful_records,
@@ -1395,6 +1416,7 @@ def get_batch_progress(batch_id):
             'success': True,
             'batch_id': batch_id,
             'status': row['status'],
+            'migration_phase': row.get('migration_phase', 'upload'),
             'total': int(total),
             'executed': int(executed),
             'success': int(success),
@@ -1576,7 +1598,12 @@ def get_batch_records(batch_id):
                     ms.execution_error,
                     ms.user_approved,
                     ms.skip_migration,
-                    ms.error_category
+                    ms.error_category,
+                    ms.target_dokob,
+                    ms.target_objky,
+                    ms.link_status,
+                    ms.link_error,
+                    ms.container_created
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1609,7 +1636,12 @@ def get_batch_records(batch_id):
                     ms.execution_error,
                     ms.user_approved,
                     ms.skip_migration,
-                    ms.error_category
+                    ms.error_category,
+                    ms.target_dokob,
+                    ms.target_objky,
+                    ms.link_status,
+                    ms.link_error,
+                    ms.container_created
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1773,6 +1805,157 @@ def cancel_migration(batch_id):
             'cancel_requested': True
         })
         
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# Phase 2: Object Link Creation (Verlinkung) Routes
+# ============================================================================
+
+@migrate_bp.route('/execute_linking', methods=['POST'])
+def execute_link_all():
+    """Phase 2: Execute object linking for all eligible records in a batch."""
+    try:
+        if not session.get('bearer_token'):
+            return jsonify({
+                'success': False,
+                'error': 'Nicht angemeldet. Bitte zuerst bei SAP anmelden.',
+                'login_required': True
+            }), 401
+
+        data = request.get_json()
+        batch_id = data.get('batch_id')
+
+        if not batch_id:
+            return jsonify({'success': False, 'error': 'Batch ID erforderlich'}), 400
+
+        result = execute_linking(batch_id)
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/execute_linking_selected', methods=['POST'])
+def execute_link_selected():
+    """Phase 2: Execute object linking for selected records only."""
+    try:
+        if not session.get('bearer_token'):
+            return jsonify({
+                'success': False,
+                'error': 'Nicht angemeldet. Bitte zuerst bei SAP anmelden.',
+                'login_required': True
+            }), 401
+
+        data = request.get_json()
+        batch_id = data.get('batch_id')
+        record_ids = data.get('record_ids', [])
+
+        if not batch_id:
+            return jsonify({'success': False, 'error': 'Batch ID erforderlich'}), 400
+
+        if not record_ids:
+            return jsonify({'success': False, 'error': 'Keine Datensätze ausgewählt'}), 400
+
+        # Reset link_status for selected records so they can be re-linked
+        record_ids_str = ','.join(str(rid) for rid in record_ids)
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_staging
+                SET link_status = 'pending',
+                    link_error = NULL,
+                    link_completed_at = NULL
+                WHERE batch_id = '{batch_id}'
+                    AND id IN ({record_ids_str})
+                    AND execution_status IN ('success', 'partial')
+                    AND ISNULL(container_created, 0) = 1
+            """))
+
+        result = execute_linking(batch_id, record_ids=record_ids)
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/cancel-linking', methods=['POST'])
+def cancel_linking(batch_id):
+    """Cancel a running linking operation for the given batch."""
+    try:
+        running, msg = is_linking_running(batch_id)
+        if not running:
+            return jsonify({
+                'success': False,
+                'error': 'Keine Verlinkung läuft für diesen Batch'
+            }), 400
+
+        request_link_cancel(batch_id)
+
+        return jsonify({
+            'success': True,
+            'message': f'Abbruch angefordert für Batch {batch_id}. Verlinkung wird nach Abschluss laufender Operationen beendet.',
+            'cancel_requested': True
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/link-progress', methods=['GET'])
+def get_link_progress(batch_id):
+    """Get linking progress for a batch (for live polling during Phase 2)."""
+    try:
+        with misc_engine.begin() as con:
+            # Get batch phase info
+            batch_row = con.execute(text(f"""
+                SELECT migration_phase, status
+                FROM dbo.migration_batch
+                WHERE batch_id = '{batch_id}'
+            """)).fetchone()
+
+            if not batch_row:
+                return jsonify({'success': False, 'error': 'Batch nicht gefunden'}), 404
+
+            # Get link status counts
+            link_stats = con.execute(text(f"""
+                SELECT
+                    SUM(CASE WHEN link_status = 'linked' THEN 1 ELSE 0 END) as linked,
+                    SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
+                    SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
+                    SUM(CASE WHEN link_status = 'linking' THEN 1 ELSE 0 END) as linking_now,
+                    SUM(CASE WHEN link_status = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
+                    SUM(CASE WHEN execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
+                FROM dbo.migration_staging
+                WHERE batch_id = '{batch_id}'
+            """)).fetchone()
+
+        linked = link_stats[0] or 0
+        link_exists = link_stats[1] or 0
+        link_failed = link_stats[2] or 0
+        linking_now = link_stats[3] or 0
+        link_pending = link_stats[4] or 0
+        link_total = link_stats[5] or 0
+
+        completed = linked + link_exists + link_failed
+        progress_pct = (completed / link_total * 100) if link_total > 0 else 0
+
+        return jsonify({
+            'success': True,
+            'batch_id': batch_id,
+            'migration_phase': batch_row.migration_phase,
+            'status': batch_row.status,
+            'link_total': int(link_total),
+            'linked': int(linked),
+            'link_exists': int(link_exists),
+            'link_failed': int(link_failed),
+            'linking_now': int(linking_now),
+            'link_pending': int(link_pending),
+            'completed': int(completed),
+            'progress_pct': round(progress_pct, 1),
+            'is_linking': batch_row.migration_phase == 'linking'
+        })
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

@@ -663,7 +663,8 @@ def apply_batch_rules(batch_id):
                        source_documentpart, source_description, authorization_group,
                        source_dokob, source_objky, filename,
                        target_documenttype, target_documentnumber, target_documentversion,
-                       target_documentpart, target_dokob, target_objky
+                       target_documentpart, target_dokob, target_objky,
+                       source_document_status, target_document_status
                 FROM dbo.migration_staging
                 WHERE batch_id = :batch_id
             """), {'batch_id': batch_id}).fetchall()
@@ -677,7 +678,8 @@ def apply_batch_rules(batch_id):
                    'source_documentpart', 'source_description', 'authorization_group',
                    'source_dokob', 'source_objky', 'filename',
                    'target_documenttype', 'target_documentnumber', 'target_documentversion',
-                   'target_documentpart', 'target_dokob', 'target_objky']
+                   'target_documentpart', 'target_dokob', 'target_objky',
+                   'source_document_status', 'target_document_status']
         df = pd.DataFrame(records, columns=columns)
         
         # Initialize target columns from source if not set
@@ -726,7 +728,8 @@ def apply_batch_rules(batch_id):
                         target_documentpart = :target_documentpart,
                         authorization_group = :authorization_group,
                         target_dokob = :target_dokob,
-                        target_objky = :target_objky
+                        target_objky = :target_objky,
+                        target_document_status = :target_document_status
                     WHERE id = :id
                 """), {
                     'id': row['id'],
@@ -736,7 +739,8 @@ def apply_batch_rules(batch_id):
                     'target_documentpart': row.get('target_documentpart'),
                     'authorization_group': row.get('authorization_group'),
                     'target_dokob': row.get('target_dokob'),
-                    'target_objky': row.get('target_objky')
+                    'target_objky': row.get('target_objky'),
+                    'target_document_status': row.get('target_document_status')
                 })
                 updated += 1
         
@@ -1129,10 +1133,10 @@ def refresh_batch_data_stream(batch_id):
                 where_clause = " OR ".join(conditions_draw)
                 
                 draw_query = f"""
-                    SELECT doknr, dokar, dokvr, doktl, filep
+                    SELECT doknr, dokar, dokvr, doktl, filep, dokst
                     FROM dil.DRAW
                     WHERE {where_clause}
-                """
+"""
                 with dil_engine.begin() as con:
                     chunk_df = pd.read_sql(draw_query, con)
                 all_filenames.append(chunk_df)
@@ -1146,6 +1150,8 @@ def refresh_batch_data_stream(batch_id):
             if all_filenames:
                 filename_df = pd.concat(all_filenames, ignore_index=True)
                 filename_df.columns = [c.lower() for c in filename_df.columns]
+                # Deduplicate: DRAW can have multiple rows per document
+                filename_df = filename_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
                 filenames_found = int(filename_df['filep'].notna().sum())
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': 50, 'message': f'Found {filenames_found} filenames from DRAW'})}\n\n"
@@ -1163,7 +1169,8 @@ def refresh_batch_data_stream(batch_id):
                            source_documentpart, source_description, authorization_group,
                            source_dokob, source_objky, filename,
                            target_documenttype, target_documentnumber, target_documentversion,
-                           target_documentpart, target_dokob, target_objky
+                           target_documentpart, target_dokob, target_objky,
+                           source_document_status, target_document_status
                     FROM dbo.migration_staging
                     WHERE batch_id = '{batch_id}'
                 """, con)
@@ -1236,7 +1243,7 @@ def refresh_batch_data_stream(batch_id):
                 df_merged['_doktl'] = df_merged['source_documentpart'].astype(str).str.zfill(3)
                 
                 df_merged = df_merged.merge(
-                    filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep']],
+                    filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep', 'dokst']],
                     how='left',
                     left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
                     right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
@@ -1245,6 +1252,7 @@ def refresh_batch_data_stream(batch_id):
                 df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
                                         'doknr_draw', 'dokar_draw', 'dokvr_draw', 'doktl_draw'],
                                errors='ignore', inplace=True)
+                df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 70, 'message': 'Preparing bulk update...'})}\n\n"
             
@@ -1260,11 +1268,15 @@ def refresh_batch_data_stream(batch_id):
                 dil_filename = str(row.get('file_name', '')) if pd.notna(row.get('file_name')) else None
                 filename = draw_filename or dil_filename
                 
+                # Document status from DRAW.DOKST
+                dokst = str(row.get('dokst', '')) if pd.notna(row.get('dokst')) else None
+                
                 update_data.append({
                     'staging_id': staging_id,
                     'source_loioid': source_loioid,
                     'file_size_bytes': file_size_bytes,
-                    'filename': filename
+                    'filename': filename,
+                    'source_document_status': dokst if dokst else None
                 })
             
             # Also get rule updates
@@ -1277,7 +1289,8 @@ def refresh_batch_data_stream(batch_id):
                     'target_documentpart': row.get('target_documentpart'),
                     'authorization_group': row.get('authorization_group'),
                     'target_dokob': row.get('target_dokob'),
-                    'target_objky': row.get('target_objky')
+                    'target_objky': row.get('target_objky'),
+                    'target_document_status': row.get('target_document_status')
                 }
             
             # Bulk update using temp table
@@ -1292,13 +1305,14 @@ def refresh_batch_data_stream(batch_id):
                         staging_id INT PRIMARY KEY,
                         source_loioid NVARCHAR(100),
                         file_size_bytes BIGINT,
-                        filename NVARCHAR(500)
+                        filename NVARCHAR(500),
+                        source_document_status NVARCHAR(20)
                     );
                 """))
                 
                 # Insert metadata updates
                 update_df = pd.DataFrame(update_data)
-                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna()]
+                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna()]
                 
                 if len(update_df) > 0:
                     chunk_size = 900
@@ -1316,7 +1330,8 @@ def refresh_batch_data_stream(batch_id):
                         SET s.source_loioid = COALESCE(t.source_loioid, s.source_loioid),
                             s.file_size_bytes = COALESCE(t.file_size_bytes, s.file_size_bytes),
                             s.filename = CASE WHEN t.filename IS NOT NULL AND t.filename != 'None' AND t.filename != '' 
-                                              THEN t.filename ELSE s.filename END
+                                              THEN t.filename ELSE s.filename END,
+                            s.source_document_status = COALESCE(t.source_document_status, s.source_document_status)
                         FROM dbo.migration_staging s
                         INNER JOIN #refresh_update t ON s.id = t.staging_id
                     """))
@@ -1336,7 +1351,8 @@ def refresh_batch_data_stream(batch_id):
                             target_documentpart = :target_documentpart,
                             authorization_group = :authorization_group,
                             target_dokob = :target_dokob,
-                            target_objky = :target_objky
+                            target_objky = :target_objky,
+                            target_document_status = :target_document_status
                         WHERE id = :id
                     """), {
                         'id': staging_id,
@@ -1346,7 +1362,8 @@ def refresh_batch_data_stream(batch_id):
                         'target_documentpart': vals.get('target_documentpart'),
                         'authorization_group': vals.get('authorization_group'),
                         'target_dokob': vals.get('target_dokob'),
-                        'target_objky': vals.get('target_objky')
+                        'target_objky': vals.get('target_objky'),
+                        'target_document_status': vals.get('target_document_status')
                     })
             
             # Calculate statistics
@@ -1419,7 +1436,7 @@ def get_batch_progress(batch_id):
             'migration_phase': row.get('migration_phase', 'upload'),
             'total': int(total),
             'executed': int(executed),
-            'success': int(success),
+            'successful': int(success),
             'failed': int(failed),
             'partial': int(partial),
             'remaining': int(total - executed),
@@ -1603,7 +1620,9 @@ def get_batch_records(batch_id):
                     ms.target_objky,
                     ms.link_status,
                     ms.link_error,
-                    ms.container_created
+                    ms.container_created,
+                    ms.source_document_status,
+                    ms.target_document_status
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1641,7 +1660,9 @@ def get_batch_records(batch_id):
                     ms.target_objky,
                     ms.link_status,
                     ms.link_error,
-                    ms.container_created
+                    ms.container_created,
+                    ms.source_document_status,
+                    ms.target_document_status
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -3652,6 +3673,7 @@ def load_dms_objects():
         
         # Define queries per DOKOB - executed sequentially for better performance
         # Exclusion rules applied:
+        # - ALL: Exclude if DRAW.FILEP is empty (no file attached → nothing to migrate)
         # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
         # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
         # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
@@ -3673,6 +3695,12 @@ def load_dms_objects():
                       AND j.STAT IN ('I0320', 'I0013', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'IFLOT': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3686,6 +3714,12 @@ def load_dms_objects():
                       AND j.STAT IN ('I0320', 'I0013', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'MPLA': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3695,6 +3729,12 @@ def load_dms_objects():
                 LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
                 WHERE drad.DOKOB = 'MPLA' 
                   AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'PMPLKO': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3706,6 +3746,12 @@ def load_dms_objects():
                     RIGHT(drad.OBJKY, 2) = plko.PLNAL
                 WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                   AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'PMAUFK': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3718,6 +3764,12 @@ def load_dms_objects():
                       WHERE j.OBJNR = aufk.OBJNR 
                       AND j.STAT IN ('I0045', 'I0013', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
                   )
             """,
             'PMAFVC': f"""
@@ -3736,6 +3788,12 @@ def load_dms_objects():
                       AND j.STAT IN ('I0045', 'I0013', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'PMQMEL': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3749,6 +3807,12 @@ def load_dms_objects():
                       WHERE j.OBJNR = qmel.OBJNR 
                       AND j.STAT IN ('I0072', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
                   )
             """,
             'SMQMEL': f"""
@@ -3764,6 +3828,12 @@ def load_dms_objects():
                       AND j.STAT IN ('I0072', 'I0076')
                       AND (j.INACT IS NULL OR j.INACT = '')
                   )
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'STKO_DOC': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3772,6 +3842,12 @@ def load_dms_objects():
                 JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
                 WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                   AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """,
             'STPO_DOC': f"""
                 SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
@@ -3781,6 +3857,12 @@ def load_dms_objects():
                 JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
                 WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                   AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
+                  AND EXISTS (
+                      SELECT 1 FROM DIL.DRAW draw
+                      WHERE draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
+                        AND draw.FILEP IS NOT NULL AND draw.FILEP != ''
+                  )
             """
         }
         
@@ -3883,6 +3965,9 @@ def load_dms_objects_stream():
             werke_filter = "', '".join(selected_werke)
             
             # Define queries per DOKOB with exclusion rules
+            # Queries use LEFT JOIN DRAW to include FILEP column - filtering happens in Python
+            # This allows counting no-file records without extra queries
+            # Exclusion rules (status-based, applied in SQL):
             # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
             # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
             # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
@@ -3890,13 +3975,17 @@ def load_dms_objects_stream():
             # - STKO_DOC: Exclude if STKO.LOEKZ = 'X'
             # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
             # - PLKO: Exclude if PLKO.LOEKZ = 'X'
+            # Post-filter (applied in Python):
+            # - ALL: Exclude if DRAW.FILEP is empty (no file attached)
             queries = {
                 'EQUI': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY, 
-                           equz.IWERK as WERK
+                           equz.IWERK as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
                     JOIN DIL.EQUI equi ON drad.OBJKY = equi.EQUNR
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'EQUI' AND equz.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3907,9 +3996,11 @@ def load_dms_objects_stream():
                 """,
                 'IFLOT': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           iflot.IWERK as WERK
+                           iflot.IWERK as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'IFLOT' AND iflot.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3920,29 +4011,35 @@ def load_dms_objects_stream():
                 """,
                 'MPLA': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
+                           COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
                     LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'MPLA' 
                       AND COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) IN ('{werke_filter}')
                 """,
                 'PMPLKO': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           plko.WERKS as WERK
+                           plko.WERKS as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.PLKO plko ON 
                         LEFT(drad.OBJKY, 1) = plko.PLNTY AND
                         SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
                         RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                       AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
                 """,
                 'PMAUFK': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           aufk.WERKS as WERK
+                           aufk.WERKS as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMAUFK' AND aufk.WERKS IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3953,13 +4050,15 @@ def load_dms_objects_stream():
                 """,
                 'PMAFVC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           afvc.WERKS as WERK
+                           afvc.WERKS as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.AFVC afvc ON 
                         SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
                         SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
                     JOIN DIL.AFKO afko ON afvc.AUFPL = afko.AUFPL
                     JOIN DIL.AUFK aufk ON afko.AUFNR = aufk.AUFNR
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMAFVC' AND afvc.WERKS IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3970,10 +4069,12 @@ def load_dms_objects_stream():
                 """,
                 'PMQMEL': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           qmih.IWERK as WERK
+                           qmih.IWERK as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
                     JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'PMQMEL' AND qmih.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3984,10 +4085,12 @@ def load_dms_objects_stream():
                 """,
                 'SMQMEL': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           qmih.IWERK as WERK
+                           qmih.IWERK as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
                     JOIN DIL.QMEL qmel ON drad.OBJKY = qmel.QMNUM
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'SMQMEL' AND qmih.IWERK IN ('{werke_filter}')
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
@@ -3998,18 +4101,22 @@ def load_dms_objects_stream():
                 """,
                 'STKO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           stko.WRKAN as WERK
+                           stko.WRKAN as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'STKO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                       AND (stko.LOEKZ IS NULL OR stko.LOEKZ = '')
                 """,
                 'STPO_DOC': f"""
                     SELECT drad.DOKAR, drad.DOKNR, drad.DOKVR, drad.DOKTL, drad.DOKOB, drad.OBJKY,
-                           stko.WRKAN as WERK
+                           stko.WRKAN as WERK, draw.FILEP
                     FROM DIL.DRAD drad
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
                     JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    LEFT JOIN DIL.DRAW draw ON draw.DOKNR = drad.DOKNR AND draw.DOKAR = drad.DOKAR
+                        AND draw.DOKVR = drad.DOKVR AND draw.DOKTL = drad.DOKTL
                     WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                       AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
                 """
@@ -4080,7 +4187,8 @@ def load_dms_objects_stream():
             all_results = []
             stats = {}
             stats_total = {}  # Total counts without exclusion
-            stats_excluded = {}  # Excluded counts
+            stats_excluded = {}  # Excluded counts (status-based)
+            stats_no_file = {}  # Records without file (DRAW.FILEP empty)
             total_queries = len(queries)
             
             with dil_db.engine.begin() as con:
@@ -4090,21 +4198,35 @@ def load_dms_objects_stream():
                     
                     query_start = time.time()
                     try:
-                        # Get filtered data
+                        # Get data (includes FILEP column from LEFT JOIN DRAW)
                         df = pd.read_sql(query, con)
-                        count = len(df)
-                        stats[dokob] = count
-                        if count > 0:
-                            all_results.append(df)
+                        df.columns = [c.lower() for c in df.columns]
                         
-                        # Get total count (without filter) for exclusion statistics
-                        total_count = count  # Default to same as filtered
+                        # Split: rows with file vs without file
+                        total_after_status = len(df)
+                        if 'filep' in df.columns:
+                            df_with_file = df[df['filep'].notna() & (df['filep'].astype(str).str.strip() != '')]
+                            no_file_count = total_after_status - len(df_with_file)
+                            # Drop FILEP column before saving (not needed in output)
+                            df_with_file = df_with_file.drop(columns=['filep'])
+                        else:
+                            df_with_file = df
+                            no_file_count = 0
+                        
+                        count = len(df_with_file)
+                        stats[dokob] = count
+                        stats_no_file[dokob] = no_file_count
+                        if count > 0:
+                            all_results.append(df_with_file)
+                        
+                        # Get total count (without any filter) for exclusion statistics
+                        total_count = total_after_status  # Default
                         excluded_count = 0
                         if dokob in count_queries:
                             try:
                                 result = con.execute(text(count_queries[dokob]))
                                 total_count = result.scalar() or 0
-                                excluded_count = total_count - count
+                                excluded_count = total_count - total_after_status  # Status-excluded only
                             except Exception as count_err:
                                 print(f"[DMS Load] Count query error for {dokob}: {count_err}")
                         
@@ -4113,8 +4235,8 @@ def load_dms_objects_stream():
                         
                         query_time = time.time() - query_start
                         
-                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'total': total_count, 'excluded': excluded_count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
-                        print(f"[DMS Load] {dokob}: {count} records (excluded {excluded_count}) in {query_time:.2f}s")
+                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'total': total_count, 'excluded': excluded_count, 'no_file': no_file_count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
+                        print(f"[DMS Load] {dokob}: {count} records (status-excluded {excluded_count}, no-file {no_file_count}) in {query_time:.2f}s")
                     except Exception as e:
                         print(f"[DMS Load] ERROR in {dokob}: {str(e)}")
                         stats[dokob] = 0
@@ -4149,7 +4271,7 @@ def load_dms_objects_stream():
                     print(f"[DMS Load] Auto-save failed: {save_error}")
             
             # Send final result with exclusion statistics
-            yield f"data: {json.dumps({'type': 'complete', 'stats': stats, 'stats_total': stats_total, 'stats_excluded': stats_excluded, 'count': len(data_list), 'query_time': f'{total_time:.2f}s', 'saved': saved, 'data': data_list})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'stats': stats, 'stats_total': stats_total, 'stats_excluded': stats_excluded, 'stats_no_file': stats_no_file, 'count': len(data_list), 'query_time': f'{total_time:.2f}s', 'saved': saved, 'data': data_list})}\n\n"
             
         except Exception as e:
             import traceback

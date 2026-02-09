@@ -202,6 +202,7 @@
                                     <th data-column="file_size">File Size</th>
                                     <th data-column="mime_type">MIME Type</th>
                                     <th data-column="auth_group">Auth Group</th>
+                                    <th data-column="doc_status">Dok-Status</th>
                                     <th data-column="execution">Execution</th>
                                     <th data-column="link_status">Link Status</th>
                                     <th data-column="error_category">Error Category</th>
@@ -288,6 +289,10 @@
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
                     <label class="form-check-label" for="col_auth_group">Berechtigungsgruppe</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_doc_status" value="doc_status" checked>
+                    <label class="form-check-label" for="col_doc_status">Dokumentenstatus</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_execution" value="execution" checked>
@@ -393,6 +398,7 @@ let visibleColumns = {
     'file_size': true,
     'mime_type': false,
     'auth_group': true,
+    'doc_status': true,
     'execution': true,
     'error_category': true,
     'created_at': false,
@@ -927,7 +933,7 @@ function displayRecords(records) {
     const tbody = document.getElementById('recordsBody');
     
     if (records.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="19" class="text-center">Keine Datensätze gefunden</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="20" class="text-center">Keine Datensätze gefunden</td></tr>';
         return;
     }
     
@@ -965,6 +971,7 @@ function displayRecords(records) {
                 <td data-column="file_size"><small>${fileSize}</small></td>
                 <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
+                <td data-column="doc_status"><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
                 <td data-column="execution">${executionBadge}</td>
                 <td data-column="link_status">${getLinkStatusBadge(record.link_status, record.execution_status, record.target_dokob)}</td>
                 <td data-column="error_category">${getErrorCategoryBadge(record.error_category)}</td>
@@ -1175,7 +1182,7 @@ function updateProgressDisplay(data) {
     stats.textContent = `${data.executed} / ${data.total}`;
     
     // Build details with optional partial count
-    let detailsHtml = `<span class="text-success">✓ ${data.success}</span>`;
+    let detailsHtml = `<span class="text-success">✓ ${data.successful}</span>`;
     if (data.partial && data.partial > 0) {
         detailsHtml += ` | <span class="text-warning">⚠ ${data.partial}</span>`;
     }
@@ -1421,7 +1428,9 @@ function startLinkProgressPolling() {
         fetch(`/batch/${batchId}/link-progress`)
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
+                // Guard: only update UI if polling is still active (prevents race condition
+                // where an in-flight fetch resolves after stopLinkProgressPolling/hideProgressBar)
+                if (data.success && linkProgressInterval) {
                     const pct = data.progress_pct || 0;
                     showProgressBar();
                     const bar = document.getElementById('progressBar');

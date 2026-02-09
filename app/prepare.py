@@ -458,6 +458,12 @@ def enrich_with_metadata(data_df):
     data_df['target_dokob'] = None
     data_df['target_objky'] = None
     
+    # Document status: initialize if not already provided (from Excel or SQL query)
+    if 'source_document_status' not in data_df.columns:
+        data_df['source_document_status'] = None
+    if 'target_document_status' not in data_df.columns:
+        data_df['target_document_status'] = None
+    
     # Enrich with LOIO_IDs from DIL.DMS_DOC2LOIO (required for file size lookup)
     data_df = enrich_loio_ids(data_df)
     
@@ -519,6 +525,8 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'target_documentversion': row.get('documentversion', '00'),
             'target_dokob': row.get('target_dokob'),
             'target_objky': row.get('target_objky'),
+            'source_document_status': row.get('source_document_status'),
+            'target_document_status': row.get('target_document_status'),
             'authorization_group': row.get('authorization_group'),
             'filename': row.get('source_filename'),  # From DIL.DRAW.filep (with extension)
             'file_size_bytes': row.get('file_size_bytes'),

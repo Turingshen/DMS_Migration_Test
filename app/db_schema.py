@@ -21,12 +21,14 @@ CREATE TABLE dbo.migration_staging (
     source_description NVARCHAR(255),
     source_dokob VARCHAR(10),
     source_objky VARCHAR(100),
+    source_document_status VARCHAR(20),
     
     -- Target document identifiers (computed from source)
     target_documentnumber VARCHAR(25),
     target_documentpart VARCHAR(3),
     target_documenttype VARCHAR(10),
     target_documentversion VARCHAR(2),
+    target_document_status VARCHAR(20),
     
     -- File metadata
     filename NVARCHAR(255),
@@ -372,6 +374,18 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has link_status/link_error/link_completed_at columns")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add link columns: {e}")
+        
+        # Document status columns (InternalDocumentStatus mapping)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'source_document_status') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD source_document_status VARCHAR(20) NULL;
+                IF COL_LENGTH('dbo.migration_staging', 'target_document_status') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_document_status VARCHAR(20) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has source/target_document_status columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add document_status columns: {e}")
         
         # Phase tracking for batch table
         try:

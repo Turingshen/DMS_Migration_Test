@@ -381,6 +381,7 @@ def load_approved_records(batch_id):
             target_documenttype,
             target_documentversion,
             authorization_group,
+            target_document_status,
             filename,
             file_size_bytes,
             skip_migration
@@ -418,6 +419,7 @@ def load_specific_records(batch_id, record_ids):
             target_documenttype,
             target_documentversion,
             authorization_group,
+            target_document_status,
             filename,
             file_size_bytes,
             skip_migration,
@@ -1103,6 +1105,12 @@ def execute_single_document(staging_record, session_snapshot):
                 if effective_authgroup:
                     dms_payload['AuthorizationGroup'] = effective_authgroup
                     logger.debug(f"Using authorization group: {effective_authgroup}", category="CREATE")
+                
+                # Add document status if configured via migration rules
+                target_doc_status = staging_record.get('target_document_status')
+                if target_doc_status:
+                    dms_payload['InternalDocumentStatus'] = target_doc_status
+                    logger.debug(f"Using document status: {target_doc_status}", category="CREATE")
                 
                 logger.info(f"Creating document info record", category="CREATE")
                 create_resp = server_session.post(create_url, json=dms_payload)
@@ -2379,25 +2387,37 @@ def link_single_record(staging_record, session_snapshot):
         prepare_session_headers(server_session, session_snapshot, write_sap_system)
         server_session.headers.update({'Content-Type': 'application/json'})
         
-        # Build Object Link URL and payload
+        # Create Object Link via POST on navigation property to_ProductObj.
+        # Per OpenAPI spec: POST /A_DocumentInfoRecord(...)/to_ProductObj
+        # The document is identified by the URL path, the target object
+        # (EQUI, IFLOT, etc.) is in the request body.
         doc_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
-        object_link_url = f"{doc_base_url}/A_DocumentInfoRecordObjLink"
+        doc_key = (
+            f"DocumentInfoRecordDocType='{doc_type}',"
+            f"DocumentInfoRecordDocVersion='{doc_version}',"
+            f"DocumentInfoRecordDocNumber='{doc_number}',"
+            f"DocumentInfoRecordDocPart='{doc_part}'"
+        )
+        post_url = f"{doc_base_url}/A_DocumentInfoRecord({doc_key})/to_ProductObj"
         
         object_link_payload = {
-            'DocumentInfoRecordDocType': doc_type,
-            'DocumentInfoRecordDocNumber': doc_number,
-            'DocumentInfoRecordDocVersion': doc_version,
-            'DocumentInfoRecordDocPart': doc_part,
-            'DocumentInfoRecordToObjLnkObjectType': target_dokob,
-            'DocumentInfoRecordToObjLnkObjectKey': target_objky
+            'LinkedSAPObject': target_dokob,
+            'LinkedSAPObjectKey': target_objky,
+            'DocObjectLinkCounter': '001'
         }
         
-        logger.info(f"Creating object link: {target_dokob}/{target_objky}", category="OBJLINK")
+        logger.info(f"Creating object link: {target_dokob}/{target_objky} -> POST {post_url}", category="OBJLINK")
+        logger.debug(f"Object link payload: {object_link_payload}", category="OBJLINK")
         
-        link_resp = server_session.post(object_link_url, json=object_link_payload)
+        link_resp = server_session.post(post_url, json=object_link_payload)
         body_txt_lower = link_resp.text.lower() if link_resp.text else ''
         
-        if link_resp.status_code in (200, 201):
+        # Debug: log full response for non-success
+        if link_resp.status_code not in (200, 201, 204):
+            resp_body = link_resp.text[:500] if link_resp.text else '(empty)'
+            logger.warning(f"Link response {link_resp.status_code}: {resp_body}", category="OBJLINK_DEBUG")
+        
+        if link_resp.status_code in (200, 201, 204):
             logger.info(f"Object link created: {target_dokob}/{target_objky}", category="OBJLINK")
             update_link_status(staging_id, 'linked')
             return {
@@ -2500,6 +2520,17 @@ def execute_linking(batch_id, record_ids=None):
         
         total_records = len(records_df)
         print(f"[LINK_START] Batch {batch_id}: {total_records} records for linking, {max_workers} workers")
+        
+        # Reset all linkable records to 'pending' so the progress bar starts at 0%
+        # (otherwise re-runs start at 100% because 'link_failed' counts as completed)
+        record_ids_to_reset = [int(r['id']) for _, r in records_df.iterrows()]
+        ids_str = ','.join(str(rid) for rid in record_ids_to_reset)
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_staging
+                SET link_status = 'pending', link_error = NULL
+                WHERE id IN ({ids_str})
+            """))
         
         # Update batch phase
         with misc_engine.begin() as con:

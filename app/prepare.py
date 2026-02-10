@@ -474,23 +474,41 @@ def enrich_with_metadata(data_df):
     # No DIL.DRAW query needed here - the API provides full path with extension
     data_df['source_filename'] = None
     
-    # Compute target document numbers (X55- prefix)
-    # Set target document number to source for manual IDs, empty for auto-generated IDs
-    # Auto-generated IDs will be assigned by target system during migration
-    def compute_target(dn):
+    # Compute target document numbers based on target document type
+    # Rules (apply_translations above) may have already changed target_documenttype,
+    # so we use the effective target type to decide:
+    # - IY1/IY2: internal numbering → target_documentnumber = None (S4 auto-generates)
+    # - Other types: preserve source document number (manual ID)
+    INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+    
+    def compute_target_docnumber(row):
+        """Determine target document number based on target type and source number."""
+        # If rules already set target_documentnumber, keep it
+        existing = row.get('target_documentnumber')
+        if pd.notnull(existing) and str(existing).strip():
+            return str(existing).strip()[:25]
+        
+        # Check target document type (may have been mapped by rules)
+        target_type = str(row.get('target_documenttype', '') or '').strip().upper()
+        if target_type in INTERNAL_NUMBERING_TYPES:
+            return None  # Internal numbering - S4 will auto-generate
+        
+        # Non-internal-numbering type: preserve source document number
+        dn = row.get('documentnumber') if 'documentnumber' in row.index else None
         if pd.isnull(dn):
             return None
-        val = str(dn)
-        # Check if this is an auto-generated ID that should not be preserved
-        if is_auto_generated_id(val):
-            return None  # Target system will assign new ID
-        return val[:25]  # Manual ID - preserve it (ensure fits VARCHAR(25))
+        return str(dn)[:25]
 
-    # Safely compute target_documentnumber if source exists
-    if 'documentnumber' in data_df.columns:
-        data_df['target_documentnumber'] = data_df['documentnumber'].apply(compute_target)
-    else:
+    # Ensure target_documentnumber column exists
+    if 'target_documentnumber' not in data_df.columns:
         data_df['target_documentnumber'] = None
+    
+    # Apply compute logic row-by-row (needs access to target_documenttype)
+    if 'documentnumber' in data_df.columns or 'target_documenttype' in data_df.columns:
+        data_df['target_documentnumber'] = data_df.apply(compute_target_docnumber, axis=1)
+    
+    print(f"[PREPARE] target_documentnumber: {data_df['target_documentnumber'].notna().sum()} set, "
+          f"{data_df['target_documentnumber'].isna().sum()} null (internal numbering)")
     
     # Clean up any duplicate columns (can occur from multiple merges)
     if data_df.columns.duplicated().any():
@@ -530,6 +548,7 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'authorization_group': row.get('authorization_group'),
             'filename': row.get('source_filename'),  # From DIL.DRAW.filep (with extension)
             'file_size_bytes': row.get('file_size_bytes'),
+            'ablage': row.get('ablage', 'KPRO'),
             'validation_status': 'pending',
             'execution_status': 'pending',
             'user_approved': 0,

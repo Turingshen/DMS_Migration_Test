@@ -61,8 +61,8 @@ class Config():
         sap_systems = {}
         for key, value in config.items():
             if isinstance(value, dict):
-                api_header = ['system_label', 'X-API-Key'] # items to identify the api entry
-                if all(item in value for item in api_header):
+                # SAP system has system_label AND (X-API-Key or auth_type)
+                if 'system_label' in value and ('X-API-Key' in value or 'auth_type' in value):
                     sap_systems[key] = value['system_label']
         config['sap_systems'] = sap_systems
         

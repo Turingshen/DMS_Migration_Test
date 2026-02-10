@@ -31,51 +31,140 @@ MAX_DESC_LEN = 40
 MAX_FILENAME_LEN = 80  # Maximum length for stored/uploaded filenames (extension preserved when truncating)
 FORBIDDEN_FILENAME_CHARS = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t']  # replaced with '_'
 
-read_sap_system = "zhl"
-write_sap_system = "zbq"
+# Defaults — can be overridden per session via /switch_system
+DEFAULT_SOURCE_SYSTEM = "zhl"
+DEFAULT_TARGET_SYSTEM = "zbq"
+
+# Module-level aliases (used by execute.py at snapshot time)
+read_sap_system = DEFAULT_SOURCE_SYSTEM
+write_sap_system = DEFAULT_TARGET_SYSTEM
+
+
+def get_source_system(session_snapshot=None):
+    """Get active source (read) SAP system from session or default."""
+    if session_snapshot and 'source_system' in session_snapshot:
+        return session_snapshot['source_system']
+    return DEFAULT_SOURCE_SYSTEM
+
+
+def get_target_system(session_snapshot=None):
+    """Get active target (write) SAP system from session or default."""
+    if session_snapshot and 'target_system' in session_snapshot:
+        return session_snapshot['target_system']
+    return DEFAULT_TARGET_SYSTEM
+
+
+def get_systems_by_type():
+    """Return dict of source (R3) and target (S4) system lists from config."""
+    source_systems = {}  # R3 systems
+    target_systems = {}  # S4 systems
+    config = cfg.config_env
+    for key, value in config.items():
+        if isinstance(value, dict) and 'system_label' in value and 'system_type' in value:
+            if value['system_type'] == 'R3':
+                source_systems[key] = value['system_label']
+            elif value['system_type'] == 'S4':
+                target_systems[key] = value['system_label']
+    return source_systems, target_systems
 
 
 def prepare_session_headers(server_session, session_snapshot, sap_system):
     """Prepare headers & cookies for a given SAP system without relying on Flask's request context.
     Maintains per-system CSRF token data inside the session_snapshot dict.
+    
+    Supports two auth modes:
+    - OAuth/API-Key (default): Bearer token + X-API-Key via BTP API Gateway
+    - Basic Auth: username/password for direct SAP (ZV) systems (auth_type='basic' in config)
     """
-    if 'bearer_token' not in session_snapshot or session_snapshot['bearer_token'] is None:
-        raise Exception('Missing bearer_token in session snapshot')
+    auth_type = cfg.config_env.get(sap_system, {}).get('auth_type', 'oauth')
+    is_basic = auth_type == 'basic'
+
+    if is_basic:
+        # Load encrypted credentials from DB
+        from app.credentials import get_credentials
+        creds = get_credentials(sap_system)
+        if not creds:
+            raise Exception(f'No Basic Auth credentials stored for {sap_system}. Configure them in Settings.')
+        auth_tuple = (creds['username'], creds['password'])
+        verify_ssl = cfg.config_env.get(sap_system, {}).get('verify_ssl', True)
+    else:
+        # OAuth mode — requires bearer_token in session
+        if 'bearer_token' not in session_snapshot or session_snapshot['bearer_token'] is None:
+            raise Exception('Missing bearer_token in session snapshot')
 
     systems_ctx = session_snapshot.setdefault('systems', {})
     sys_ctx = systems_ctx.setdefault(sap_system, {})
 
+    # ── STEP 1: Clean session state BEFORE any requests to this system ──
+    # Remove stale headers, cookies, and auth from the previous system.
+    # This MUST happen before the CSRF fetch, otherwise foreign headers/cookies
+    # (e.g. BTP Bearer token, ZHL cookies) get sent to ZVFR3 and cause 403.
+    if is_basic:
+        server_session.headers.pop('Authorization', None)
+        server_session.headers.pop('X-API-Key', None)
+        server_session.auth = auth_tuple
+        server_session.verify = verify_ssl
+    else:
+        server_session.auth = None
+        server_session.verify = True  # Re-enable SSL verification for BTP gateway
+    server_session.cookies.clear()
+
+    # ── STEP 2: CSRF token management ──
     now = time.time()
     if ('x_csrf_token' not in sys_ctx or
         'csrf_token_time' not in sys_ctx or
         now - sys_ctx['csrf_token_time'] > 600):  # renew every 10 min
-        # fetch new token
-        headers = {
-            'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
-            'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
-            'X-CSRF-Token': 'fetch',
-            'Accept': 'application/json'
-        }
-        # Use 'document' API for CSRF token (DMS migration uses Document API)
-        base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
-        resp = server_session.get(base_url, headers=headers)
+        # Fetch new CSRF token (session is now clean — no foreign cookies/headers)
+        if is_basic:
+            headers = {
+                'X-CSRF-Token': 'fetch',
+                'Accept': 'application/json'
+            }
+            base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+            resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
+        else:
+            headers = {
+                'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
+                'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
+                'X-CSRF-Token': 'fetch',
+                'Accept': 'application/json'
+            }
+            base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+            resp = server_session.get(base_url, headers=headers)
         if resp.status_code != 200:
             raise Exception(f'Failed to fetch CSRF token for {sap_system}: {resp.status_code} {resp.reason}')
         sys_ctx['x_csrf_token'] = resp.headers.get('x-csrf-token')
-        sys_ctx['cookies'] = resp.cookies
+        # IMPORTANT: Save the FULL session cookies, not just resp.cookies.
+        # SAP servers may redirect (e.g. /API_DMS_PROCESS_SRV → /API_DMS_PROCESS_SRV/)
+        # and set critical cookies (sap-usercontext, SAP_SESSIONID) in the redirect response.
+        # resp.cookies only contains cookies from the final response, missing redirect cookies.
+        # server_session.cookies has ALL cookies set during the entire request chain.
+        sys_ctx['cookies'] = server_session.cookies.copy()
         sys_ctx['csrf_token_time'] = now
+    else:
+        # Use cached cookies from previous CSRF fetch
+        server_session.cookies.update(sys_ctx['cookies'])
 
-    header_dict = {
-        'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
-        'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
-        'Content-Type': 'application/json',  # default, may be overwritten later for file upload
-        'Accept': 'application/json',
-        'Accept-Language': 'de',  # Request German language for descriptions (DRAT.LANGU = 'D')
-        'sap-language': 'DE',  # SAP-specific language header
-        'X-CSRF-Token': sys_ctx['x_csrf_token']
-    }
+    # ── STEP 3: Set session headers for subsequent API calls ──
+    if is_basic:
+        header_dict = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Accept-Language': 'de',
+            'sap-language': 'DE',
+            'X-CSRF-Token': sys_ctx['x_csrf_token']
+        }
+    else:
+        header_dict = {
+            'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
+            'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
+            'Content-Type': 'application/json',  # default, may be overwritten later for file upload
+            'Accept': 'application/json',
+            'Accept-Language': 'de',  # Request German language for descriptions (DRAT.LANGU = 'D')
+            'sap-language': 'DE',  # SAP-specific language header
+            'X-CSRF-Token': sys_ctx['x_csrf_token']
+        }
     server_session.headers.update(header_dict)
-    server_session.cookies.update(sys_ctx['cookies'])
 
 
 def _extract_error_fields(resp, max_raw_len=500):

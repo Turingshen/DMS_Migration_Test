@@ -809,9 +809,20 @@ function saveBatch() {
 }
 
 function deleteBatch(batchId) {
-    if (!confirm(`Batch ${batchId} wirklich löschen?\n\nAlle Staging-Datensätze, Dateidetails und der Batch selbst werden unwiderruflich gelöscht.\n\nDiese Aktion kann nicht rückgängig gemacht werden!`)) {
+    if (!confirm(`Batch ${batchId} wirklich löschen?\n\nAlle Staging-Datensätze, Dateidetails, Logs und Mappings werden unwiderruflich gelöscht.\n\nBei großen Batches kann das einige Sekunden dauern.`)) {
         return;
     }
+    
+    // Disable delete button and show spinner
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    btn.title = 'Wird gelöscht...';
+    
+    // Show row feedback
+    const row = btn.closest('tr');
+    if (row) row.style.opacity = '0.5';
     
     fetch(`/batch/${batchId}`, {
         method: 'DELETE'
@@ -819,13 +830,21 @@ function deleteBatch(batchId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            const d = data.deleted || {};
+            console.log(`Batch ${batchId} gelöscht: ${d.staging_records || 0} Staging, ${d.file_details || 0} Files, ${d.logs || 0} Logs, ${d.object_mappings || 0} Mappings`);
             loadBatches();
         } else {
             alert('Fehler beim Löschen: ' + data.error);
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+            if (row) row.style.opacity = '1';
         }
     })
     .catch(error => {
         alert('Fehler beim Löschen: ' + error);
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+        if (row) row.style.opacity = '1';
     });
 }
 </script>

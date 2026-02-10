@@ -84,34 +84,50 @@
                     </li>
                 </ul>
                 <ul class="navbar-nav ml-auto">
-                    <!-- Migration Direction Indicator -->
-                    <li class="nav-item">
-                        <span class="nav-link" style="cursor: default;">
-                            <span class="badge badge-info" title="Quelle: {{ source_system_label }}">
+                    <!-- Source System Selector -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle py-1" href="#" id="sourceSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Quellsystem (R/3)">
+                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">QUELLE</small>
+                            <span class="badge badge-info">
                                 <i class="fas fa-download"></i> {{ source_system | upper }}
                             </span>
-                            <i class="fas fa-arrow-right text-light mx-1"></i>
-                            <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}" title="Ziel: {{ target_system_label }}">
-                                <i class="fas fa-upload"></i> {{ target_system | upper }}
-                            </span>
-                        </span>
-                    </li>
-                    <!-- SAP System Indicator -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="sapSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                            <i class="fas fa-server"></i> 
-                            <span class="badge {% if 'prod' in (sap_systems.get(sap_system, '')|lower) or 'produktiv' in (sap_systems.get(sap_system, '')|lower) %}badge-danger{% else %}badge-warning{% endif %}">
-                                {{ sap_systems.get(sap_system, sap_system) | default('Unknown') }}
-                            </span>
                         </a>
-                        <div class="dropdown-menu dropdown-menu-right" aria-labelledby="sapSystemDropdown">
-                            <h6 class="dropdown-header">SAP System wechseln</h6>
-                            {% for sys_key, sys_label in sap_systems.items() %}
-                            <a class="dropdown-item {% if sys_key == sap_system %}active{% endif %}" href="/login?sap_system={{ sys_key }}">
-                                {{ sys_label }}
+                        <div class="dropdown-menu" aria-labelledby="sourceSystemDropdown">
+                            <h6 class="dropdown-header">Quellsystem wählen (R/3)</h6>
+                            {% for sys_key, sys_label in source_systems.items() %}
+                            <a class="dropdown-item {% if sys_key == source_system %}active{% endif %}" href="#" onclick="switchSystem('source_system', '{{ sys_key }}'); return false;">
+                                <i class="fas fa-{% if sys_key == source_system %}check-circle{% else %}circle{% endif %}"></i>
+                                {{ sys_key | upper }} — {{ sys_label }}
                             </a>
                             {% endfor %}
                         </div>
+                    </li>
+                    
+                    <li class="nav-item d-flex align-items-center px-1">
+                        <i class="fas fa-arrow-right text-light"></i>
+                    </li>
+                    
+                    <!-- Target System Selector -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle py-1" href="#" id="targetSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Zielsystem (S/4HANA)">
+                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">ZIEL</small>
+                            <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}">
+                                <i class="fas fa-upload"></i> {{ target_system | upper }}
+                            </span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="targetSystemDropdown">
+                            <h6 class="dropdown-header">Zielsystem wählen (S/4)</h6>
+                            {% for sys_key, sys_label in target_systems.items() %}
+                            <a class="dropdown-item {% if sys_key == target_system %}active{% endif %}" href="#" onclick="switchSystem('target_system', '{{ sys_key }}'); return false;">
+                                <i class="fas fa-{% if sys_key == target_system %}check-circle{% else %}circle{% endif %}"></i>
+                                {{ sys_key | upper }} — {{ sys_label }}
+                            </a>
+                            {% endfor %}
+                        </div>
+                    </li>
+                    
+                    <li class="nav-item d-flex align-items-center px-2">
+                        <span class="text-muted">|</span>
                     </li>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -156,6 +172,27 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+    function switchSystem(field, systemId) {
+        const payload = {};
+        payload[field] = systemId;
+        fetch('/switch_system', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(err => alert('Fehler: ' + err));
+    }
+    </script>
     
     {% block scripts %}{% endblock %}
 </body>

@@ -127,6 +127,41 @@
         </div>
     </div>
 
+    <!-- SAP Direct Access Credentials (Basic Auth) -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-key"></i> SAP Direktzugang (Basic Auth)
+                        <button class="btn btn-sm btn-light float-right" onclick="loadCredentials()">
+                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                        </button>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Zugangsdaten für SAP-Systeme mit direktem Zugang (ohne API-Gateway/OAuth).
+                        Die Passwörter werden verschlüsselt in der Datenbank gespeichert.
+                    </p>
+                    
+                    <div id="credentialsLoading" class="text-center py-3">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p class="mt-2">Lade Zugangsdaten...</p>
+                    </div>
+                    
+                    <div id="credentialsContent" style="display: none;">
+                        <div id="credentialsNoSystems" class="alert alert-info" style="display: none;">
+                            <i class="fas fa-info-circle"></i> Keine Basic-Auth-Systeme in der Konfiguration vorhanden.
+                        </div>
+                        
+                        <div id="credentialsList"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Dynamic Pacing Analysis -->
     <div class="row mt-4">
         <div class="col-12">
@@ -185,6 +220,7 @@
 document.addEventListener('DOMContentLoaded', function() {
     updateThroughput();
     loadPacingStats();
+    loadCredentials();
     
     document.getElementById('maxWorkers').addEventListener('input', updateThroughput);
     document.getElementById('pacingSeconds').addEventListener('input', updateThroughput);
@@ -338,5 +374,200 @@ document.getElementById('settingsForm').addEventListener('submit', function(e) {
         alert('Fehler: ' + error);
     });
 });
+
+// ─── Credentials Management ─────────────────────────────────────────
+
+function loadCredentials() {
+    document.getElementById('credentialsLoading').style.display = 'block';
+    document.getElementById('credentialsContent').style.display = 'none';
+    
+    fetch('/credentials')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('credentialsLoading').style.display = 'none';
+            document.getElementById('credentialsContent').style.display = 'block';
+            
+            if (!data.success || !data.systems || data.systems.length === 0) {
+                document.getElementById('credentialsNoSystems').style.display = 'block';
+                document.getElementById('credentialsList').innerHTML = '';
+                return;
+            }
+            
+            document.getElementById('credentialsNoSystems').style.display = 'none';
+            const container = document.getElementById('credentialsList');
+            container.innerHTML = '';
+            
+            data.systems.forEach(sys => {
+                const card = document.createElement('div');
+                card.className = 'card mb-3';
+                card.id = 'cred-card-' + sys.system_id;
+                
+                const statusBadge = sys.has_credentials
+                    ? '<span class="badge badge-success"><i class="fas fa-check"></i> Konfiguriert</span>'
+                    : '<span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> Nicht konfiguriert</span>';
+                
+                const userInfo = sys.has_credentials
+                    ? `<span class="text-muted">Benutzer: <strong>${sys.username}</strong></span>
+                       <span class="text-muted ml-3">Aktualisiert: ${sys.updated_at ? new Date(sys.updated_at).toLocaleString('de-DE') : '-'}</span>
+                       <span class="text-muted ml-3">von ${sys.updated_by || '-'}</span>`
+                    : '<span class="text-muted">Keine Zugangsdaten hinterlegt</span>';
+                
+                card.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>
+                            <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
+                            <small class="text-muted ml-2">${sys.system_label}</small>
+                        </span>
+                        ${statusBadge}
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">${userInfo}</div>
+                        
+                        <div id="cred-form-${sys.system_id}" style="display: none;">
+                            <div class="form-row">
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-user"></i> Benutzername</label>
+                                        <input type="text" class="form-control" id="cred-user-${sys.system_id}" 
+                                               value="${sys.has_credentials ? sys.username : ''}" 
+                                               placeholder="z.B. altnict" autocomplete="off">
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-lock"></i> Passwort</label>
+                                        <input type="password" class="form-control" id="cred-pass-${sys.system_id}" 
+                                               placeholder="${sys.has_credentials ? '●●●●●●●● (unverändert lassen oder neu eingeben)' : 'Passwort eingeben'}" 
+                                               autocomplete="new-password">
+                                    </div>
+                                </div>
+                                <div class="col-md-4 d-flex align-items-end">
+                                    <div class="form-group mb-0 w-100">
+                                        <button class="btn btn-primary mr-1" onclick="saveCredential('${sys.system_id}')">
+                                            <i class="fas fa-save"></i> Speichern
+                                        </button>
+                                        <button class="btn btn-info mr-1" onclick="testCredential('${sys.system_id}')" 
+                                                id="cred-test-btn-${sys.system_id}">
+                                            <i class="fas fa-plug"></i> Testen
+                                        </button>
+                                        <button class="btn btn-outline-secondary" onclick="toggleCredForm('${sys.system_id}')">
+                                            Abbrechen
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="cred-actions-${sys.system_id}">
+                            <button class="btn btn-sm btn-outline-primary mr-1" onclick="toggleCredForm('${sys.system_id}')">
+                                <i class="fas fa-edit"></i> ${sys.has_credentials ? 'Ändern' : 'Einrichten'}
+                            </button>
+                            ${sys.has_credentials ? `
+                                <button class="btn btn-sm btn-outline-info mr-1" onclick="testCredential('${sys.system_id}')">
+                                    <i class="fas fa-plug"></i> Verbindung testen
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="deleteCredential('${sys.system_id}')">
+                                    <i class="fas fa-trash"></i> Löschen
+                                </button>
+                            ` : ''}
+                        </div>
+                        
+                        <div id="cred-result-${sys.system_id}"></div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        })
+        .catch(error => {
+            console.error('Error loading credentials:', error);
+            document.getElementById('credentialsLoading').style.display = 'none';
+            document.getElementById('credentialsContent').style.display = 'block';
+            document.getElementById('credentialsList').innerHTML = 
+                '<div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> Fehler: ' + error + '</div>';
+        });
+}
+
+function toggleCredForm(systemId) {
+    const form = document.getElementById('cred-form-' + systemId);
+    const actions = document.getElementById('cred-actions-' + systemId);
+    if (form.style.display === 'none') {
+        form.style.display = 'block';
+        actions.style.display = 'none';
+    } else {
+        form.style.display = 'none';
+        actions.style.display = 'block';
+    }
+    // Clear result area
+    document.getElementById('cred-result-' + systemId).innerHTML = '';
+}
+
+function saveCredential(systemId) {
+    const username = document.getElementById('cred-user-' + systemId).value.trim();
+    const password = document.getElementById('cred-pass-' + systemId).value;
+    
+    if (!username) {
+        alert('Benutzername ist erforderlich');
+        return;
+    }
+    if (!password) {
+        alert('Passwort ist erforderlich');
+        return;
+    }
+    
+    fetch('/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system_id: systemId, username: username, password: password })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('cred-result-' + systemId).innerHTML =
+                '<div class="alert alert-success mt-2"><i class="fas fa-check"></i> ' + data.message + '</div>';
+            setTimeout(() => loadCredentials(), 1500);
+        } else {
+            document.getElementById('cred-result-' + systemId).innerHTML =
+                '<div class="alert alert-danger mt-2"><i class="fas fa-times"></i> ' + data.error + '</div>';
+        }
+    })
+    .catch(error => {
+        document.getElementById('cred-result-' + systemId).innerHTML =
+            '<div class="alert alert-danger mt-2"><i class="fas fa-times"></i> ' + error + '</div>';
+    });
+}
+
+function testCredential(systemId) {
+    const resultEl = document.getElementById('cred-result-' + systemId);
+    resultEl.innerHTML = '<div class="alert alert-info mt-2"><i class="fas fa-spinner fa-spin"></i> Verbindung wird getestet...</div>';
+    
+    fetch('/credentials/test/' + systemId, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                resultEl.innerHTML = '<div class="alert alert-success mt-2"><i class="fas fa-check-circle"></i> ' + data.message + 
+                    (data.csrf_token_received ? ' (CSRF-Token erhalten)' : '') + '</div>';
+            } else {
+                resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times-circle"></i> ' + data.error + '</div>';
+            }
+        })
+        .catch(error => {
+            resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times-circle"></i> ' + error + '</div>';
+        });
+}
+
+function deleteCredential(systemId) {
+    if (!confirm('Zugangsdaten für ' + systemId.toUpperCase() + ' wirklich löschen?')) return;
+    
+    fetch('/credentials/' + systemId, { method: 'DELETE' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadCredentials();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(error => alert('Fehler: ' + error));
+}
 </script>
 {% endblock %}

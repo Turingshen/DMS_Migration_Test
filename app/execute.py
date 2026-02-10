@@ -39,7 +39,9 @@ from app.process import (
     MAX_API_WORKERS,
     MAX_DESC_LEN,
     read_sap_system,
-    write_sap_system
+    write_sap_system,
+    get_source_system,
+    get_target_system
 )
 from app.logger import get_logger
 from app.prepare import load_object_mappings, apply_object_mappings_for_batch
@@ -777,6 +779,10 @@ def execute_single_document(staging_record, session_snapshot):
     logger = get_logger(batch_id=batch_id, staging_id=staging_id)
     start_time = time.time()
     
+    # Resolve source/target systems from session snapshot (with defaults)
+    source_system = get_source_system(session_snapshot)
+    target_system = get_target_system(session_snapshot)
+    
     # Create worker-specific session for optimal connection pooling
     server_session = requests.Session()
     
@@ -800,7 +806,7 @@ def execute_single_document(staging_record, session_snapshot):
                 documents = (200, 'OK', cached_files)
                 logger.info(f"Using {len(cached_files)} cached file records for retry", category="EXECUTE")
                 # IMPORTANT: Still need to set up session headers for binary read!
-                prepare_session_headers(server_session, session_snapshot, read_sap_system)
+                prepare_session_headers(server_session, session_snapshot, source_system)
                 server_session.headers.pop('Slug', None)
             else:
                 # No cached file info - fall back to reading from source
@@ -810,15 +816,15 @@ def execute_single_document(staging_record, session_snapshot):
         if not container_already_created:
             # NORMAL MODE: Read from source system
             # Prepare session headers for read system
-            prepare_session_headers(server_session, session_snapshot, read_sap_system)
+            prepare_session_headers(server_session, session_snapshot, source_system)
             server_session.headers.pop('Slug', None)
             
-            logger.debug(f"Fetching document info from {read_sap_system}", category="EXECUTE")
+            logger.debug(f"Fetching document info from {source_system}", category="EXECUTE")
             
             # Get document info from source system
             documents = get_info(
                 server_session,
-                read_sap_system,
+                source_system,
                 staging_record['source_documentnumber'],
                 staging_record['source_documentpart'],
                 staging_record['source_documenttype'],
@@ -885,6 +891,8 @@ def execute_single_document(staging_record, session_snapshot):
                 logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
         
         # Update staging with API metadata (DOKOB, OBJKY, Authoritygroup) and resolved target values
+        # NOTE: authorization_group is ONLY updated from API if it was NULL in staging.
+        # If a rule already set it (even to empty string ''), the rule takes precedence.
         if api_dokob or api_objky or doc_authgroup or target_dokob or target_objky:
             try:
                 with misc_engine.begin() as con:
@@ -892,7 +900,10 @@ def execute_single_document(staging_record, session_snapshot):
                         UPDATE dbo.migration_staging
                         SET source_dokob = COALESCE(:dokob, source_dokob),
                             source_objky = COALESCE(:objky, source_objky),
-                            authorization_group = COALESCE(:authgroup, authorization_group),
+                            authorization_group = CASE 
+                                WHEN authorization_group IS NULL THEN :authgroup
+                                ELSE authorization_group  
+                            END,
                             target_dokob = COALESCE(:target_dokob, target_dokob),
                             target_objky = COALESCE(:target_objky, target_objky)
                         WHERE id = :staging_id
@@ -940,7 +951,7 @@ def execute_single_document(staging_record, session_snapshot):
             selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
             document_args = {k: document[k] for k in selected_keys}
             formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
-            base_read_url = cfg.get(read_sap_system, 'api_list', 'document', 'base_url')
+            base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
             request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
             
             try:
@@ -1041,13 +1052,13 @@ def execute_single_document(staging_record, session_snapshot):
                 logger.debug(f"Updated metadata: LOIOID={doc_loioid}, filename={filename}, size={file_size}, mime={mime_type}", category="EXECUTE")
             
             # Prepare for write operations
-            prepare_session_headers(server_session, session_snapshot, write_sap_system)
+            prepare_session_headers(server_session, session_snapshot, target_system)
             
             # Extract document identifiers (needed for upload URL even if container exists)
             doc_type = staging_record['target_documenttype']
             doc_number = staging_record['target_documentnumber']
-            doc_version = staging_record['target_documentversion']
-            doc_part = staging_record['target_documentpart']
+            doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
+            doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
             
             # Check if container was already created in a previous (failed) attempt
             container_already_created = staging_record.get('container_created', 0) == 1
@@ -1075,7 +1086,7 @@ def execute_single_document(staging_record, session_snapshot):
                     source_description = source_description[:MAX_DESC_LEN]
                 
                 # Create payload
-                doc_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+                doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
                 create_url = f"{doc_base_url}/A_DocumentInfoRecord"
                 server_session.headers.update({'Content-Type': 'application/json'})
                 
@@ -1089,28 +1100,64 @@ def execute_single_document(staging_record, session_snapshot):
                     ]
                 }
                 
-                # Only include document number if it's manually assigned
-                # Auto-generated IDs should be omitted to let target system create new ID
-                if not is_auto_id:
-                    dms_payload['DocumentInfoRecordDocNumber'] = doc_number
-                    logger.debug(f"Including document number in payload: {doc_number}", category="CREATE")
+                # Document number handling:
+                # For types with internal numbering (IY1, IY2):
+                #   - Purely numeric values → omit field (S4 auto-generates)
+                #   - Alphanumeric values → include (manual override / rule-assigned)
+                # For types with external numbering (I9D, I9S, I9T etc.):
+                #   - Always include the document number
+                INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+                target_has_internal_numbering = doc_type in INTERNAL_NUMBERING_TYPES
+                effective_doc_number = doc_number or source_doc_number
+                
+                def _is_purely_numeric(val):
+                    """Check if value is purely numeric (digits only)."""
+                    return bool(val) and str(val).strip().isdigit()
+                
+                if target_has_internal_numbering:
+                    # Internal numbering: only send non-numeric (alphanumeric) values
+                    if effective_doc_number and not _is_purely_numeric(effective_doc_number):
+                        dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
+                        logger.info(f"Using alphanumeric document number for {doc_type}: {effective_doc_number}", category="CREATE")
+                    else:
+                        logger.info(f"Omitting numeric document number for {doc_type} — S4 will auto-generate", category="CREATE")
                 else:
-                    logger.debug("Omitting document number from payload - target system will auto-generate", category="CREATE")
+                    # External numbering: always include document number
+                    if effective_doc_number:
+                        dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
+                        if doc_number:
+                            logger.debug(f"Using target document number from rules: {doc_number}", category="CREATE")
+                        else:
+                            logger.info(f"Using source document number for type {doc_type}: {source_doc_number}", category="CREATE")
+                    else:
+                        logger.warning(f"No document number available for external numbering type {doc_type}", category="CREATE")
                 
                 # Add authorization group if available
-                # NOTE: doc_authgroup may come from:
-                #   1. API response (Authoritygroup field) - extracted above
-                #   2. Pre-existing value in staging_record (from manual entry or rules)
-                effective_authgroup = doc_authgroup or staging_record.get('authorization_group')
+                # Priority: staging_record.authorization_group (set by rules) > doc_authgroup (from API)
+                # Rules can explicitly set authorization_group to '' (empty) to suppress it.
+                staging_authgroup = staging_record.get('authorization_group')
+                if staging_authgroup is not None:
+                    # Rule has set a value (could be '' to suppress, or a specific group)
+                    effective_authgroup = staging_authgroup.strip() if staging_authgroup else ''
+                    if effective_authgroup:
+                        logger.debug(f"Using rule-defined authorization group: {effective_authgroup}", category="CREATE")
+                    else:
+                        logger.debug(f"Authorization group suppressed by rule (source had: '{doc_authgroup}')", category="CREATE")
+                else:
+                    # No rule set — use API value as fallback
+                    effective_authgroup = doc_authgroup or ''
+                    if effective_authgroup:
+                        logger.debug(f"Using source authorization group from API: {effective_authgroup}", category="CREATE")
+                
                 if effective_authgroup:
                     dms_payload['AuthorizationGroup'] = effective_authgroup
-                    logger.debug(f"Using authorization group: {effective_authgroup}", category="CREATE")
                 
-                # Add document status if configured via migration rules
+                # Document status: do NOT include in CREATE payload.
+                # S4 rejects internal-numbering types (IY1/IY2) when status is set during creation.
+                # Status will be set via a separate PATCH call after document creation.
                 target_doc_status = staging_record.get('target_document_status')
                 if target_doc_status:
-                    dms_payload['InternalDocumentStatus'] = target_doc_status
-                    logger.debug(f"Using document status: {target_doc_status}", category="CREATE")
+                    logger.debug(f"Document status '{target_doc_status}' will be applied after creation via PATCH", category="CREATE")
                 
                 logger.info(f"Creating document info record", category="CREATE")
                 create_resp = server_session.post(create_url, json=dms_payload)
@@ -1118,26 +1165,53 @@ def execute_single_document(staging_record, session_snapshot):
                 body_txt_lower = create_resp.text.lower() if create_resp.text else ''
                 
                 if create_resp.status_code in (200, 201):
-                    # For auto-generated IDs, extract the new document number from response
-                    if is_auto_id:
-                        try:
-                            response_data = create_resp.json()
-                            if response_data and 'd' in response_data:
-                                created_doc_number = response_data['d'].get('DocumentInfoRecordDocNumber')
-                                if created_doc_number:
-                                    doc_number = created_doc_number
-                                    # Update staging record with the new document number
-                                    with misc_engine.begin() as con:
-                                        con.execute(text(f"""
-                                            UPDATE dbo.migration_staging
-                                            SET target_documentnumber = :new_doc_number
-                                            WHERE id = :staging_id
-                                        """), {'new_doc_number': created_doc_number, 'staging_id': staging_id})
-                                    logger.info(f"Target system assigned new document number: {created_doc_number}", category="CREATE")
-                                else:
-                                    logger.warning("Could not extract new document number from response", category="CREATE")
-                        except Exception as e:
-                            logger.warning(f"Failed to extract new document number: {e}", category="CREATE")
+                    # Always extract the document number from response
+                    # S4 may auto-generate a new number (for types with internal numbering like IY1/IY2)
+                    # or confirm the number we sent (for types like I9D/I9S/I9T)
+                    try:
+                        response_data = create_resp.json()
+                        if response_data and 'd' in response_data:
+                            resp_d = response_data['d']
+                            created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
+                            # S4 may also change version/part (e.g. IY1: sent '01' → returned '00')
+                            created_doc_version = resp_d.get('DocumentInfoRecordDocVersion')
+                            created_doc_part = resp_d.get('DocumentInfoRecordDocPart')
+                            
+                            # Update doc_number from response
+                            if created_doc_number:
+                                if created_doc_number != doc_number:
+                                    logger.info(f"Target system assigned document number: {created_doc_number}", category="CREATE")
+                                doc_number = created_doc_number
+                                with misc_engine.begin() as con:
+                                    con.execute(text("""
+                                        UPDATE dbo.migration_staging
+                                        SET target_documentnumber = :new_doc_number
+                                        WHERE id = :staging_id
+                                    """), {'new_doc_number': created_doc_number, 'staging_id': staging_id})
+                            else:
+                                logger.warning("Could not extract document number from response", category="CREATE")
+                            
+                            # Update version/part if S4 changed them (critical for upload URL!)
+                            if created_doc_version and created_doc_version != doc_version:
+                                logger.info(f"S4 changed version: {doc_version} → {created_doc_version}", category="CREATE")
+                                doc_version = created_doc_version
+                                with misc_engine.begin() as con:
+                                    con.execute(text("""
+                                        UPDATE dbo.migration_staging
+                                        SET target_documentversion = :ver
+                                        WHERE id = :staging_id
+                                    """), {'ver': created_doc_version, 'staging_id': staging_id})
+                            if created_doc_part and created_doc_part != doc_part:
+                                logger.info(f"S4 changed part: {doc_part} → {created_doc_part}", category="CREATE")
+                                doc_part = created_doc_part
+                                with misc_engine.begin() as con:
+                                    con.execute(text("""
+                                        UPDATE dbo.migration_staging
+                                        SET target_documentpart = :part
+                                        WHERE id = :staging_id
+                                    """), {'part': created_doc_part, 'staging_id': staging_id})
+                    except Exception as e:
+                        logger.warning(f"Failed to extract document number from response: {e}", category="CREATE")
                     
                     logger.info(f"Document created successfully: {doc_number} (status {create_resp.status_code})", category="CREATE")
                     doc_created = True
@@ -1184,18 +1258,15 @@ def execute_single_document(staging_record, session_snapshot):
                 server_session.headers.update({'Content-Type': mime_type, 'Slug': filename})
                 
                 try:
-                    attachment_base_url = cfg.get(write_sap_system, 'api_list', 'attachment', 'base_url')
+                    attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
                 except Exception:
-                    attachment_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+                    attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
                 
-                # Use the doc_number that was either:
-                # 1. Set from staging_record at the start, OR
-                # 2. Updated from the CREATE response for auto-generated IDs
-                # Don't re-read from staging_record as it still has the old value!
-                # doc_number is already set correctly above
+                # Use doc_number/doc_version/doc_part that were either:
+                # 1. Set from staging_record at the start of this iteration, OR
+                # 2. Updated from the CREATE response (S4 may change number/version/part)
+                # Don't re-read from staging_record as it still has the old values!
                 doc_type = staging_record['target_documenttype']
-                doc_version = staging_record['target_documentversion']
-                doc_part = staging_record['target_documentpart']
                 
                 attachment_url = (
                     f"{attachment_base_url}/A_DocumentInfoRecordAttch"
@@ -1510,7 +1581,8 @@ def check_token_validity(session_snapshot):
         cookies = session_snapshot.get('cookies', {})
         
         # Use the write API base URL for a quick check
-        target_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+        target_sys = get_target_system(session_snapshot)
+        target_base_url = cfg.get(target_sys, 'api_list', 'document', 'base_url')
         if target_base_url:
             # Simple metadata request - very lightweight
             check_url = f"{target_base_url}/$metadata"
@@ -1567,7 +1639,9 @@ def execute_migration(batch_id, record_ids=None):
             'cookies': http_session.get('cookies'),
             'csrf_token_time': http_session.get('csrf_token_time', 0),
             'max_workers': max_workers,
-            'pacing_seconds': pacing_seconds  # 0 = dynamic pacing based on file size
+            'pacing_seconds': pacing_seconds,  # 0 = dynamic pacing based on file size
+            'source_system': http_session.get('source_system', read_sap_system),
+            'target_system': http_session.get('target_system', write_sap_system)
         }
         
         # Load records - either specific IDs or all pending
@@ -2373,8 +2447,8 @@ def link_single_record(staging_record, session_snapshot):
     
     doc_type = staging_record['target_documenttype']
     doc_number = staging_record['target_documentnumber']
-    doc_version = staging_record['target_documentversion']
-    doc_part = staging_record['target_documentpart']
+    doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
+    doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
     target_dokob = staging_record['target_dokob']
     target_objky = staging_record['target_objky']
     
@@ -2383,15 +2457,16 @@ def link_single_record(staging_record, session_snapshot):
     
     try:
         # Create worker-specific session
+        target_system = get_target_system(session_snapshot)
         server_session = requests.Session()
-        prepare_session_headers(server_session, session_snapshot, write_sap_system)
+        prepare_session_headers(server_session, session_snapshot, target_system)
         server_session.headers.update({'Content-Type': 'application/json'})
         
         # Create Object Link via POST on navigation property to_ProductObj.
         # Per OpenAPI spec: POST /A_DocumentInfoRecord(...)/to_ProductObj
         # The document is identified by the URL path, the target object
         # (EQUI, IFLOT, etc.) is in the request body.
-        doc_base_url = cfg.get(write_sap_system, 'api_list', 'document', 'base_url')
+        doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
         doc_key = (
             f"DocumentInfoRecordDocType='{doc_type}',"
             f"DocumentInfoRecordDocVersion='{doc_version}',"
@@ -2496,6 +2571,8 @@ def execute_linking(batch_id, record_ids=None):
             'cookies': http_session.get('cookies'),
             'csrf_token_time': http_session.get('csrf_token_time', 0),
             'max_workers': max_workers,
+            'source_system': http_session.get('source_system', read_sap_system),
+            'target_system': http_session.get('target_system', write_sap_system)
         }
         
         # Auto-apply object mappings to staging before loading

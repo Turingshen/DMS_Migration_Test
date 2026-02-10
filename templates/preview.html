@@ -61,6 +61,14 @@
                             <h5 id="statRecords">-</h5>
                         </div>
                         <div class="col-md-1">
+                            <small class="text-muted"><i class="fas fa-cloud" style="color:#17a2b8;"></i> KPRO</small>
+                            <h5 id="statKpro" class="text-info">-</h5>
+                        </div>
+                        <div class="col-md-1">
+                            <small class="text-muted"><i class="fas fa-database" style="color:#e67e00;"></i> DB</small>
+                            <h5 id="statDb" style="color:#e67e00;">-</h5>
+                        </div>
+                        <div class="col-md-1">
                             <small class="text-muted">Größe</small>
                             <h5 id="statTotalSize">-</h5>
                         </div>
@@ -158,8 +166,13 @@
                     </div>
                 </div>
                 <div class="card-body">
-                    <div class="mb-3 d-flex gap-2 align-items-center">
-                        <input type="text" id="searchInput" class="form-control" placeholder="Datensätze suchen..." style="flex: 1;">
+                    <div class="mb-3 d-flex gap-2 align-items-center flex-wrap">
+                        <input type="text" id="searchInput" class="form-control" placeholder="DOKNR / OBJKY / Beschreibung suchen (alle Datensätze)..." style="flex: 1; min-width: 200px;">
+                        <div class="btn-group btn-group-sm" id="ablageFilterGroup">
+                            <button type="button" class="btn btn-outline-secondary active" onclick="setAblageFilter('')">Alle</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setAblageFilter('KPRO')"><i class="fas fa-cloud"></i> KPRO</button>
+                            <button type="button" class="btn btn-outline-warning" onclick="setAblageFilter('DB')"><i class="fas fa-database"></i> DB</button>
+                        </div>
                         <small id="filterInfo" class="text-muted" style="min-width: 180px; text-align: right;"></small>
                         <select id="statusFilter" class="form-select" style="width: auto;">
                             <option value="">Alle Status</option>
@@ -192,6 +205,7 @@
                                     <th data-column="source_loioid">Source LOIO</th>
                                     <th data-column="dokob">Source DOKOB</th>
                                     <th data-column="objky">Source OBJKY</th>
+                                    <th data-column="ablage">Ablage</th>
                                     <th data-column="target_dokob">Target DOKOB</th>
                                     <th data-column="target_objky">Target OBJKY</th>
                                     <th data-column="target_type">Target Type</th>
@@ -323,6 +337,10 @@
                     <label class="form-check-label" for="col_objky">Source OBJKY</label>
                 </div>
                 <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_ablage" value="ablage" checked>
+                    <label class="form-check-label" for="col_ablage">Ablage (KPRO/DB)</label>
+                </div>
+                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_dokob" value="target_dokob">
                     <label class="form-check-label" for="col_target_dokob">Target DOKOB</label>
                 </div>
@@ -378,6 +396,7 @@
 <script>
 let allRecords = [];
 let selectedRecords = new Set();
+let currentAblageFilter = '';
 const batchId = '{{ batch_id }}';
 
 // Column visibility state
@@ -388,6 +407,7 @@ let visibleColumns = {
     'source_loioid': false,
     'dokob': true,
     'objky': true,
+    'ablage': true,
     'target_dokob': false,
     'target_objky': false,
     'target_type': false,
@@ -518,36 +538,39 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Search functionality
+    // Search functionality - debounced server-side search across ALL staging records
+    let searchDebounceTimer = null;
     document.getElementById('searchInput').addEventListener('input', function() {
-        applyFilters();
+        clearTimeout(searchDebounceTimer);
+        const searchTerm = this.value.trim();
+        if (searchTerm.length >= 3 || searchTerm.length === 0) {
+            searchDebounceTimer = setTimeout(() => {
+                loadRecordsWithAllFilters();
+            }, 400);
+        }
+    });
+    // Also trigger on Enter key immediately
+    document.getElementById('searchInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            clearTimeout(searchDebounceTimer);
+            loadRecordsWithAllFilters();
+        }
     });
     
-    // Status filter functionality - reload from server with filter
+    // Status filter functionality - reload from server with all active filters
     document.getElementById('statusFilter').addEventListener('change', function() {
         const status = this.value;
-        if (status && status !== 'hide_completed') {
-            // Server-side filter: reload with status filter to get all matching records
-            loadRecordsWithFilters(status, '');
-        } else if (status === 'hide_completed') {
-            // Client-side filter for hide_completed
+        if (status === 'hide_completed') {
+            // Client-side filter for hide_completed (applied on top of current results)
             applyFilters();
         } else {
-            // No filter: reload default 100 records
-            loadRecords();
+            loadRecordsWithAllFilters();
         }
     });
     
-    // Error category filter functionality - reload from server with filter
+    // Error category filter functionality - reload from server with all active filters
     document.getElementById('errorCategoryFilter').addEventListener('change', function() {
-        const category = this.value;
-        if (category) {
-            // Server-side filter: reload with category filter to get all matching records
-            loadRecordsWithFilters('', category);
-        } else {
-            // No filter: reload default 100 records
-            loadRecords();
-        }
+        loadRecordsWithAllFilters();
     });
     
     // Load available error categories for filter dropdown
@@ -616,15 +639,39 @@ function updatePacingDisplay() {
     }
 }
 
-function loadRecordsWithFilters(statusFilter = '', errorCategoryFilter = '') {
-    // Build query params with both filters
-    let recordsUrl = `/batch/${batchId}/records?per_page=500&page=1`;
-    if (statusFilter) {
-        recordsUrl += `&status_filter=${encodeURIComponent(statusFilter)}`;
+/**
+ * Unified function to load records with ALL active filters (search, status, ablage, error category).
+ * Always sends filters server-side so the entire staging table is searched.
+ */
+function loadRecordsWithAllFilters() {
+    const searchTerm = document.getElementById('searchInput').value.trim();
+    const statusFilter = document.getElementById('statusFilter').value;
+    const errorCategoryFilter = document.getElementById('errorCategoryFilter').value;
+    
+    // Skip hide_completed as server param (it's client-side only)
+    const serverStatusFilter = (statusFilter && statusFilter !== 'hide_completed') ? statusFilter : '';
+    
+    // Determine per_page: if ANY filter is active, load up to 500. Otherwise default 100 preview.
+    const hasFilter = searchTerm || serverStatusFilter || errorCategoryFilter || currentAblageFilter;
+    const perPage = hasFilter ? 500 : 100;
+    
+    let recordsUrl = `/batch/${batchId}/records?per_page=${perPage}&page=1`;
+    if (serverStatusFilter) {
+        recordsUrl += `&status_filter=${encodeURIComponent(serverStatusFilter)}`;
     }
     if (errorCategoryFilter) {
         recordsUrl += `&error_category=${encodeURIComponent(errorCategoryFilter)}`;
     }
+    if (searchTerm) {
+        recordsUrl += `&search=${encodeURIComponent(searchTerm)}`;
+    }
+    if (currentAblageFilter) {
+        recordsUrl += `&ablage_filter=${encodeURIComponent(currentAblageFilter)}`;
+    }
+    
+    // Show loading indicator
+    const tbody = document.getElementById('recordsBody');
+    tbody.innerHTML = '<tr><td colspan="20" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Suche...</td></tr>';
     
     // Load statistics from server (aggregated - fast!) and records
     Promise.all([
@@ -644,16 +691,26 @@ function loadRecordsWithFilters(statusFilter = '', errorCategoryFilter = '') {
         // Store records
         allRecords = recordsData.records;
         
-        // Display records
-        displayRecords(allRecords);
+        // Apply client-side hide_completed filter if active
+        if (statusFilter === 'hide_completed') {
+            applyFilters();
+        } else {
+            displayRecords(allRecords);
+        }
         
         // Update filter info
         const filterInfo = document.getElementById('filterInfo');
-        const filterDesc = statusFilter ? statusFilter : (errorCategoryFilter ? errorCategoryFilter : '');
-        if (filterDesc) {
-            filterInfo.textContent = `Filter: ${filterDesc} (${allRecords.length} von ${recordsData.pagination?.total || allRecords.length})`;
+        const totalInBatch = recordsData.pagination?.total || allRecords.length;
+        const parts = [];
+        if (searchTerm) parts.push(`"${searchTerm}"`);
+        if (serverStatusFilter) parts.push(serverStatusFilter);
+        if (currentAblageFilter) parts.push(currentAblageFilter);
+        if (errorCategoryFilter) parts.push(errorCategoryFilter);
+        
+        if (parts.length > 0) {
+            filterInfo.textContent = `${totalInBatch} Treffer (${parts.join(', ')})`;
         } else {
-            filterInfo.textContent = `${allRecords.length} von ${recordsData.pagination?.total || allRecords.length} Datensätze`;
+            filterInfo.textContent = `${allRecords.length} von ${totalInBatch} Datensätze`;
         }
         
         // Update statistics from server-aggregated data
@@ -662,6 +719,13 @@ function loadRecordsWithFilters(statusFilter = '', errorCategoryFilter = '') {
     .catch(error => {
         showError('Error loading records: ' + error);
     });
+}
+
+// Legacy wrapper for simple cases
+function loadRecordsWithFilters(statusFilter = '', errorCategoryFilter = '') {
+    if (statusFilter) document.getElementById('statusFilter').value = statusFilter;
+    if (errorCategoryFilter) document.getElementById('errorCategoryFilter').value = errorCategoryFilter;
+    loadRecordsWithAllFilters();
 }
 
 function loadRecords(errorCategoryFilter = '') {
@@ -718,6 +782,12 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     const failedCount = stats.failed || 0;
     const partialCount = stats.partial || 0;
     const totalCount = stats.total || 0;
+    const kproCount = stats.kpro || 0;
+    const dbCount = stats.db || 0;
+    
+    // Update KPRO/DB badges
+    document.getElementById('statKpro').textContent = kproCount.toLocaleString();
+    document.getElementById('statDb').textContent = dbCount.toLocaleString();
     
     // Update status filter dropdown with counts from DB (entire table, not just preview)
     const pendingOpt = document.getElementById('statusPending');
@@ -961,6 +1031,7 @@ function displayRecords(records) {
                 <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
                 <td data-column="dokob"><small>${record.source_dokob || '-'}</small></td>
                 <td data-column="objky"><small>${truncate(record.source_objky, 25) || '-'}</small></td>
+                <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
                 <td data-column="target_dokob"><small>${record.target_dokob || '-'}</small></td>
                 <td data-column="target_objky"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
                 <td data-column="target_type"><small>${record.target_documenttype || '-'}</small></td>
@@ -1881,6 +1952,15 @@ function retryFailed() {
     });
 }
 
+function setAblageFilter(filter) {
+    currentAblageFilter = filter;
+    // Update button active states
+    document.querySelectorAll('#ablageFilterGroup .btn').forEach(btn => btn.classList.remove('active'));
+    event.target.closest('.btn').classList.add('active');
+    // Reload from server with ablage filter applied to ALL staging records
+    loadRecordsWithAllFilters();
+}
+
 function applyFilters() {
     const searchTerm = document.getElementById('searchInput').value.toLowerCase();
     const statusFilter = document.getElementById('statusFilter').value;
@@ -1891,8 +1971,14 @@ function applyFilters() {
         const matchesSearch = !searchTerm || (
             record.source_documentnumber.toLowerCase().includes(searchTerm) ||
             (record.target_documentnumber && record.target_documentnumber.toLowerCase().includes(searchTerm)) ||
-            (record.source_description && record.source_description.toLowerCase().includes(searchTerm))
+            (record.source_description && record.source_description.toLowerCase().includes(searchTerm)) ||
+            (record.source_dokob && record.source_dokob.toLowerCase().includes(searchTerm)) ||
+            (record.source_objky && record.source_objky.toLowerCase().includes(searchTerm)) ||
+            (record.filename && record.filename.toLowerCase().includes(searchTerm))
         );
+        
+        // Ablage filter (KPRO/DB)
+        const matchesAblage = !currentAblageFilter || (record.ablage || 'KPRO') === currentAblageFilter;
         
         // Status filter
         let matchesStatus = true;
@@ -1909,7 +1995,7 @@ function applyFilters() {
             matchesErrorCategory = record.error_category === errorCategoryFilter;
         }
         
-        return matchesSearch && matchesStatus && matchesErrorCategory;
+        return matchesSearch && matchesAblage && matchesStatus && matchesErrorCategory;
     });
     
     displayRecords(filtered);

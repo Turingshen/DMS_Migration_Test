@@ -229,14 +229,14 @@
                         <tr class="table-warning">
                             <td><code>ALLE</code></td>
                             <td>Alle Objekttypen</td>
-                            <td>Kein Eintrag in DMS_DOC2LOIO (keine Datei im Content Repository) → 🗎 ohne Datei</td>
+                            <td>Kein Eintrag in DMS_DOC_FILES → Datei in DB (DRAO) statt KPRO → <i class="fas fa-database"></i> DB-Ablage</td>
                         </tr>
                     </tbody>
                 </table>
                 <div class="alert alert-info mb-0">
                     <i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong>
                     JEST.INACT muss leer sein (''), damit der Status aktiv ist.
-                    Dokumente ohne Datei (kein DMS_DOC2LOIO-Eintrag) werden separat gezählt und ausgeschlossen.
+                    Dokumente mit DB-Ablage (DRAO, kein DMS_DOC_FILES-Eintrag) werden separat gezählt und ausgeschlossen.
                 </div>
             </div>
             <div class="modal-footer">
@@ -415,8 +415,25 @@
         <div class="col-12">
             <div class="card">
                 <div class="card-header bg-light py-2">
-                    <i class="fas fa-table"></i> Vorschau (max. 100 Einträge)
-                    <span class="float-right text-muted" id="tableInfo"></span>
+                    <div class="d-flex align-items-center justify-content-between flex-wrap">
+                        <div>
+                            <i class="fas fa-table"></i> Ergebnisse
+                            <span class="text-muted ml-2" id="tableInfo"></span>
+                        </div>
+                        <div class="d-flex align-items-center" style="gap: 8px;">
+                            <div class="btn-group btn-group-sm" id="ablageFilterGroup">
+                                <button type="button" class="btn btn-outline-secondary active" data-ablage="ALL" onclick="setAblageFilter('ALL')">Alle</button>
+                                <button type="button" class="btn btn-outline-info" data-ablage="KPRO" onclick="setAblageFilter('KPRO')"><i class="fas fa-cloud"></i> KPRO</button>
+                                <button type="button" class="btn btn-outline-warning" data-ablage="DB" onclick="setAblageFilter('DB')"><i class="fas fa-database"></i> DB</button>
+                            </div>
+                            <input type="text" id="tableSearchInput" class="form-control form-control-sm" 
+                                   style="width: 200px;" placeholder="Suchen (DOKNR, OBJKY, DOKOB...)" 
+                                   oninput="applyTableFilter()">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('tableSearchInput').value=''; applyTableFilter();" title="Filter zurücksetzen">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-container">
@@ -430,6 +447,7 @@
                                     <th>DOKOB</th>
                                     <th>OBJKY</th>
                                     <th>WERK</th>
+                                    <th>Ablage</th>
                                 </tr>
                             </thead>
                             <tbody id="resultsBody">
@@ -831,9 +849,9 @@ function loadDMSObjects() {
                 currentStats[data.dokob] = data.count;
                 currentStatsExcluded[data.dokob] = data.excluded || 0;
                 currentStatsNoFile[data.dokob] = data.no_file || 0;
-                const noFileInfo = data.no_file > 0 ? ` 🗎-${data.no_file.toLocaleString()}` : '';
+                const noFileInfo = data.no_file > 0 ? ` DB:${data.no_file.toLocaleString()}` : '';
                 const excludedInfo = data.excluded > 0 ? ` (-${data.excluded.toLocaleString()})` : '';
-                updateProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()}${excludedInfo}${noFileInfo} (${data.time})`);
+                updateProgress(data.percent, `✓ ${data.dokob}: ${data.count.toLocaleString()}${excludedInfo} [KPRO:${(data.count - (data.no_file||0)).toLocaleString()} DB:${(data.no_file||0).toLocaleString()}] (${data.time})`);
                 // Update stats in real-time
                 updateStatsPartial(currentStats, currentStatsExcluded, currentStatsNoFile);
                 break;
@@ -890,15 +908,16 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
     // Calculate totals
     let totalCount = 0;
     let totalExcluded = 0;
-    let totalNoFile = 0;
+    let totalDb = 0;
     for (const [key, value] of Object.entries(stats)) {
         if (typeof value === 'number') {
             totalCount += value;
             totalExcluded += (statsExcluded[key] || 0);
-            totalNoFile += (statsNoFile[key] || 0);
+            totalDb += (statsNoFile[key] || 0);
         }
     }
-    const grandTotal = totalCount + totalExcluded + totalNoFile;
+    const totalKpro = totalCount - totalDb;
+    const grandTotal = totalCount + totalExcluded;
     
     // Live summary badge
     container.append(`
@@ -908,11 +927,19 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
             <span style="color: #6c757d; font-size: 0.7rem; margin-left: 4px;">von ${grandTotal.toLocaleString()}</span>
         </div>
     `);
-    if (totalNoFile > 0) {
+    if (totalKpro > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #d1ecf1; border-color: #17a2b8; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-cloud" style="color: #17a2b8;"></i> KPRO</span>
+                <span style="color: #17a2b8; font-weight: 700;">${totalKpro.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    if (totalDb > 0) {
         container.append(`
             <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #e67e00; border-width: 2px;">
-                <span class="dokob-name"><i class="fas fa-file-excel" style="color: #e67e00;"></i> Ohne Datei</span>
-                <span style="color: #e67e00; font-weight: 700;">${totalNoFile.toLocaleString()}</span>
+                <span class="dokob-name"><i class="fas fa-database" style="color: #e67e00;"></i> DB</span>
+                <span style="color: #e67e00; font-weight: 700;">${totalDb.toLocaleString()}</span>
             </div>
         `);
     }
@@ -929,17 +956,18 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
     const entries = Object.entries(stats)
         .filter(([key, value]) => typeof value === 'number')
         .map(([dokob, count]) => [dokob, count, statsExcluded[dokob] || 0, statsNoFile[dokob] || 0])
-        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0 || nf > 0)
-        .sort((a, b) => (b[1] + b[2] + b[3]) - (a[1] + a[2] + a[3]));
+        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0)
+        .sort((a, b) => (b[1] + b[2]) - (a[1] + a[2]));
     
-    entries.forEach(([dokob, count, excluded, noFile]) => {
+    entries.forEach(([dokob, count, excluded, dbCount]) => {
         const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
-        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
+        const kproCount = count - dbCount;
+        const dbHtml = dbCount > 0 ? `<span class="dokob-no-file" title="${dbCount.toLocaleString()} DB (DRAO)"><i class="fas fa-database"></i>${dbCount.toLocaleString()}</span>` : '';
         container.append(`
             <div class="dokob-stat-badge">
                 <span class="dokob-name">${dokob}</span>
                 <span class="dokob-count">${count.toLocaleString()}</span>
-                ${noFileHtml}
+                ${dbHtml}
                 ${excludedHtml}
             </div>
         `);
@@ -954,19 +982,60 @@ function updateProgress(percent, label) {
     $('#progressLabel').text(label);
 }
 
+let currentAblageFilter = 'ALL';
+
 function displayResults(data) {
+    loadedData = data.data || [];
+    applyTableFilter();
+}
+
+function setAblageFilter(filter) {
+    currentAblageFilter = filter;
+    $('#ablageFilterGroup button').removeClass('active');
+    $(`#ablageFilterGroup button[data-ablage="${filter}"]`).addClass('active');
+    applyTableFilter();
+}
+
+function applyTableFilter() {
+    const searchTerm = ($('#tableSearchInput').val() || '').toLowerCase().trim();
     const tbody = $('#resultsBody');
     tbody.empty();
     
-    if (!data.data || data.data.length === 0) {
-        tbody.append('<tr><td colspan="7" class="text-center">Keine Daten gefunden</td></tr>');
+    if (!loadedData || loadedData.length === 0) {
+        tbody.append('<tr><td colspan="8" class="text-center">Keine Daten gefunden</td></tr>');
+        $('#tableInfo').html('');
         return;
     }
     
-    // Show only first 100 rows for preview
-    const displayData = data.data.slice(0, 100);
+    // Filter full dataset
+    let filtered = loadedData;
+    
+    // Ablage filter
+    if (currentAblageFilter !== 'ALL') {
+        filtered = filtered.filter(row => (row.ablage || 'KPRO') === currentAblageFilter);
+    }
+    
+    // Text search filter
+    if (searchTerm) {
+        filtered = filtered.filter(row => {
+            return (row.dokar || '').toLowerCase().includes(searchTerm)
+                || (row.doknr || '').toLowerCase().includes(searchTerm)
+                || (row.dokvr || '').toLowerCase().includes(searchTerm)
+                || (row.doktl || '').toLowerCase().includes(searchTerm)
+                || (row.dokob || '').toLowerCase().includes(searchTerm)
+                || (row.objky || '').toLowerCase().includes(searchTerm)
+                || (row.werk || '').toLowerCase().includes(searchTerm)
+                || (row.ablage || '').toLowerCase().includes(searchTerm);
+        });
+    }
+    
+    // Show first 200 of filtered results
+    const displayData = filtered.slice(0, 200);
     
     displayData.forEach(row => {
+        const ablage = row.ablage || 'KPRO';
+        const ablageClass = ablage === 'KPRO' ? 'badge-info' : 'badge-warning';
+        const ablageIcon = ablage === 'KPRO' ? '<i class="fas fa-cloud"></i>' : '<i class="fas fa-database"></i>';
         tbody.append(`
             <tr>
                 <td>${row.dokar || ''}</td>
@@ -976,12 +1045,16 @@ function displayResults(data) {
                 <td><span class="badge badge-info">${row.dokob || ''}</span></td>
                 <td><small>${row.objky || ''}</small></td>
                 <td><span class="badge badge-secondary">${row.werk || ''}</span></td>
+                <td><span class="badge ${ablageClass}">${ablageIcon} ${ablage}</span></td>
             </tr>
         `);
     });
     
-    const total = data.data.length;
-    $('#tableInfo').html(`Vorschau: 100 von ${total.toLocaleString()} Einträgen`);
+    const showing = Math.min(200, filtered.length);
+    const filterInfo = (searchTerm || currentAblageFilter !== 'ALL') 
+        ? ` (gefiltert aus ${loadedData.length.toLocaleString()})` 
+        : '';
+    $('#tableInfo').html(`${showing.toLocaleString()} von ${filtered.length.toLocaleString()} Einträgen${filterInfo}`);
 }
 
 function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
@@ -994,22 +1067,23 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
     // Calculate totals
     let totalCount = 0;
     let totalExcluded = 0;
-    let totalNoFile = 0;
+    let totalDb = 0;
     for (const [key, value] of Object.entries(stats)) {
         if (key !== 'total' && typeof value === 'number') {
             totalCount += value;
             totalExcluded += (statsExcluded[key] || 0);
-            totalNoFile += (statsNoFile[key] || 0);
+            totalDb += (statsNoFile[key] || 0);
         }
     }
-    const grandTotal = totalCount + totalExcluded + totalNoFile;
+    const totalKpro = totalCount - totalDb;
+    const grandTotal = totalCount + totalExcluded;
     
-    // Sort by total relevance (count + excluded + nofile) descending
+    // Sort by total relevance (count + excluded) descending
     const entries = Object.entries(stats)
         .filter(([key, value]) => key !== 'total' && typeof value === 'number')
         .map(([dokob, count]) => [dokob, count, statsExcluded[dokob] || 0, statsNoFile[dokob] || 0])
-        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0 || nf > 0)
-        .sort((a, b) => (b[1] + b[2] + b[3]) - (a[1] + a[2] + a[3]));
+        .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0)
+        .sort((a, b) => (b[1] + b[2]) - (a[1] + a[2]));
     
     // Summary badge first: Batch size
     container.append(`
@@ -1020,12 +1094,22 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
         </div>
     `);
     
-    // No-file exclusion badge
-    if (totalNoFile > 0) {
+    // KPRO count badge
+    if (totalKpro > 0) {
+        container.append(`
+            <div class="dokob-stat-badge" style="background: #d1ecf1; border-color: #17a2b8; border-width: 2px;">
+                <span class="dokob-name"><i class="fas fa-cloud" style="color: #17a2b8;"></i> KPRO</span>
+                <span style="color: #17a2b8; font-weight: 700; font-size: 1rem;">${totalKpro.toLocaleString()}</span>
+            </div>
+        `);
+    }
+    
+    // DB storage count badge
+    if (totalDb > 0) {
         container.append(`
             <div class="dokob-stat-badge" style="background: #fff3cd; border-color: #e67e00; border-width: 2px;">
-                <span class="dokob-name"><i class="fas fa-file-excel" style="color: #e67e00;"></i> Ohne Datei</span>
-                <span style="color: #e67e00; font-weight: 700; font-size: 1rem;">${totalNoFile.toLocaleString()}</span>
+                <span class="dokob-name"><i class="fas fa-database" style="color: #e67e00;"></i> DB</span>
+                <span style="color: #e67e00; font-weight: 700; font-size: 1rem;">${totalDb.toLocaleString()}</span>
             </div>
         `);
     }
@@ -1041,14 +1125,14 @@ function updateStats(stats, statsExcluded = {}, statsNoFile = {}) {
     }
     
     // Per-DOKOB badges (only those with any data)
-    entries.forEach(([dokob, count, excluded, noFile]) => {
+    entries.forEach(([dokob, count, excluded, dbCount]) => {
         const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
-        const noFileHtml = noFile > 0 ? `<span class="dokob-no-file" title="${noFile.toLocaleString()} ohne Datei (kein DMS_DOC2LOIO)"><i class="fas fa-file-excel"></i>${noFile.toLocaleString()}</span>` : '';
+        const dbHtml = dbCount > 0 ? `<span class="dokob-no-file" title="${dbCount.toLocaleString()} DB (DRAO, kein DMS_DOC_FILES)"><i class="fas fa-database"></i>${dbCount.toLocaleString()}</span>` : '';
         container.append(`
             <div class="dokob-stat-badge">
                 <span class="dokob-name">${dokob}</span>
                 <span class="dokob-count">${count.toLocaleString()}</span>
-                ${noFileHtml}
+                ${dbHtml}
                 ${excludedHtml}
             </div>
         `);
@@ -1092,13 +1176,15 @@ function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
     }
     $('#btnMigrationBatch').prop('disabled', batchCount === 0);
     
-    // Build exclusion info badges
-    let totalNoFile = 0, totalExcluded = 0;
-    for (const v of Object.values(statsNoFile)) { if (typeof v === 'number') totalNoFile += v; }
+    // Build info badges for KPRO/DB split
+    let totalDb = 0, totalExcluded = 0;
+    for (const v of Object.values(statsNoFile)) { if (typeof v === 'number') totalDb += v; }
     for (const v of Object.values(statsExcluded)) { if (typeof v === 'number') totalExcluded += v; }
+    const totalKpro = batchCount - totalDb;
     
     let parts = [];
-    if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${totalNoFile.toLocaleString()} ohne Datei</span>`);
+    if (totalKpro > 0) parts.push(`<span class="badge badge-info"><i class="fas fa-cloud"></i> ${totalKpro.toLocaleString()} KPRO</span>`);
+    if (totalDb > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-database"></i> ${totalDb.toLocaleString()} DB</span>`);
     if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${totalExcluded.toLocaleString()} Status</span>`);
     
     if (parts.length > 0) {
@@ -1114,8 +1200,8 @@ function exportData() {
         return;
     }
     
-    const headers = ['dokar', 'doknr', 'dokvr', 'doktl', 'dokob', 'objky', 'werk'];
-    const displayHeaders = ['DOKAR', 'DOKNR', 'DOKVR', 'DOKTL', 'DOKOB', 'OBJKY', 'WERK'];
+    const headers = ['dokar', 'doknr', 'dokvr', 'doktl', 'dokob', 'objky', 'werk', 'ablage'];
+    const displayHeaders = ['DOKAR', 'DOKNR', 'DOKVR', 'DOKTL', 'DOKOB', 'OBJKY', 'WERK', 'ABLAGE'];
     let csv = displayHeaders.join(';') + '\n';
     
     loadedData.forEach(row => {

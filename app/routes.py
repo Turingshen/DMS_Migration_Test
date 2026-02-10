@@ -15,7 +15,11 @@ from app.execute import (
     execute_migration, request_cancel, is_cancel_requested, is_migration_running,
     execute_linking, request_link_cancel, is_linking_running, is_link_cancel_requested
 )
-from app.process import read_sap_system, write_sap_system
+from app.process import (
+    read_sap_system, write_sap_system,
+    DEFAULT_SOURCE_SYSTEM, DEFAULT_TARGET_SYSTEM,
+    get_systems_by_type
+)
 from app_config import Config, MiscEngine
 from app.db_schema import init_staging_tables
 
@@ -65,15 +69,22 @@ def get_template_context():
         else:
             session['sap_system'] = 'zbq'  # fallback default
     
+    # Source/target system from session (with defaults)
+    source_sys = session.get('source_system', DEFAULT_SOURCE_SYSTEM)
+    target_sys = session.get('target_system', DEFAULT_TARGET_SYSTEM)
+    source_systems, target_systems = get_systems_by_type()
+    
     return {
         'sap_system': session.get('sap_system', 'zbq'),
         'sap_systems': cfg.get('sap_systems') or {},
         'au_name': session.get('fullName', 'User'),
         'site': session.get('site', 'Unknown'),
-        'source_system': read_sap_system,
-        'source_system_label': cfg.get(read_sap_system, 'system_label') if read_sap_system else 'Unknown',
-        'target_system': write_sap_system,
-        'target_system_label': cfg.get(write_sap_system, 'system_label') if write_sap_system else 'Unknown',
+        'source_system': source_sys,
+        'source_system_label': cfg.get(source_sys, 'system_label') if source_sys else 'Unknown',
+        'target_system': target_sys,
+        'target_system_label': cfg.get(target_sys, 'system_label') if target_sys else 'Unknown',
+        'source_systems': source_systems,
+        'target_systems': target_systems,
         'max_workers': session.get('max_workers', DEFAULT_SETTINGS.get('max_workers', 2)),
         'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS.get('pacing_seconds', 0))
     }
@@ -92,9 +103,45 @@ def settings_json():
     """Return current settings as JSON."""
     current_settings = {
         'max_workers': session.get('max_workers', DEFAULT_SETTINGS['max_workers']),
-        'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds'])
+        'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds']),
+        'source_system': session.get('source_system', DEFAULT_SOURCE_SYSTEM),
+        'target_system': session.get('target_system', DEFAULT_TARGET_SYSTEM)
     }
     return jsonify(current_settings)
+
+
+@migrate_bp.route('/switch_system', methods=['POST'])
+def switch_system():
+    """Switch source or target SAP system."""
+    try:
+        data = request.get_json()
+        source_systems, target_systems = get_systems_by_type()
+        all_systems = {**source_systems, **target_systems}
+        
+        changed = {}
+        
+        if 'source_system' in data:
+            sys_id = data['source_system']
+            if sys_id not in source_systems:
+                return jsonify({'success': False, 'error': f'{sys_id} is not a valid source (R3) system'}), 400
+            session['source_system'] = sys_id
+            changed['source_system'] = sys_id
+            changed['source_system_label'] = source_systems[sys_id]
+        
+        if 'target_system' in data:
+            sys_id = data['target_system']
+            if sys_id not in target_systems:
+                return jsonify({'success': False, 'error': f'{sys_id} is not a valid target (S4) system'}), 400
+            session['target_system'] = sys_id
+            changed['target_system'] = sys_id
+            changed['target_system_label'] = target_systems[sys_id]
+        
+        if not changed:
+            return jsonify({'success': False, 'error': 'Provide source_system or target_system'}), 400
+        
+        return jsonify({'success': True, **changed})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @migrate_bp.route('/settings', methods=['GET', 'POST'])
@@ -140,6 +187,112 @@ def pacing_stats():
         return jsonify(stats)
     except Exception as e:
         return jsonify({'has_data': False, 'error': str(e)}), 500
+
+
+# ─── SAP Credentials (Basic Auth for ZV systems) ─────────────────────────────
+
+@migrate_bp.route('/credentials', methods=['GET'])
+def get_credentials_list():
+    """List all Basic Auth systems and their credential status."""
+    try:
+        from app.credentials import list_basic_auth_systems, get_credential_info
+        systems = list_basic_auth_systems()
+        result = []
+        for sid in systems:
+            info = get_credential_info(sid)
+            system_label = cfg.get(sid, 'system_label') if sid in (cfg.get('sap_systems') or {}) else sid
+            entry = {
+                'system_id': sid,
+                'system_label': system_label,
+                'has_credentials': info is not None,
+                'username': info['username'] if info else None,
+                'updated_at': info['updated_at'] if info else None,
+                'updated_by': info['updated_by'] if info else None,
+            }
+            result.append(entry)
+        return jsonify({'success': True, 'systems': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/credentials', methods=['POST'])
+def save_credentials():
+    """Save encrypted credentials for a ZV system."""
+    try:
+        from app.credentials import save_credentials as _save, list_basic_auth_systems
+        data = request.get_json()
+        system_id = data.get('system_id', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+
+        if not system_id or not username or not password:
+            return jsonify({'success': False, 'error': 'system_id, username and password are required'}), 400
+
+        # Verify system is actually a Basic Auth system
+        if system_id not in list_basic_auth_systems():
+            return jsonify({'success': False, 'error': f'{system_id} is not a Basic Auth system'}), 400
+
+        updated_by = session.get('fullName', session.get('preferred_username', 'unknown'))
+        _save(system_id, username, password, updated_by)
+
+        return jsonify({'success': True, 'message': f'Credentials for {system_id} saved'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/credentials/<system_id>', methods=['DELETE'])
+def delete_credentials(system_id):
+    """Delete credentials for a system."""
+    try:
+        from app.credentials import delete_credentials as _delete
+        deleted = _delete(system_id)
+        if deleted:
+            return jsonify({'success': True, 'message': f'Credentials for {system_id} deleted'})
+        else:
+            return jsonify({'success': False, 'error': f'No credentials found for {system_id}'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/credentials/test/<system_id>', methods=['POST'])
+def test_credentials(system_id):
+    """Test credentials by attempting a CSRF token fetch against the ZV system."""
+    try:
+        from app.credentials import get_credentials, list_basic_auth_systems
+        import requests as req_lib
+
+        if system_id not in list_basic_auth_systems():
+            return jsonify({'success': False, 'error': f'{system_id} is not a Basic Auth system'}), 400
+
+        creds = get_credentials(system_id)
+        if not creds:
+            return jsonify({'success': False, 'error': 'No credentials stored for this system'}), 404
+
+        # Try fetching a CSRF token with Basic Auth
+        base_url = cfg.get(system_id, 'api_list', 'document', 'base_url')
+        verify_ssl = cfg.get(system_id, 'verify_ssl') if 'verify_ssl' in cfg.config_env.get(system_id, {}) else True
+
+        resp = req_lib.get(
+            base_url,
+            auth=(creds['username'], creds['password']),
+            headers={'X-CSRF-Token': 'Fetch', 'Accept': 'application/json'},
+            verify=verify_ssl,
+            timeout=15
+        )
+        if resp.status_code == 200:
+            csrf = resp.headers.get('x-csrf-token', '')
+            return jsonify({
+                'success': True,
+                'message': f'Connection successful (HTTP {resp.status_code})',
+                'csrf_token_received': bool(csrf)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'HTTP {resp.status_code} {resp.reason}'
+            }), 200  # return 200 so frontend gets the JSON
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @migrate_bp.route('/')
@@ -381,12 +534,22 @@ def delete_batch(batch_id):
                 return jsonify({'success': False, 'error': 'Cannot delete batch while executing'}), 400
             
             # Delete file details first (foreign key constraint)
-            con.execute(text("""
+            r1 = con.execute(text("""
                 DELETE FROM dbo.migration_file_details WHERE batch_id = :batch_id
             """), {'batch_id': batch_id})
             
+            # Delete logs
+            r2 = con.execute(text("""
+                DELETE FROM dbo.migration_logs WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
+            
+            # Delete object mappings
+            r3 = con.execute(text("""
+                DELETE FROM dbo.migration_object_mapping WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
+            
             # Delete staging records
-            con.execute(text("""
+            r4 = con.execute(text("""
                 DELETE FROM dbo.migration_staging WHERE batch_id = :batch_id
             """), {'batch_id': batch_id})
             
@@ -395,7 +558,16 @@ def delete_batch(batch_id):
                 DELETE FROM dbo.migration_batch WHERE batch_id = :batch_id
             """), {'batch_id': batch_id})
         
-        return jsonify({'success': True, 'message': f'Batch {batch_id} deleted successfully'})
+        return jsonify({
+            'success': True, 
+            'message': f'Batch {batch_id} gelöscht',
+            'deleted': {
+                'file_details': r1.rowcount,
+                'logs': r2.rowcount,
+                'object_mappings': r3.rowcount,
+                'staging_records': r4.rowcount
+            }
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -715,6 +887,27 @@ def apply_batch_rules(batch_id):
                 df[target_col] = target_val
                 rules_applied += 1
                 print(f"[RULE] Overwrite {target_col}={target_val}: all records")
+        
+        # Recompute target_documentnumber based on (possibly changed) target_documenttype
+        # IY1/IY2 have internal numbering → S4 auto-generates → set to None
+        # Other types → preserve source document number if target_documentnumber is not set
+        INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+        for idx, row in df.iterrows():
+            target_type = str(row.get('target_documenttype', '') or '').strip().upper()
+            current_tgt_nr = row.get('target_documentnumber')
+            
+            if target_type in INTERNAL_NUMBERING_TYPES:
+                # Internal numbering → clear target_documentnumber
+                df.at[idx, 'target_documentnumber'] = None
+            elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
+                # Non-internal type without target number → use source as fallback
+                source_nr = row.get('source_documentnumber')
+                if pd.notna(source_nr) and str(source_nr).strip():
+                    df.at[idx, 'target_documentnumber'] = str(source_nr).strip()[:25]
+        
+        internal_count = df[df['target_documenttype'].astype(str).str.strip().str.upper().isin(INTERNAL_NUMBERING_TYPES)].shape[0]
+        set_count = df['target_documentnumber'].notna().sum()
+        print(f"[RULE] target_documentnumber: {set_count} set, {internal_count} internal numbering (IY1/IY2)")
         
         # Update database
         updated = 0
@@ -1202,6 +1395,19 @@ def refresh_batch_data_stream(batch_id):
                     full_df[target_col] = target_val
                     rules_applied += 1
             
+            # Recompute target_documentnumber based on (possibly changed) target_documenttype
+            INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+            for idx, row in full_df.iterrows():
+                target_type = str(row.get('target_documenttype', '') or '').strip().upper()
+                current_tgt_nr = row.get('target_documentnumber')
+                
+                if target_type in INTERNAL_NUMBERING_TYPES:
+                    full_df.at[idx, 'target_documentnumber'] = None
+                elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
+                    source_nr = row.get('source_documentnumber')
+                    if pd.notna(source_nr) and str(source_nr).strip():
+                        full_df.at[idx, 'target_documentnumber'] = str(source_nr).strip()[:25]
+            
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
             
             # ========== MERGE AND UPDATE ==========
@@ -1464,6 +1670,9 @@ def get_batch_preview_stats(batch_id):
                 SUM(CASE WHEN execution_status = 'pending' THEN 1 ELSE 0 END) as pending_count,
                 SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
                 SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+                -- Ablage counts (KPRO vs DB)
+                SUM(CASE WHEN ISNULL(ablage, 'KPRO') = 'KPRO' THEN 1 ELSE 0 END) as kpro_count,
+                SUM(CASE WHEN ablage = 'DB' THEN 1 ELSE 0 END) as db_count,
                 -- Buckets count only non-success records for runtime estimation
                 SUM(CASE WHEN execution_status != 'success' AND (file_size_bytes IS NULL OR file_size_bytes = 0) THEN 1 ELSE 0 END) as unknown_size_count,
                 SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
@@ -1497,6 +1706,8 @@ def get_batch_preview_stats(batch_id):
                 'to_execute': to_execute_count,   # All non-success (for runtime estimation)
                 'failed': result.failed_count or 0,
                 'partial': result.partial_count or 0,
+                'kpro': result.kpro_count or 0,
+                'db': result.db_count or 0,
                 'buckets': {
                     'tiny': result.tiny_count or 0,
                     'small': result.small_count or 0,
@@ -1559,6 +1770,8 @@ def get_batch_records(batch_id):
         per_page: Records per page, default=5000 (0 = all records)
         status_filter: Filter by execution_status (optional)
         error_category: Filter by error category (applied in Python after dynamic classification)
+        search: Full-text search across DOKNR, OBJKY, description (server-side, searches ALL records)
+        ablage_filter: Filter by ablage value ('KPRO' or 'DB')
     """
     try:
         # Parse pagination params
@@ -1566,6 +1779,8 @@ def get_batch_records(batch_id):
         per_page = request.args.get('per_page', 5000, type=int)  # Default 5000 for large batches
         status_filter = request.args.get('status_filter', '')
         error_category_filter = request.args.get('error_category', '')
+        search_term = request.args.get('search', '').strip()
+        ablage_filter = request.args.get('ablage_filter', '').strip()
         
         # Build WHERE clause with ms. prefix for JOIN
         where_conditions = [f"ms.batch_id = '{batch_id}'"]
@@ -1575,6 +1790,13 @@ def get_batch_records(batch_id):
         if error_category_filter:
             where_conditions.append("ms.execution_status = 'failed'")
             where_conditions.append(f"ms.error_category = '{error_category_filter}'")
+        # Server-side text search: search across DOKNR, OBJKY, description, filename, target_documentnumber
+        if search_term:
+            safe_search = search_term.replace("'", "''")
+            where_conditions.append(f"(ms.source_documentnumber LIKE '%{safe_search}%' OR ms.source_objky LIKE '%{safe_search}%' OR ms.source_description LIKE '%{safe_search}%' OR ms.filename LIKE '%{safe_search}%' OR ms.target_documentnumber LIKE '%{safe_search}%' OR ms.source_dokob LIKE '%{safe_search}%')")
+        # Ablage filter (KPRO or DB)
+        if ablage_filter in ('KPRO', 'DB'):
+            where_conditions.append(f"ISNULL(ms.ablage, 'KPRO') = '{ablage_filter}'")
         where_clause = " AND ".join(where_conditions)
         
         # First get total count (with all filters applied)
@@ -1584,6 +1806,11 @@ def get_batch_records(batch_id):
         if error_category_filter:
             count_conditions.append("ms.execution_status = 'failed'")
             count_conditions.append(f"ms.error_category = '{error_category_filter}'")
+        if search_term:
+            safe_search = search_term.replace("'", "''")
+            count_conditions.append(f"(ms.source_documentnumber LIKE '%{safe_search}%' OR ms.source_objky LIKE '%{safe_search}%' OR ms.source_description LIKE '%{safe_search}%' OR ms.filename LIKE '%{safe_search}%' OR ms.target_documentnumber LIKE '%{safe_search}%' OR ms.source_dokob LIKE '%{safe_search}%')")
+        if ablage_filter in ('KPRO', 'DB'):
+            count_conditions.append(f"ISNULL(ms.ablage, 'KPRO') = '{ablage_filter}'")
         count_query = "SELECT COUNT(*) FROM dbo.migration_staging ms WHERE " + " AND ".join(count_conditions)
         
         # Build paginated query using OFFSET/FETCH for SQL Server
@@ -1622,7 +1849,8 @@ def get_batch_records(batch_id):
                     ms.link_error,
                     ms.container_created,
                     ms.source_document_status,
-                    ms.target_document_status
+                    ms.target_document_status,
+                    ms.ablage
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1662,7 +1890,8 @@ def get_batch_records(batch_id):
                     ms.link_error,
                     ms.container_created,
                     ms.source_document_status,
-                    ms.target_document_status
+                    ms.target_document_status,
+                    ms.ablage
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -3673,7 +3902,7 @@ def load_dms_objects():
         
         # Define queries per DOKOB - executed sequentially for better performance
         # Exclusion rules applied:
-        # - ALL: Exclude if no DMS_DOC2LOIO entry (no file in Content Repository → nothing to migrate)
+        # - ALL: Exclude if no DMS_DOC2LOIO entry (no LOIO mapping → truly no file)
         # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
         # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
         # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
@@ -3974,13 +4203,13 @@ def load_dms_objects_stream():
             # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
             # - PLKO: Exclude if PLKO.LOEKZ = 'X'
             # Post-filter (applied in Python):
-            # - ALL: Exclude if no entry in DMS_DOC2LOIO (no file in Content Repository)
-            # Scalar subquery: checks DMS_DOC2LOIO for file existence
+            # - ALL: Exclude if no entry in DMS_DOC_FILES (no file in Content Repository)
+            # Scalar subquery: checks DMS_DOC_FILES for file existence
             _has_file_sql = """CASE WHEN EXISTS (
-                        SELECT 1 FROM DIL.DMS_DOC2LOIO d2l 
-                        WHERE d2l.DOKNR = drad.DOKNR AND d2l.DOKAR = drad.DOKAR 
-                        AND d2l.DOKVR = drad.DOKVR AND d2l.DOKTL = drad.DOKTL 
-                        AND d2l.MANDT = '100'
+                        SELECT 1 FROM DIL.DMS_DOC_FILES df 
+                        WHERE df.DOKNR = drad.DOKNR AND df.DOKAR = drad.DOKAR 
+                        AND df.DOKVR = drad.DOKVR AND df.DOKTL = drad.DOKTL 
+                        AND df.MANDT = '100'
                     ) THEN 1 ELSE 0 END as HAS_FILE"""
             
             queries = {
@@ -4184,7 +4413,7 @@ def load_dms_objects_stream():
             stats = {}
             stats_total = {}  # Total counts without exclusion
             stats_excluded = {}  # Excluded counts (status-based)
-            stats_no_file = {}  # Records without file (no DMS_DOC2LOIO entry)
+            stats_no_file = {}  # Records with DB storage (DRAO, no DMS_DOC_FILES/KPRO entry)
             total_queries = len(queries)
             
             with dil_db.engine.begin() as con:
@@ -4198,20 +4427,21 @@ def load_dms_objects_stream():
                         df = pd.read_sql(query, con)
                         df.columns = [c.lower() for c in df.columns]
                         
-                        # Split: rows with file vs without file (HAS_FILE = 1/0 from scalar subquery)
+                        # Map HAS_FILE to ABLAGE column: KPRO (Content Repository) or DB (DRAO)
                         total_after_status = len(df)
                         if 'has_file' in df.columns:
-                            df_with_file = df[df['has_file'] == 1].drop(columns=['has_file'])
-                            no_file_count = total_after_status - len(df_with_file)
+                            df['ablage'] = df['has_file'].map({1: 'KPRO', 0: 'DB'}).fillna('DB')
+                            db_count = int((df['has_file'] == 0).sum())
+                            df = df.drop(columns=['has_file'])
                         else:
-                            df_with_file = df
-                            no_file_count = 0
+                            df['ablage'] = 'KPRO'
+                            db_count = 0
                         
-                        count = len(df_with_file)
+                        count = len(df)
                         stats[dokob] = count
-                        stats_no_file[dokob] = no_file_count
+                        stats_no_file[dokob] = db_count  # now tracks DB-stored count (not excluded)
                         if count > 0:
-                            all_results.append(df_with_file)
+                            all_results.append(df)
                         
                         # Get total count (without any filter) for exclusion statistics
                         total_count = total_after_status  # Default
@@ -4229,8 +4459,8 @@ def load_dms_objects_stream():
                         
                         query_time = time.time() - query_start
                         
-                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'total': total_count, 'excluded': excluded_count, 'no_file': no_file_count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
-                        print(f"[DMS Load] {dokob}: {count} records (status-excluded {excluded_count}, no-file {no_file_count}) in {query_time:.2f}s")
+                        yield f"data: {json.dumps({'type': 'step_complete', 'dokob': dokob, 'count': count, 'total': total_count, 'excluded': excluded_count, 'no_file': db_count, 'time': f'{query_time:.2f}s', 'percent': percent + 5})}\n\n"
+                        print(f"[DMS Load] {dokob}: {count} records (status-excluded {excluded_count}, db-stored {db_count}) in {query_time:.2f}s")
                     except Exception as e:
                         print(f"[DMS Load] ERROR in {dokob}: {str(e)}")
                         stats[dokob] = 0
@@ -4502,6 +4732,7 @@ def create_dms_migration_batch_stream():
                 'target_documentpart': dms_df['doktl'].fillna('000'),
                 'target_documenttype': dms_df['dokar'].fillna(''),
                 'target_documentversion': dms_df['dokvr'].fillna('00'),
+                'ablage': dms_df['ablage'].fillna('KPRO') if 'ablage' in dms_df.columns else 'KPRO',
                 'user_approved': 0,
                 'skip_migration': 0,
                 'validation_status': 'pending',

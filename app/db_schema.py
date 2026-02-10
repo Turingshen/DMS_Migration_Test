@@ -53,6 +53,9 @@ CREATE TABLE dbo.migration_staging (
     link_error NVARCHAR(MAX),
     link_completed_at DATETIME2,
     
+    -- Storage type: KPRO (file-based) or DB (DRAO/database-stored)
+    ablage VARCHAR(10) DEFAULT 'KPRO',
+    
     -- Flags
     user_approved BIT DEFAULT 0,
     skip_migration BIT DEFAULT 0,
@@ -208,6 +211,19 @@ CREATE TABLE dbo.migration_object_mapping (
     INDEX idx_source_lookup (batch_id, source_dokob, source_objky),
     INDEX idx_target_lookup (target_dokob, target_objky),
     INDEX idx_active (active)
+);
+"""
+
+CREATE_CREDENTIALS_TABLE = """
+CREATE TABLE dbo.sap_credentials (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    system_id VARCHAR(50) NOT NULL UNIQUE,   -- e.g. 'zvfr3'
+    username_enc NVARCHAR(500) NOT NULL,     -- Fernet-encrypted username
+    password_enc NVARCHAR(500) NOT NULL,     -- Fernet-encrypted password
+    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+    updated_by VARCHAR(100),
+    
+    INDEX idx_system_id (system_id)
 );
 """
 
@@ -396,3 +412,26 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_batch has migration_phase column")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add migration_phase column: {e}")
+
+        # Storage type column: KPRO (file-based) or DB (DRAO/database-stored)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'ablage') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD ablage VARCHAR(10) DEFAULT 'KPRO';
+            """))
+            print("[DB_INIT] Ensured migration_staging has ablage column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add ablage column: {e}")
+
+        # Check and create sap_credentials table (encrypted Basic Auth storage)
+        check_credentials = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'sap_credentials'
+        """)
+        result = con.execute(check_credentials).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_CREDENTIALS_TABLE))
+            print("[DB_INIT] Created sap_credentials table")
+        else:
+            print("[DB_INIT] sap_credentials table already exists")

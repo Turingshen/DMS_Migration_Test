@@ -83,7 +83,7 @@ apply_session_profile(deployment_env)
 
 # Session + CORS setup
 app.config["SESSION_PERMANENT"] = True
-app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(minutes=60)
+app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(hours=12)
 app.config["SESSION_FILE_DIR"] = os.path.join(os.getcwd(), 'flask_session')
 
 # Initialize Flask-Session only for filesystem mode (local)
@@ -145,6 +145,15 @@ def cleanup_orphaned_migrations():
 
 # Run cleanup on startup
 cleanup_orphaned_migrations()
+
+# Initialize / migrate DB schema once at startup
+from app.db_schema import init_staging_tables
+from app_config import MiscEngine as _MiscStartup
+try:
+    init_staging_tables(_MiscStartup.load().engine)
+    print("[STARTUP] DB schema initialized")
+except Exception as e:
+    print(f"[STARTUP] Warning: DB schema init failed: {e}")
 
 @app.route('/favicon.ico')
 def favicon():

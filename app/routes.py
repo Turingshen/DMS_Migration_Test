@@ -21,10 +21,31 @@ from app.process import (
     get_systems_by_type
 )
 from app_config import Config, MiscEngine
-from app.db_schema import init_staging_tables
 
 cfg = Config.load()
 migrate_bp = Blueprint('app', __name__)
+
+
+def _is_basic_auth_system(system_id: str) -> bool:
+    """Check if a SAP system uses Basic Auth (direct connection without API gateway)."""
+    return cfg.config_env.get(system_id, {}).get('auth_type', 'oauth') == 'basic'
+
+
+def _is_authenticated() -> bool:
+    """Check if user is authenticated for the current source+target system combination.
+    
+    Returns True if:
+    - OAuth bearer_token exists (covers OAuth source/target), OR
+    - Both source AND target systems use Basic Auth (no OAuth needed)
+    """
+    if session.get('bearer_token'):
+        return True
+    # If both systems use Basic Auth, no OAuth login is required
+    source_sys = session.get('source_system', DEFAULT_SOURCE_SYSTEM)
+    target_sys = session.get('target_system', DEFAULT_TARGET_SYSTEM)
+    if _is_basic_auth_system(source_sys) and _is_basic_auth_system(target_sys):
+        return True
+    return False
 
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
@@ -193,17 +214,19 @@ def pacing_stats():
 
 @migrate_bp.route('/credentials', methods=['GET'])
 def get_credentials_list():
-    """List all Basic Auth systems and their credential status."""
+    """List all SAP systems and their credential status."""
     try:
-        from app.credentials import list_basic_auth_systems, get_credential_info
-        systems = list_basic_auth_systems()
+        from app.credentials import list_all_sap_systems, get_credential_info
+        systems = list_all_sap_systems()
         result = []
-        for sid in systems:
+        for sys_info in systems:
+            sid = sys_info['system_id']
             info = get_credential_info(sid)
-            system_label = cfg.get(sid, 'system_label') if sid in (cfg.get('sap_systems') or {}) else sid
             entry = {
                 'system_id': sid,
-                'system_label': system_label,
+                'system_label': sys_info['system_label'],
+                'system_type': sys_info['system_type'],
+                'auth_type': sys_info['auth_type'],
                 'has_credentials': info is not None,
                 'username': info['username'] if info else None,
                 'updated_at': info['updated_at'] if info else None,
@@ -217,9 +240,9 @@ def get_credentials_list():
 
 @migrate_bp.route('/credentials', methods=['POST'])
 def save_credentials():
-    """Save encrypted credentials for a ZV system."""
+    """Save encrypted credentials for any SAP system."""
     try:
-        from app.credentials import save_credentials as _save, list_basic_auth_systems
+        from app.credentials import save_credentials as _save, list_all_sap_systems
         data = request.get_json()
         system_id = data.get('system_id', '').strip()
         username = data.get('username', '').strip()
@@ -228,9 +251,10 @@ def save_credentials():
         if not system_id or not username or not password:
             return jsonify({'success': False, 'error': 'system_id, username and password are required'}), 400
 
-        # Verify system is actually a Basic Auth system
-        if system_id not in list_basic_auth_systems():
-            return jsonify({'success': False, 'error': f'{system_id} is not a Basic Auth system'}), 400
+        # Verify system exists in config
+        known_ids = [s['system_id'] for s in list_all_sap_systems()]
+        if system_id not in known_ids:
+            return jsonify({'success': False, 'error': f'{system_id} is not a known SAP system'}), 400
 
         updated_by = session.get('fullName', session.get('preferred_username', 'unknown'))
         _save(system_id, username, password, updated_by)
@@ -291,6 +315,120 @@ def test_credentials(system_id):
                 'success': False,
                 'error': f'HTTP {resp.status_code} {resp.reason}'
             }), 200  # return 200 so frontend gets the JSON
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ─── SAP System Management (DB + YAML merge) ─────────────────────────────────
+
+@migrate_bp.route('/sap-systems', methods=['GET'])
+def get_sap_systems():
+    """Get all SAP systems (merged: YAML defaults + DB overrides)."""
+    try:
+        from app_config import SapSystemManager
+        mgr = SapSystemManager()
+        merged = mgr.get_merged_systems()
+        # Convert to list for JSON, mask API keys for display
+        systems_list = []
+        for sid, sys_data in merged.items():
+            entry = dict(sys_data)
+            # Mask API key (show first 8 chars + ***)
+            raw_key = entry.get('api_key', '')
+            entry['api_key_masked'] = (raw_key[:8] + '***') if len(raw_key) > 8 else raw_key
+            entry['api_key'] = raw_key  # full key for editing
+            # Convert apis dict to list
+            entry['apis'] = list(entry.get('apis', {}).values())
+            systems_list.append(entry)
+        return jsonify({'success': True, 'systems': systems_list})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/sap-systems', methods=['POST'])
+def save_sap_system():
+    """Create or update a SAP system (saved to DB)."""
+    try:
+        from app_config import SapSystemManager
+        data = request.get_json()
+        system_id = (data.get('system_id') or '').strip().lower()
+        system_label = (data.get('system_label') or '').strip()
+        system_type = (data.get('system_type') or '').strip().upper()
+        host = (data.get('host') or '').strip()
+        auth_type = (data.get('auth_type') or 'oauth').strip().lower()
+        api_key = (data.get('api_key') or '').strip()
+        verify_ssl = data.get('verify_ssl', True)
+
+        if not system_id or not system_label or system_type not in ('R3', 'S4'):
+            return jsonify({'success': False, 'error': 'system_id, system_label und system_type (R3/S4) sind erforderlich'}), 400
+
+        updated_by = session.get('fullName', session.get('preferred_username', 'system'))
+        mgr = SapSystemManager()
+        mgr.save_system(system_id, system_label, system_type, host, auth_type, api_key, verify_ssl, updated_by)
+
+        # Also save APIs if provided
+        apis = data.get('apis', [])
+        for api in apis:
+            api_name = (api.get('api_name') or '').strip()
+            base_url = (api.get('base_url') or '').strip()
+            api_label = (api.get('api_label') or api_name).strip()
+            if api_name and base_url:
+                mgr.save_api(system_id, api_name, base_url, api_label)
+
+        # Refresh in-memory config
+        mgr.update_config_env()
+
+        return jsonify({'success': True, 'message': f'System {system_id} gespeichert'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/sap-systems/<system_id>', methods=['DELETE'])
+def delete_sap_system(system_id):
+    """Soft-delete a SAP system (only DB entries, YAML remains untouched)."""
+    try:
+        from app_config import SapSystemManager
+        mgr = SapSystemManager()
+        deleted = mgr.delete_system(system_id)
+        if deleted:
+            mgr.update_config_env()
+            return jsonify({'success': True, 'message': f'System {system_id} deaktiviert'})
+        else:
+            return jsonify({'success': False, 'error': f'{system_id} ist kein DB-Eintrag (nur YAML-Systeme können nicht gelöscht werden)'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/sap-systems/<system_id>/apis', methods=['POST'])
+def save_sap_api(system_id):
+    """Add or update an API for a SAP system."""
+    try:
+        from app_config import SapSystemManager
+        data = request.get_json()
+        api_name = (data.get('api_name') or '').strip()
+        base_url = (data.get('base_url') or '').strip()
+        api_label = (data.get('api_label') or api_name).strip()
+
+        if not api_name or not base_url:
+            return jsonify({'success': False, 'error': 'api_name und base_url sind erforderlich'}), 400
+
+        mgr = SapSystemManager()
+        mgr.save_api(system_id, api_name, base_url, api_label)
+        mgr.update_config_env()
+
+        return jsonify({'success': True, 'message': f'API {api_name} für {system_id} gespeichert'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/sap-systems/<system_id>/apis/<api_name>', methods=['DELETE'])
+def delete_sap_api(system_id, api_name):
+    """Soft-delete an API from a SAP system."""
+    try:
+        from app_config import SapSystemManager
+        mgr = SapSystemManager()
+        mgr.delete_api(system_id, api_name)
+        mgr.update_config_env()
+        return jsonify({'success': True, 'message': f'API {api_name} von {system_id} deaktiviert'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -821,7 +959,7 @@ def apply_batch_rules(batch_id):
     """Apply migration rules to all records in a batch.
     This updates target_documenttype, authorization_group, etc. based on configured rules."""
     try:
-        from app.prepare import load_translations
+        from app.prepare import load_translations, apply_translations
         
         # Load all active rules
         rules = load_translations()
@@ -858,47 +996,45 @@ def apply_batch_rules(batch_id):
         if 'target_documenttype' not in df.columns or df['target_documenttype'].isna().all():
             df['target_documenttype'] = df['source_documenttype']
         
-        # Apply each rule
-        rules_applied = 0
-        for rule in rules:
-            rtype = (rule.get('rule_type') or 'translation').lower()
-            source_col = rule.get('source_column')
-            target_col = rule.get('target_column')
-            source_val = rule.get('source_value')
-            target_val = rule.get('target_value')
-            
-            if not target_col or target_val is None:
-                continue
-            
-            # Ensure target column exists
-            if target_col not in df.columns:
-                df[target_col] = None
-            
-            # Build mask
-            if rtype == 'translation' and source_col and source_col in df.columns and source_val:
-                mask = df[source_col].astype(str).str.contains(str(source_val), case=False, na=False)
-                df.loc[mask, target_col] = target_val
-                matched = mask.sum()
-                if matched > 0:
-                    rules_applied += 1
-                    print(f"[RULE] {source_col}={source_val} -> {target_col}={target_val}: {matched} records")
-            elif rtype == 'overwrite':
-                # Overwrite all records
-                df[target_col] = target_val
-                rules_applied += 1
-                print(f"[RULE] Overwrite {target_col}={target_val}: all records")
+        # Add alias columns so rules referencing short names (e.g. 'documenttype') work
+        # against staging column names (e.g. 'source_documenttype')
+        _ALIASES = {
+            'documenttype': 'source_documenttype',
+            'documentnumber': 'source_documentnumber',
+            'documentversion': 'source_documentversion',
+            'documentpart': 'source_documentpart',
+            'description': 'source_description',
+        }
+        for alias, real_col in _ALIASES.items():
+            if alias not in df.columns and real_col in df.columns:
+                df[alias] = df[real_col]
+        
+        # Apply rules using the proper apply_translations function
+        # which correctly handles conditions (equals, not_equal, contains, etc.)
+        rules_applied = len(rules)
+        df = apply_translations(df, rules)
         
         # Recompute target_documentnumber based on (possibly changed) target_documenttype
-        # IY1/IY2 have internal numbering → S4 auto-generates → set to None
+        # IY1/IY2: purely numeric → None (S4 auto-generates), alphanumeric → preserve
         # Other types → preserve source document number if target_documentnumber is not set
         INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+        
+        def _is_purely_numeric(val):
+            return bool(val) and str(val).strip().isdigit()
+        
         for idx, row in df.iterrows():
             target_type = str(row.get('target_documenttype', '') or '').strip().upper()
             current_tgt_nr = row.get('target_documentnumber')
             
             if target_type in INTERNAL_NUMBERING_TYPES:
-                # Internal numbering → clear target_documentnumber
-                df.at[idx, 'target_documentnumber'] = None
+                # Internal numbering: check if source DOKNR is numeric or alphanumeric
+                source_nr = row.get('source_documentnumber')
+                if pd.notna(source_nr) and str(source_nr).strip() and not _is_purely_numeric(str(source_nr).strip()):
+                    # Alphanumeric → preserve as target document number
+                    df.at[idx, 'target_documentnumber'] = str(source_nr).strip()[:25]
+                else:
+                    # Purely numeric or empty → S4 auto-generates
+                    df.at[idx, 'target_documentnumber'] = None
             elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
                 # Non-internal type without target number → use source as fallback
                 source_nr = row.get('source_documentnumber')
@@ -909,6 +1045,21 @@ def apply_batch_rules(batch_id):
         set_count = df['target_documentnumber'].notna().sum()
         print(f"[RULE] target_documentnumber: {set_count} set, {internal_count} internal numbering (IY1/IY2)")
         
+        # Recompute sanitized document numbers
+        from app.process import sanitize_doknr
+        for idx, row in df.iterrows():
+            tgt_nr = row.get('target_documentnumber')
+            if pd.notna(tgt_nr) and str(tgt_nr).strip():
+                sanitized, _ = sanitize_doknr(str(tgt_nr))
+                if not sanitized or not sanitized.strip():
+                    # Sanitization emptied value → clear both columns
+                    df.at[idx, 'target_documentnumber'] = None
+                    df.at[idx, 'target_documentnumber_sanitized'] = None
+                else:
+                    df.at[idx, 'target_documentnumber_sanitized'] = sanitized
+            else:
+                df.at[idx, 'target_documentnumber_sanitized'] = None
+        
         # Update database
         updated = 0
         with misc_engine.begin() as con:
@@ -917,6 +1068,7 @@ def apply_batch_rules(batch_id):
                     UPDATE dbo.migration_staging
                     SET target_documenttype = :target_documenttype,
                         target_documentnumber = :target_documentnumber,
+                        target_documentnumber_sanitized = :target_documentnumber_sanitized,
                         target_documentversion = :target_documentversion,
                         target_documentpart = :target_documentpart,
                         authorization_group = :authorization_group,
@@ -928,6 +1080,7 @@ def apply_batch_rules(batch_id):
                     'id': row['id'],
                     'target_documenttype': row.get('target_documenttype'),
                     'target_documentnumber': row.get('target_documentnumber'),
+                    'target_documentnumber_sanitized': row.get('target_documentnumber_sanitized'),
                     'target_documentversion': row.get('target_documentversion'),
                     'target_documentpart': row.get('target_documentpart'),
                     'authorization_group': row.get('authorization_group'),
@@ -1349,11 +1502,61 @@ def refresh_batch_data_stream(batch_id):
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': 50, 'message': f'Found {filenames_found} filenames from DRAW'})}\n\n"
             
+            # ========== PHASE 3b: Description Lookup from DRAT ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'drat', 'message': 'Phase 3b/4: Looking up descriptions from DIL.DRAT...'})}\n\n"
+            
+            all_descriptions = []
+            for i in range(0, len(doc_keys), chunk_size):
+                chunk = doc_keys[i:i + chunk_size]
+                conditions_drat = [
+                    f"(DOKNR = '{k[0]}' AND DOKAR = '{k[1]}' AND DOKVR = '{k[2]}' AND DOKTL = '{k[3]}')"
+                    for k in chunk
+                ]
+                where_clause = " OR ".join(conditions_drat)
+                drat_query = f"""
+                    SELECT DOKNR, DOKAR, DOKVR, DOKTL, LANGU, DKTXT
+                    FROM DIL.DRAT
+                    WHERE MANDT = '100' AND ({where_clause})
+                """
+                with dil_engine.begin() as con:
+                    chunk_df = pd.read_sql(drat_query, con)
+                all_descriptions.append(chunk_df)
+                
+                if i % 600 == 0:
+                    pct = 50 + int((i / len(doc_keys)) * 5)  # 50-55%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': pct, 'message': f'DRAT lookup: {i}/{len(doc_keys)}'})}\n\n"
+            
+            drat_df = pd.DataFrame()
+            descriptions_found = 0
+            if all_descriptions:
+                drat_df = pd.concat(all_descriptions, ignore_index=True)
+                drat_df.columns = [c.lower() for c in drat_df.columns]
+                # Prefer English, deduplicate
+                drat_en = drat_df[drat_df['langu'] == 'E'].drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+                drat_any = drat_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+                # Merge: English first, fill gaps
+                if len(drat_en) > 0:
+                    drat_final = drat_en[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']].copy()
+                    # Add rows from drat_any that are not in drat_en
+                    missing_keys = drat_any.merge(drat_en[['doknr', 'dokar', 'dokvr', 'doktl']], 
+                                                   on=['doknr', 'dokar', 'dokvr', 'doktl'], 
+                                                   how='left', indicator=True)
+                    missing = missing_keys[missing_keys['_merge'] == 'left_only'][['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']]
+                    drat_final = pd.concat([drat_final, missing], ignore_index=True)
+                else:
+                    drat_final = drat_any[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']].copy()
+                descriptions_found = int(drat_final['dktxt'].notna().sum())
+            else:
+                drat_final = pd.DataFrame(columns=['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt'])
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': 55, 'message': f'Found {descriptions_found} descriptions from DRAT'})}\n\n"
+            
             # ========== PHASE 4: Apply Rules ==========
             yield f"data: {json.dumps({'type': 'status', 'phase': 'rules', 'message': 'Phase 4/4: Applying migration rules...'})}\n\n"
             
+            from app.prepare import apply_translations as _apply_translations
             rules = load_translations()
-            rules_applied = 0
+            rules_applied = len(rules)
             
             # Get full records for rule application
             with misc_engine.begin() as con:
@@ -1372,41 +1575,70 @@ def refresh_batch_data_stream(batch_id):
             if full_df['target_documenttype'].isna().all():
                 full_df['target_documenttype'] = full_df['source_documenttype']
             
-            # Apply each rule
-            for rule in rules:
-                rtype = (rule.get('rule_type') or 'translation').lower()
-                source_col = rule.get('source_column')
-                target_col = rule.get('target_column')
-                source_val = rule.get('source_value')
-                target_val = rule.get('target_value')
-                
-                if not target_col or target_val is None:
-                    continue
-                
-                if target_col not in full_df.columns:
-                    full_df[target_col] = None
-                
-                if rtype == 'translation' and source_col and source_col in full_df.columns and source_val:
-                    mask = full_df[source_col].astype(str).str.contains(str(source_val), case=False, na=False)
-                    full_df.loc[mask, target_col] = target_val
-                    if mask.sum() > 0:
-                        rules_applied += 1
-                elif rtype == 'overwrite':
-                    full_df[target_col] = target_val
-                    rules_applied += 1
+            # Add alias columns so rules referencing short names work
+            # against staging column names (e.g. 'documenttype' -> 'source_documenttype')
+            _ALIASES = {
+                'documenttype': 'source_documenttype',
+                'documentnumber': 'source_documentnumber',
+                'documentversion': 'source_documentversion',
+                'documentpart': 'source_documentpart',
+                'description': 'source_description',
+            }
+            for alias, real_col in _ALIASES.items():
+                if alias not in full_df.columns and real_col in full_df.columns:
+                    full_df[alias] = full_df[real_col]
+            
+            # Apply rules using proper apply_translations which handles conditions
+            full_df = _apply_translations(full_df, rules)
             
             # Recompute target_documentnumber based on (possibly changed) target_documenttype
+            from app.process import sanitize_doknr as _sanitize_doknr
             INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+            
+            def _is_purely_numeric(val):
+                return bool(val) and str(val).strip().isdigit()
+            
             for idx, row in full_df.iterrows():
                 target_type = str(row.get('target_documenttype', '') or '').strip().upper()
                 current_tgt_nr = row.get('target_documentnumber')
                 
                 if target_type in INTERNAL_NUMBERING_TYPES:
-                    full_df.at[idx, 'target_documentnumber'] = None
+                    # Internal numbering: check if source DOKNR is numeric or alphanumeric
+                    source_nr = row.get('source_documentnumber')
+                    if pd.notna(source_nr) and str(source_nr).strip() and not _is_purely_numeric(str(source_nr).strip()):
+                        # Pre-check: would sanitization leave anything useful?
+                        sanitized, _ = _sanitize_doknr(str(source_nr).strip())
+                        if sanitized and sanitized.strip():
+                            tgt_nr = str(source_nr).strip()[:25]
+                            full_df.at[idx, 'target_documentnumber'] = tgt_nr
+                            full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized[:25]
+                        else:
+                            # Sanitization empties this value → treat as auto-generate
+                            full_df.at[idx, 'target_documentnumber'] = None
+                            full_df.at[idx, 'target_documentnumber_sanitized'] = None
+                    else:
+                        # Purely numeric or empty → S4 auto-generates
+                        full_df.at[idx, 'target_documentnumber'] = None
+                        full_df.at[idx, 'target_documentnumber_sanitized'] = None
                 elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
                     source_nr = row.get('source_documentnumber')
                     if pd.notna(source_nr) and str(source_nr).strip():
-                        full_df.at[idx, 'target_documentnumber'] = str(source_nr).strip()[:25]
+                        tgt_nr = str(source_nr).strip()[:25]
+                        sanitized, _ = _sanitize_doknr(tgt_nr)
+                        if sanitized and sanitized.strip():
+                            full_df.at[idx, 'target_documentnumber'] = tgt_nr
+                            full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized
+                        else:
+                            full_df.at[idx, 'target_documentnumber'] = None
+                            full_df.at[idx, 'target_documentnumber_sanitized'] = None
+                else:
+                    # Recompute sanitized for existing value
+                    sanitized, _ = _sanitize_doknr(str(current_tgt_nr))
+                    if sanitized and sanitized.strip():
+                        full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized
+                    else:
+                        full_df.at[idx, 'target_documentnumber'] = None
+                        full_df.at[idx, 'target_documentnumber_sanitized'] = None
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
             
@@ -1460,6 +1692,25 @@ def refresh_batch_data_stream(batch_id):
                                errors='ignore', inplace=True)
                 df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
             
+            # Merge descriptions from DRAT
+            if len(drat_final) > 0:
+                df_merged['_doknr'] = df_merged['source_documentnumber'].astype(str)
+                df_merged['_dokar'] = df_merged['source_documenttype'].astype(str)
+                df_merged['_dokvr'] = df_merged['source_documentversion'].astype(str).str.zfill(2)
+                df_merged['_doktl'] = df_merged['source_documentpart'].astype(str).str.zfill(3)
+                
+                df_merged = df_merged.merge(
+                    drat_final[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']],
+                    how='left',
+                    left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
+                    right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
+                    suffixes=('', '_drat')
+                )
+                df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                                        'doknr_drat', 'dokar_drat', 'dokvr_drat', 'doktl_drat'],
+                               errors='ignore', inplace=True)
+                df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
+            
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 70, 'message': 'Preparing bulk update...'})}\n\n"
             
             # Prepare update data
@@ -1477,12 +1728,20 @@ def refresh_batch_data_stream(batch_id):
                 # Document status from DRAW.DOKST
                 dokst = str(row.get('dokst', '')) if pd.notna(row.get('dokst')) else None
                 
+                # Description from DRAT.DKTXT
+                drat_desc = str(row.get('dktxt', '')) if pd.notna(row.get('dktxt')) else None
+                if drat_desc and drat_desc.strip():
+                    drat_desc = drat_desc.strip()[:200]
+                else:
+                    drat_desc = None
+                
                 update_data.append({
                     'staging_id': staging_id,
                     'source_loioid': source_loioid,
                     'file_size_bytes': file_size_bytes,
                     'filename': filename,
-                    'source_document_status': dokst if dokst else None
+                    'source_document_status': dokst if dokst else None,
+                    'source_description': drat_desc
                 })
             
             # Also get rule updates
@@ -1491,6 +1750,7 @@ def refresh_batch_data_stream(batch_id):
                 rule_updates[int(row['id'])] = {
                     'target_documenttype': row.get('target_documenttype'),
                     'target_documentnumber': row.get('target_documentnumber'),
+                    'target_documentnumber_sanitized': row.get('target_documentnumber_sanitized'),
                     'target_documentversion': row.get('target_documentversion'),
                     'target_documentpart': row.get('target_documentpart'),
                     'authorization_group': row.get('authorization_group'),
@@ -1512,13 +1772,14 @@ def refresh_batch_data_stream(batch_id):
                         source_loioid NVARCHAR(100),
                         file_size_bytes BIGINT,
                         filename NVARCHAR(500),
-                        source_document_status NVARCHAR(20)
+                        source_document_status NVARCHAR(20),
+                        source_description NVARCHAR(200)
                     );
                 """))
                 
                 # Insert metadata updates
                 update_df = pd.DataFrame(update_data)
-                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna()]
+                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna() | update_df['source_description'].notna()]
                 
                 if len(update_df) > 0:
                     chunk_size = 900
@@ -1537,7 +1798,10 @@ def refresh_batch_data_stream(batch_id):
                             s.file_size_bytes = COALESCE(t.file_size_bytes, s.file_size_bytes),
                             s.filename = CASE WHEN t.filename IS NOT NULL AND t.filename != 'None' AND t.filename != '' 
                                               THEN t.filename ELSE s.filename END,
-                            s.source_document_status = COALESCE(t.source_document_status, s.source_document_status)
+                            s.source_document_status = COALESCE(t.source_document_status, s.source_document_status),
+                            s.source_description = CASE WHEN t.source_description IS NOT NULL AND t.source_description != ''
+                                                        AND (s.source_description IS NULL OR s.source_description = '')
+                                                        THEN t.source_description ELSE s.source_description END
                         FROM dbo.migration_staging s
                         INNER JOIN #refresh_update t ON s.id = t.staging_id
                     """))
@@ -1553,6 +1817,7 @@ def refresh_batch_data_stream(batch_id):
                         UPDATE dbo.migration_staging
                         SET target_documenttype = :target_documenttype,
                             target_documentnumber = :target_documentnumber,
+                            target_documentnumber_sanitized = :target_documentnumber_sanitized,
                             target_documentversion = :target_documentversion,
                             target_documentpart = :target_documentpart,
                             authorization_group = :authorization_group,
@@ -1564,6 +1829,7 @@ def refresh_batch_data_stream(batch_id):
                         'id': staging_id,
                         'target_documenttype': vals.get('target_documenttype'),
                         'target_documentnumber': vals.get('target_documentnumber'),
+                        'target_documentnumber_sanitized': vals.get('target_documentnumber_sanitized'),
                         'target_documentversion': vals.get('target_documentversion'),
                         'target_documentpart': vals.get('target_documentpart'),
                         'authorization_group': vals.get('authorization_group'),
@@ -1577,7 +1843,7 @@ def refresh_batch_data_stream(batch_id):
             max_bytes = size_df['file_size'].dropna().max() if len(size_df) > 0 else 0
             
             # Convert numpy types to native Python types for JSON serialization
-            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0})}\n\n"
             
         except Exception as e:
             import traceback
@@ -1829,6 +2095,7 @@ def get_batch_records(batch_id):
                     ms.source_dokob,
                     ms.source_objky,
                     ms.target_documentnumber,
+                    ms.target_documentnumber_sanitized,
                     ms.target_documentpart,
                     ms.target_documenttype,
                     ms.target_documentversion,
@@ -1850,7 +2117,8 @@ def get_batch_records(batch_id):
                     ms.container_created,
                     ms.source_document_status,
                     ms.target_document_status,
-                    ms.ablage
+                    ms.ablage,
+                    ms.source_object_links
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1870,6 +2138,7 @@ def get_batch_records(batch_id):
                     ms.source_dokob,
                     ms.source_objky,
                     ms.target_documentnumber,
+                    ms.target_documentnumber_sanitized,
                     ms.target_documentpart,
                     ms.target_documenttype,
                     ms.target_documentversion,
@@ -1891,7 +2160,8 @@ def get_batch_records(batch_id):
                     ms.container_created,
                     ms.source_document_status,
                     ms.target_document_status,
-                    ms.ablage
+                    ms.ablage,
+                    ms.source_object_links
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -1967,8 +2237,8 @@ def preview_view():
 def execute():
     """Step 2: Execute migration for approved records."""
     try:
-        # Check if user is logged in (has bearer token)
-        if not session.get('bearer_token'):
+        # Check if user is authenticated (OAuth or both systems Basic Auth)
+        if not _is_authenticated():
             return jsonify({
                 'success': False, 
                 'error': 'Not logged in. Please login to SAP first.',
@@ -1994,8 +2264,8 @@ def execute():
 def execute_selected():
     """Execute migration for selected records only."""
     try:
-        # Check if user is logged in (has bearer token)
-        if not session.get('bearer_token'):
+        # Check if user is authenticated (OAuth or both systems Basic Auth)
+        if not _is_authenticated():
             return jsonify({
                 'success': False, 
                 'error': 'Not logged in. Please login to SAP first.',
@@ -2067,7 +2337,7 @@ def cancel_migration(batch_id):
 def execute_link_all():
     """Phase 2: Execute object linking for all eligible records in a batch."""
     try:
-        if not session.get('bearer_token'):
+        if not _is_authenticated():
             return jsonify({
                 'success': False,
                 'error': 'Nicht angemeldet. Bitte zuerst bei SAP anmelden.',
@@ -2091,7 +2361,7 @@ def execute_link_all():
 def execute_link_selected():
     """Phase 2: Execute object linking for selected records only."""
     try:
-        if not session.get('bearer_token'):
+        if not _is_authenticated():
             return jsonify({
                 'success': False,
                 'error': 'Nicht angemeldet. Bitte zuerst bei SAP anmelden.',
@@ -2238,6 +2508,95 @@ def get_batch_status(batch_id):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/debug/metadata', methods=['GET'])
+def debug_metadata():
+    """Temporary debug endpoint: fetch ZHL API $metadata using session bearer token."""
+    import requests as _req, os as _os
+    token = session.get('bearer_token')
+    if not token:
+        return jsonify(error='No bearer_token in session – please login first'), 401
+    base_url = cfg.get('zhl', 'api_list', 'document', 'base_url')
+    api_key  = cfg.get('zhl', 'X-API-Key')
+    url = f"{base_url}/$metadata"
+    headers = {"Authorization": f"Bearer {token}", "x-api-key": api_key}
+    resp = _req.get(url, headers=headers, timeout=30)
+    # Save to file so it can be inspected
+    out_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), '_metadata_response.xml')
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(resp.text)
+    return resp.text, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'text/xml')}
+
+
+@migrate_bp.route('/debug/document/<docnr>', methods=['GET'])
+def debug_document(docnr):
+    """Temporary debug endpoint: fetch raw API response for a document."""
+    import requests as _req, json as _json
+    token = session.get('bearer_token')
+    if not token:
+        return jsonify(error='No bearer_token in session – please login first'), 401
+    sap_system = request.args.get('system', 'zhl')
+    dokar = request.args.get('dokar', 'ZLH')
+    dokvr = request.args.get('dokvr', '00')
+    doktl = request.args.get('doktl', '000')
+    base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+    api_key  = cfg.get(sap_system, 'X-API-Key')
+    # Strip leading zeros for API call (same as process.py)
+    clean_nr = docnr.lstrip('0') or '0'
+    args = f"Documentnumber='{clean_nr}',Documentpart='{doktl}',Documenttype='{dokar}',Documentversion='{dokvr}'"
+    url = f"{base_url}/DocumentSet({args})?$expand=DocumentfilesSet,ObjectlinksSet,DESCRIPTIONSSet&$format=json"
+    headers = {"Authorization": f"Bearer {token}", "x-api-key": api_key, "Accept": "application/json"}
+    resp = _req.get(url, headers=headers, timeout=30)
+    try:
+        data = resp.json()
+        return _json.dumps(data, indent=2, ensure_ascii=False), resp.status_code, {'Content-Type': 'application/json'}
+    except Exception:
+        return resp.text, resp.status_code
+
+
+@migrate_bp.route('/keep-alive', methods=['GET'])
+def keep_alive():
+    """Lightweight session keep-alive endpoint.
+    
+    Called periodically by the browser to prevent session expiry
+    during long-running migrations or when returning from sleep mode.
+    Also returns info about any currently executing batch so the UI
+    can auto-reconnect to running migrations.
+    """
+    try:
+        session.modified = True  # Touch session to reset expiry timer
+
+        # Check for any currently executing batch
+        executing_batch = None
+        try:
+            with misc_engine.begin() as con:
+                row = con.execute(text("""
+                    SELECT TOP 1 batch_id, total_records, executed_records,
+                           successful_records, failed_records, migration_phase
+                    FROM dbo.migration_batch
+                    WHERE status = 'executing'
+                    ORDER BY created_at DESC
+                """)).fetchone()
+                if row:
+                    executing_batch = {
+                        'batch_id': row[0],
+                        'total': row[1] or 0,
+                        'executed': row[2] or 0,
+                        'successful': row[3] or 0,
+                        'failed': row[4] or 0,
+                        'phase': row[5] or 'upload'
+                    }
+        except Exception:
+            pass
+
+        return jsonify({
+            'success': True,
+            'session_active': True,
+            'executing_batch': executing_batch
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'session_active': False, 'error': str(e)}), 500
 
 
 @migrate_bp.route('/token-status', methods=['GET'])
@@ -2578,9 +2937,6 @@ def migration_rules_page():
 def list_migration_rules():
     """Get all active migration rules (translation/overwrite)."""
     try:
-        # Ensure schema has latest columns (rule_type, condition_*)
-        init_staging_tables(misc_engine)
-        
         # Check if execution_order column exists
         with misc_engine.begin() as con:
             col_check = con.execute(text("""
@@ -2647,8 +3003,6 @@ def list_migration_rules():
 def add_migration_rule():
     """Add a new migration rule (translation or overwrite)."""
     try:
-        # Ensure schema has latest columns (rule_type, condition_*)
-        init_staging_tables(misc_engine)
         data = request.get_json()
         rule_type = (data.get('rule_type') or 'translation').strip().lower()
         source_column = data.get('source_column', '').strip()
@@ -2712,8 +3066,6 @@ def add_migration_rule():
 def update_migration_rule(rule_id):
     """Update an existing migration rule."""
     try:
-        # Ensure schema has latest columns (rule_type, condition_*)
-        init_staging_tables(misc_engine)
         data = request.get_json()
         source_column = (data.get('source_column') or '').strip()
         target_column = (data.get('target_column') or '').strip()
@@ -2763,8 +3115,6 @@ def update_migration_rule(rule_id):
 def delete_migration_rule(rule_id):
     """Delete (deactivate) a migration rule."""
     try:
-        # Ensure schema has latest columns (rule_type, condition_*)
-        init_staging_tables(misc_engine)
         delete_query = text("""
             UPDATE dbo.migration_translations
             SET active = 0
@@ -2784,7 +3134,6 @@ def delete_migration_rule(rule_id):
 def move_rule_up(rule_id):
     """Move a rule up in execution order."""
     try:
-        init_staging_tables(misc_engine)
         with misc_engine.begin() as con:
             # Get current rule and the one above it
             current = con.execute(text("""
@@ -2819,7 +3168,6 @@ def move_rule_up(rule_id):
 def move_rule_down(rule_id):
     """Move a rule down in execution order."""
     try:
-        init_staging_tables(misc_engine)
         with misc_engine.begin() as con:
             # Get current rule and the one below it
             current = con.execute(text("""
@@ -3234,8 +3582,6 @@ def batch_object_mapping_page(batch_id):
 def list_batch_object_mappings(batch_id):
     """Get all object mappings for a specific batch."""
     try:
-        init_staging_tables(misc_engine)
-        
         with misc_engine.begin() as con:
             # Get batch info
             batch_query = """
@@ -3284,7 +3630,6 @@ def list_batch_object_mappings(batch_id):
 def add_batch_object_mapping(batch_id):
     """Add a new object mapping to a specific batch."""
     try:
-        init_staging_tables(misc_engine)
         data = request.get_json()
         
         source_dokob = data.get('source_dokob', '').strip().upper()
@@ -3391,8 +3736,6 @@ def delete_batch_object_mapping(batch_id, mapping_id):
 def download_batch_object_mapping(batch_id):
     """Download object mappings for a batch as Excel file with source values from staging."""
     try:
-        init_staging_tables(misc_engine)
-        
         with misc_engine.begin() as con:
             # Get existing mappings
             mappings_query = """
@@ -3558,8 +3901,6 @@ def download_object_mapping_template():
 def upload_batch_object_mapping(batch_id):
     """Upload Excel file with object mappings for a specific batch."""
     try:
-        init_staging_tables(misc_engine)
-        
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'No file uploaded'}), 400
         
@@ -3666,8 +4007,6 @@ def upload_batch_object_mapping(batch_id):
 def batch_object_mapping_stats(batch_id):
     """Get statistics about object mappings for a batch."""
     try:
-        init_staging_tables(misc_engine)
-        
         with misc_engine.begin() as con:
             # Count total mappings
             mapping_count_query = """
@@ -3722,8 +4061,6 @@ def batch_object_mapping_unmapped(batch_id):
     Get list of source objects in this batch that have no mapping.
     """
     try:
-        init_staging_tables(misc_engine)
-        
         with misc_engine.begin() as con:
             query = """
                 SELECT 
@@ -3758,8 +4095,6 @@ def object_mapping_all_batches():
     Get overview of all batches and their mapping status.
     """
     try:
-        init_staging_tables(misc_engine)
-        
         with misc_engine.begin() as con:
             query = """
                 SELECT 
@@ -4643,7 +4978,6 @@ def create_dms_migration_batch_stream():
     """
     import sqlite3
     from datetime import datetime
-    from app.db_schema import init_staging_tables
     
     wave = request.args.get('wave')
     description = request.args.get('description', '')
@@ -4688,9 +5022,6 @@ def create_dms_migration_batch_stream():
             
             # Generate batch ID
             batch_id = f"DMS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            # Ensure staging tables exist
-            init_staging_tables(misc_engine)
             
             # Get unique Werke from the loaded data
             unique_werke = dms_df['werk'].unique().tolist() if 'werk' in dms_df.columns else []

@@ -193,6 +193,9 @@
                         #recordsTable td[data-column="description"] { white-space: normal; max-width: 200px; }
                         #recordsTable td[data-column="exec_error"] { white-space: normal; max-width: 200px; }
                         #recordsTable code { font-size: 0.8rem; }
+                        /* Subtle tint for target columns to visually pair with source */
+                        #recordsTable thead th.target-col { background-color: #e8f4fd; }
+                        #recordsTable tbody td.target-col { background-color: #f5faff; }
                     </style>
                     <div class="table-responsive">
                         <table class="table table-sm table-striped table-hover" id="recordsTable">
@@ -200,26 +203,26 @@
                                 <tr>
                                     <th><input type="checkbox" id="selectAllCheckbox"></th>
                                     <th data-column="id">ID</th>
-                                    <th data-column="batch_id">Batch ID</th>
                                     <th data-column="source_doc">Source Doc</th>
-                                    <th data-column="source_loioid">Source LOIO</th>
-                                    <th data-column="dokob">Source DOKOB</th>
-                                    <th data-column="objky">Source OBJKY</th>
-                                    <th data-column="ablage">Ablage</th>
-                                    <th data-column="target_dokob">Target DOKOB</th>
-                                    <th data-column="target_objky">Target OBJKY</th>
-                                    <th data-column="target_type">Target Type</th>
-                                    <th data-column="target_doc">Target Doc</th>
+                                    <th data-column="target_doc" class="target-col">Target Doc</th>
                                     <th data-column="type_info">Type/Ver/Part</th>
+                                    <th data-column="target_type" class="target-col">Target Type</th>
+                                    <th data-column="dokob">Source DOKOB</th>
+                                    <th data-column="target_dokob" class="target-col">Target DOKOB</th>
+                                    <th data-column="objky">Source OBJKY</th>
+                                    <th data-column="target_objky" class="target-col">Target OBJKY</th>
+                                    <th data-column="doc_status">Dok-Status</th>
                                     <th data-column="description">Description</th>
                                     <th data-column="filename">Filename</th>
                                     <th data-column="file_size">File Size</th>
-                                    <th data-column="mime_type">MIME Type</th>
+                                    <th data-column="ablage">Ablage</th>
                                     <th data-column="auth_group">Auth Group</th>
-                                    <th data-column="doc_status">Dok-Status</th>
                                     <th data-column="execution">Execution</th>
                                     <th data-column="link_status">Link Status</th>
                                     <th data-column="error_category">Error Category</th>
+                                    <th data-column="source_loioid">Source LOIO</th>
+                                    <th data-column="mime_type">MIME Type</th>
+                                    <th data-column="batch_id">Batch ID</th>
                                     <th data-column="created_at">Created At</th>
                                     <th data-column="created_by">Created By</th>
                                     <th data-column="exec_started">Exec Started</th>
@@ -280,34 +283,70 @@
                 </button>
             </div>
             <div class="modal-body">
+                <p class="text-muted small mb-2">Source/Target-Paare sind nebeneinander angeordnet.</p>
+                <hr class="my-2">
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_id" value="id" checked>
                     <label class="form-check-label" for="col_id">ID</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_source_doc" value="source_doc" checked>
-                    <label class="form-check-label" for="col_source_doc">Quelldokument</label>
+                    <label class="form-check-label" for="col_source_doc">Source Doc</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_doc" value="target_doc" checked>
-                    <label class="form-check-label" for="col_target_doc">Zieldokument</label>
+                    <label class="form-check-label" for="col_target_doc"><span class="text-primary">&#x25B8;</span> Target Doc</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_type_info" value="type_info" checked>
                     <label class="form-check-label" for="col_type_info">Typ/Version/Teil</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_description" value="description" checked>
-                    <label class="form-check-label" for="col_description">Beschreibung</label>
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_type" value="target_type" checked>
+                    <label class="form-check-label" for="col_target_type"><span class="text-primary">&#x25B8;</span> Target Type</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
-                    <label class="form-check-label" for="col_auth_group">Berechtigungsgruppe</label>
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_dokob" value="dokob" checked>
+                    <label class="form-check-label" for="col_dokob">Source DOKOB</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_dokob" value="target_dokob" checked>
+                    <label class="form-check-label" for="col_target_dokob"><span class="text-primary">&#x25B8;</span> Target DOKOB</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_objky" value="objky" checked>
+                    <label class="form-check-label" for="col_objky">Source OBJKY</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_objky" value="target_objky" checked>
+                    <label class="form-check-label" for="col_target_objky"><span class="text-primary">&#x25B8;</span> Target OBJKY</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_doc_status" value="doc_status" checked>
                     <label class="form-check-label" for="col_doc_status">Dokumentenstatus</label>
                 </div>
+                <hr class="my-2">
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_description" value="description" checked>
+                    <label class="form-check-label" for="col_description">Beschreibung</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename" checked>
+                    <label class="form-check-label" for="col_filename">Dateiname</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_file_size" value="file_size" checked>
+                    <label class="form-check-label" for="col_file_size">Dateigröße</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_ablage" value="ablage" checked>
+                    <label class="form-check-label" for="col_ablage">Ablage (KPRO/DB)</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
+                    <label class="form-check-label" for="col_auth_group">Berechtigungsgruppe</label>
+                </div>
+                <hr class="my-2">
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_execution" value="execution" checked>
                     <label class="form-check-label" for="col_execution">Ausführungsstatus</label>
@@ -320,49 +359,18 @@
                     <input class="form-check-input column-toggle" type="checkbox" id="col_error_category" value="error_category" checked>
                     <label class="form-check-label" for="col_error_category">Fehlerkategorie</label>
                 </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
-                    <label class="form-check-label" for="col_batch_id">Batch ID</label>
-                </div>
+                <hr class="my-2">
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_source_loioid" value="source_loioid">
                     <label class="form-check-label" for="col_source_loioid">Quell-LOIO-ID</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_dokob" value="dokob" checked>
-                    <label class="form-check-label" for="col_dokob">Source DOKOB</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_objky" value="objky" checked>
-                    <label class="form-check-label" for="col_objky">Source OBJKY</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_ablage" value="ablage" checked>
-                    <label class="form-check-label" for="col_ablage">Ablage (KPRO/DB)</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_dokob" value="target_dokob">
-                    <label class="form-check-label" for="col_target_dokob">Target DOKOB</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_objky" value="target_objky">
-                    <label class="form-check-label" for="col_target_objky">Target OBJKY</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_type" value="target_type">
-                    <label class="form-check-label" for="col_target_type">Zieltyp</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_filename" value="filename">
-                    <label class="form-check-label" for="col_filename">Dateiname</label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_file_size" value="file_size">
-                    <label class="form-check-label" for="col_file_size">Dateigröße</label>
-                </div>
-                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_mime_type" value="mime_type">
                     <label class="form-check-label" for="col_mime_type">MIME Type</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
+                    <label class="form-check-label" for="col_batch_id">Batch ID</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_created_at" value="created_at">
@@ -402,25 +410,26 @@ const batchId = '{{ batch_id }}';
 // Column visibility state
 let visibleColumns = {
     'id': true,
-    'batch_id': false,
     'source_doc': true,
-    'source_loioid': false,
-    'dokob': true,
-    'objky': true,
-    'ablage': true,
-    'target_dokob': false,
-    'target_objky': false,
-    'target_type': false,
     'target_doc': true,
     'type_info': true,
+    'target_type': true,
+    'dokob': true,
+    'target_dokob': true,
+    'objky': true,
+    'target_objky': true,
+    'doc_status': true,
     'description': true,
     'filename': true,
     'file_size': true,
-    'mime_type': false,
+    'ablage': true,
     'auth_group': true,
-    'doc_status': true,
     'execution': true,
+    'link_status': true,
     'error_category': true,
+    'source_loioid': false,
+    'mime_type': false,
+    'batch_id': false,
     'created_at': false,
     'created_by': false,
     'exec_started': false,
@@ -507,15 +516,30 @@ function getColumnIndex(columnName) {
 }
 
 // Reset columns to default
+const defaultVisibleColumns = {
+    'id': true, 'source_doc': true, 'target_doc': true,
+    'type_info': true, 'target_type': true,
+    'dokob': true, 'target_dokob': true,
+    'objky': true, 'target_objky': true,
+    'doc_status': true, 'description': true,
+    'filename': true, 'file_size': true, 'ablage': true,
+    'auth_group': true, 'execution': true,
+    'link_status': true, 'error_category': true,
+    'source_loioid': false, 'mime_type': false, 'batch_id': false,
+    'created_at': false, 'created_by': false,
+    'exec_started': false, 'exec_completed': false, 'exec_error': false
+};
 function resetColumns() {
-    Object.keys(visibleColumns).forEach(col => {
-        visibleColumns[col] = true;
+    Object.keys(defaultVisibleColumns).forEach(col => {
+        const visible = defaultVisibleColumns[col];
+        visibleColumns[col] = visible;
         const checkbox = document.getElementById('col_' + col);
         if (checkbox) {
-            checkbox.checked = true;
+            checkbox.checked = visible;
         }
-        toggleColumn(col, true);
+        toggleColumn(col, visible);
     });
+    localStorage.removeItem('migrate_columns_' + batchId);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -530,6 +554,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Then load records
     loadRecords();
+    
+    // Auto-reconnect: check if a migration is currently executing for this batch
+    checkAndReconnectExecution();
     
     // Column toggle event listeners
     document.querySelectorAll('.column-toggle').forEach(checkbox => {
@@ -1026,26 +1053,26 @@ function displayRecords(records) {
                            ${record.skip_migration ? 'disabled' : ''}>
                 </td>
                 <td data-column="id">${record.id}</td>
-                <td data-column="batch_id"><small>${record.batch_id || '-'}</small></td>
                 <td data-column="source_doc"><code>${record.source_documentnumber}</code></td>
-                <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
-                <td data-column="dokob"><small>${record.source_dokob || '-'}</small></td>
-                <td data-column="objky"><small>${truncate(record.source_objky, 25) || '-'}</small></td>
-                <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
-                <td data-column="target_dokob"><small>${record.target_dokob || '-'}</small></td>
-                <td data-column="target_objky"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
-                <td data-column="target_type"><small>${record.target_documenttype || '-'}</small></td>
-                <td data-column="target_doc"><code>${record.target_documentnumber || '-'}</code></td>
+                <td data-column="target_doc" class="target-col"><code>${record.target_documentnumber || '-'}</code></td>
                 <td data-column="type_info"><small>${typeInfo}</small></td>
+                <td data-column="target_type" class="target-col"><small>${record.target_documenttype || '-'}</small></td>
+                <td data-column="dokob"><small>${formatDokob(record)}</small></td>
+                <td data-column="target_dokob" class="target-col"><small>${record.target_dokob || '-'}</small></td>
+                <td data-column="objky"><small>${formatObjky(record)}</small></td>
+                <td data-column="target_objky" class="target-col"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
+                <td data-column="doc_status"><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
                 <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
                 <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
                 <td data-column="file_size"><small>${fileSize}</small></td>
-                <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
+                <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
-                <td data-column="doc_status"><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
                 <td data-column="execution">${executionBadge}</td>
                 <td data-column="link_status">${getLinkStatusBadge(record.link_status, record.execution_status, record.target_dokob)}</td>
                 <td data-column="error_category">${getErrorCategoryBadge(record.error_category)}</td>
+                <td data-column="source_loioid"><small>${truncate(record.source_loioid, 20) || '-'}</small></td>
+                <td data-column="mime_type"><small>${record.mime_type || '-'}</small></td>
+                <td data-column="batch_id"><small>${record.batch_id || '-'}</small></td>
                 <td data-column="created_at"><small>${createdAt}</small></td>
                 <td data-column="created_by"><small>${record.created_by || '-'}</small></td>
                 <td data-column="exec_started"><small>${execStarted}</small></td>
@@ -1199,6 +1226,36 @@ function updateSelectionInfo() {
 let progressInterval = null;
 let executionStartTime = null;
 
+/**
+ * Auto-reconnect: on page load, check if this batch is currently executing.
+ * If so, resume the progress bar and polling so the user can pick up
+ * where they left off (e.g. after sleep mode or browser refresh).
+ */
+function checkAndReconnectExecution() {
+    fetch(`/batch/${batchId}/progress`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.is_running) {
+                console.log('[reconnect] Batch is executing, resuming progress display');
+                // Disable execute button + show cancel button
+                const btn = document.getElementById('executeBtn');
+                const cancelBtn = document.getElementById('cancelBtn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird ausgeführt...';
+                }
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
+                // Start progress polling
+                startProgressPolling();
+                // We don't have the original start time, estimate from progress
+                if (data.executed > 0) {
+                    executionStartTime = Date.now() - 2000; // rough estimate
+                }
+            }
+        })
+        .catch(() => { /* ignore */ });
+}
+
 function showProgressBar() {
     // Create progress bar if not exists
     let progressDiv = document.getElementById('executionProgress');
@@ -1297,6 +1354,17 @@ function pollProgress() {
                 // Stop polling when done
                 if (data.status === 'completed' || data.status === 'failed') {
                     stopProgressPolling();
+                    // If we reconnected (executeAll is not running in this tab),
+                    // clean up UI and reload records
+                    const btn = document.getElementById('executeBtn');
+                    if (btn && btn.disabled) {
+                        hideProgressBar();
+                        const cancelBtn = document.getElementById('cancelBtn');
+                        if (cancelBtn) cancelBtn.style.display = 'none';
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+                        loadRecords();
+                    }
                 }
             }
         })
@@ -2020,6 +2088,38 @@ function filterRecords(searchTerm) {
 function truncate(str, len) {
     if (!str) return '-';
     return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function parseObjectLinks(record) {
+    // Parse source_object_links JSON, fall back to single dokob/objky
+    if (record.source_object_links) {
+        try {
+            const links = JSON.parse(record.source_object_links);
+            if (Array.isArray(links) && links.length > 0) return links;
+        } catch(e) {}
+    }
+    // Fallback: single entry from primary columns
+    if (record.source_dokob || record.source_objky) {
+        return [{ dokob: record.source_dokob || '', objky: record.source_objky || '' }];
+    }
+    return [];
+}
+
+function formatDokob(record) {
+    const links = parseObjectLinks(record);
+    if (links.length === 0) return '-';
+    if (links.length === 1) return links[0].dokob || '-';
+    // Multiple: show first + badge with count
+    const unique_types = [...new Set(links.map(l => l.dokob))];
+    return unique_types.join(', ') + ` <span class="badge badge-secondary" title="${links.length} Object-Links">${links.length}x</span>`;
+}
+
+function formatObjky(record) {
+    const links = parseObjectLinks(record);
+    if (links.length === 0) return '-';
+    if (links.length === 1) return truncate(links[0].objky, 25);
+    // Multiple: show first + badge
+    return truncate(links[0].objky, 20) + ` <span class="badge badge-secondary" title="${links.map(l => l.objky).join('\n')}">+${links.length - 1}</span>`;
 }
 
 function escapeHtml(text) {

@@ -157,3 +157,161 @@ class TestPrepareStaginRecords:
         assert 'source_documentnumber' in result.columns
         assert 'execution_status' in result.columns
         assert result['execution_status'].iloc[0] == 'pending'
+    
+    def test_sanitized_column_present(self, sample_document_data):
+        """Staging records should include target_documentnumber_sanitized column."""
+        from app.prepare import prepare_staging_records
+        from flask import Flask
+        
+        app = Flask(__name__)
+        app.secret_key = 'test'
+        
+        # Add a target_documentnumber that needs sanitization
+        sample_document_data['target_documentnumber'] = ['DOC/123', None]
+        sample_document_data['target_documentnumber_sanitized'] = ['DOC-123', None]
+        
+        with app.test_request_context():
+            result = prepare_staging_records(sample_document_data, 'B001', 'test.xlsx')
+        
+        assert 'target_documentnumber_sanitized' in result.columns
+        assert result['target_documentnumber_sanitized'].iloc[0] == 'DOC-123'
+        assert pd.isna(result['target_documentnumber_sanitized'].iloc[1]) or result['target_documentnumber_sanitized'].iloc[1] is None
+
+    def test_dedup_pure_duplicates(self):
+        """Duplicate rows (same doc key, same DOKOB/OBJKY) should be collapsed to one record."""
+        import json
+        from app.prepare import prepare_staging_records
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.secret_key = 'test'
+
+        df = pd.DataFrame([
+            {'documentnumber': 'DOC001', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Desc A',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-001'},
+            {'documentnumber': 'DOC001', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Desc A',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-001'},
+            {'documentnumber': 'DOC001', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Desc A',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-001'},
+        ])
+
+        with app.test_request_context():
+            result = prepare_staging_records(df, 'BATCH_DEDUP', 'test.xlsx')
+
+        # 3 identical rows -> 1 record
+        assert len(result) == 1
+        assert result.iloc[0]['source_documentnumber'] == 'DOC001'
+        assert result.iloc[0]['source_dokob'] == 'IFLOT'
+        assert result.iloc[0]['source_objky'] == 'FL-001'
+
+        # source_object_links should have exactly ONE (dokob,objky) pair (deduped)
+        links = json.loads(result.iloc[0]['source_object_links'])
+        assert len(links) == 1
+        assert links[0] == {'dokob': 'IFLOT', 'objky': 'FL-001'}
+
+    def test_dedup_multi_object_links(self):
+        """Same doc with different DOKOB/OBJKY pairs: one record, all links in JSON."""
+        import json
+        from app.prepare import prepare_staging_records
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.secret_key = 'test'
+
+        df = pd.DataFrame([
+            {'documentnumber': 'DOC002', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Multi link doc',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-100'},
+            {'documentnumber': 'DOC002', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Multi link doc',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-200'},
+            {'documentnumber': 'DOC002', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'Multi link doc',
+             'source_dokob': 'EQUI', 'source_objky': 'EQ-999'},
+        ])
+
+        with app.test_request_context():
+            result = prepare_staging_records(df, 'BATCH_MULTI', 'test.xlsx')
+
+        # 3 rows same doc -> 1 record
+        assert len(result) == 1
+
+        # Primary columns should have the first pair
+        assert result.iloc[0]['source_dokob'] == 'IFLOT'
+        assert result.iloc[0]['source_objky'] == 'FL-100'
+
+        # All 3 distinct links in JSON
+        links = json.loads(result.iloc[0]['source_object_links'])
+        assert len(links) == 3
+        dokobs = [l['dokob'] for l in links]
+        objkeys = [l['objky'] for l in links]
+        assert 'IFLOT' in dokobs
+        assert 'EQUI' in dokobs
+        assert 'FL-100' in objkeys
+        assert 'FL-200' in objkeys
+        assert 'EQ-999' in objkeys
+
+    def test_dedup_mixed_unique_and_duplicates(self):
+        """Mix of unique docs and duplicates should produce correct count."""
+        from app.prepare import prepare_staging_records
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.secret_key = 'test'
+
+        df = pd.DataFrame([
+            # Doc A - 2 duplicate rows
+            {'documentnumber': 'DOCA', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'A',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-A'},
+            {'documentnumber': 'DOCA', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'A',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-A'},
+            # Doc B - unique
+            {'documentnumber': 'DOCB', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'B',
+             'source_dokob': 'EQUI', 'source_objky': 'EQ-B'},
+            # Doc C - 3 rows with different links
+            {'documentnumber': 'DOCC', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'C',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-C1'},
+            {'documentnumber': 'DOCC', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'C',
+             'source_dokob': 'IFLOT', 'source_objky': 'FL-C2'},
+            {'documentnumber': 'DOCC', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'C',
+             'source_dokob': 'EQUI', 'source_objky': 'EQ-C'},
+        ])
+
+        with app.test_request_context():
+            result = prepare_staging_records(df, 'BATCH_MIX', 'test.xlsx')
+
+        # 6 rows -> 3 unique docs
+        assert len(result) == 3
+        doc_numbers = result['source_documentnumber'].tolist()
+        assert 'DOCA' in doc_numbers
+        assert 'DOCB' in doc_numbers
+        assert 'DOCC' in doc_numbers
+
+    def test_dedup_no_dokob_columns(self):
+        """Records without DOKOB/OBJKY columns should still work (no links)."""
+        from app.prepare import prepare_staging_records
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.secret_key = 'test'
+
+        df = pd.DataFrame([
+            {'documentnumber': 'DOC_NODOKOB', 'documentpart': '000', 'documentversion': '00',
+             'documenttype': 'IY1', 'description': 'No links'},
+        ])
+
+        with app.test_request_context():
+            result = prepare_staging_records(df, 'BATCH_NOLINK', 'test.xlsx')
+
+        assert len(result) == 1
+        assert result.iloc[0]['source_object_links'] is None
+        assert result.iloc[0]['source_dokob'] is None

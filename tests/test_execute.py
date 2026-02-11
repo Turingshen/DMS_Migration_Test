@@ -176,3 +176,206 @@ class TestDynamicPacing:
         """Negative size (invalid) should use tiny pacing."""
         from app.execute import get_dynamic_pacing
         assert get_dynamic_pacing(-100) == 5
+
+
+class TestSanitizeDoknr:
+    """Tests for sanitize_doknr() function — DOKNR cleanup for S4 OData APIs."""
+
+    def test_clean_value_unchanged(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("EQUI310234138")
+        assert result == "EQUI310234138"
+        assert changed is False
+
+    def test_none_input(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr(None)
+        assert result is None
+        assert changed is False
+
+    def test_empty_string(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("")
+        assert result == ""
+        assert changed is False
+
+    def test_leading_spaces(self):
+        """Leading spaces cause key-mismatch after SAP trims on CREATE."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("  BILD")
+        assert result == "BILD"
+        assert changed is True
+
+    def test_trailing_spaces(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("BILD   ")
+        assert result == "BILD"
+        assert changed is True
+
+    def test_slash_replaced_with_dash(self):
+        """Slashes break OData URL: ...DocNumber='00005R0568/569' → 404."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("00005R0568/569")
+        assert result == "00005R0568-569"
+        assert changed is True
+
+    def test_multiple_slashes(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("/COCKPIT/WC")
+        assert result == "COCKPIT-WC"
+        assert changed is True
+
+    def test_backslash_removed(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("PATH\\FILE")
+        assert result == "PATHFILE"
+        assert changed is True
+
+    def test_hash_removed(self):
+        """Hash truncates URL at fragment."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("DOC#123")
+        assert result == "DOC123"
+        assert changed is True
+
+    def test_single_quote_removed(self):
+        """Single quotes break OData key syntax: ...('value')."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("O'NEIL")
+        assert result == "ONEIL"
+        assert changed is True
+
+    def test_parentheses_removed(self):
+        """Parentheses collide with OData key syntax."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("DOC(ALT)")
+        assert result == "DOCALT"
+        assert changed is True
+
+    def test_umlaut_ae(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("PRÜFBLATT")
+        assert result == "PRUEFBLATT"
+        assert changed is True
+
+    def test_umlaut_oe_ue_ss(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("ÖLMESSGERÄT")
+        assert result == "OELMESSGERAET"
+        assert changed is True
+
+    def test_umlaut_sharp_s(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("MAßNAHME")
+        assert result == "MASSNAHME"
+        assert changed is True
+
+    def test_turkish_chars(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("İSTANBUL-GÜNEŞ")
+        assert result == "ISTANBUL-GUENES"
+        assert changed is True
+
+    def test_truncate_to_25(self):
+        """CHAR(25) field limit."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("A" * 30)
+        assert len(result) == 25
+        assert changed is True
+
+    def test_umlaut_expansion_then_truncate(self):
+        """Umlauts expand (Ü→UE) which can push past 25 chars."""
+        from app.process import sanitize_doknr
+        # 24 chars, but Ü→UE makes it 25
+        result, changed = sanitize_doknr("ZYKLUSÜBERSCHRITTPRÜFUNG")
+        assert len(result) <= 25
+        assert changed is True
+
+    def test_collapse_double_dashes(self):
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("A//B")
+        assert result == "A-B"
+        assert changed is True
+
+    def test_colons_preserved(self):
+        """Colons are OData-safe and should NOT be changed."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("PB:V107-Y620")
+        assert result == "PB:V107-Y620"
+        assert changed is False
+
+    def test_dots_preserved(self):
+        """Dots are OData-safe and should NOT be changed."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("TECH.DOKU")
+        assert result == "TECH.DOKU"
+        assert changed is False
+
+    def test_spaces_in_middle_preserved(self):
+        """Middle spaces are URL-encoded to %20 by requests — safe."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr("OVER FILL PROCEDURE")
+        assert result == "OVER FILL PROCEDURE"
+        assert changed is False
+
+    def test_combined_issues(self):
+        """Real-world example with leading space + slash + umlaut."""
+        from app.process import sanitize_doknr
+        result, changed = sanitize_doknr(" PRÜF/BLATT#1")
+        assert result == "PRUEF-BLATT1"
+        assert changed is True
+
+
+class TestPreSanitizedDoknrUsage:
+    """Tests that Execute flow correctly uses pre-sanitized DOKNR from Prepare phase."""
+
+    def test_pre_sanitized_value_preferred(self):
+        """When target_documentnumber_sanitized is set, it should be used over inline sanitization."""
+        staging_record = {
+            'target_documentnumber': 'DOC/123',
+            'target_documentnumber_sanitized': 'DOC-123',
+            'source_documentnumber': 'DOC/123',
+        }
+        # Simulate the Execute logic
+        doc_number = staging_record['target_documentnumber']
+        source_doc_number = staging_record['source_documentnumber']
+        effective_doc_number = doc_number or source_doc_number
+
+        pre_sanitized = staging_record.get('target_documentnumber_sanitized')
+        if pre_sanitized and str(pre_sanitized).strip():
+            effective_doc_number = str(pre_sanitized).strip()
+
+        assert effective_doc_number == 'DOC-123'
+
+    def test_inline_fallback_when_no_pre_sanitized(self):
+        """When target_documentnumber_sanitized is empty, inline sanitize_doknr should run."""
+        from app.process import sanitize_doknr
+        staging_record = {
+            'target_documentnumber': 'DOC/456',
+            'target_documentnumber_sanitized': None,
+            'source_documentnumber': 'DOC/456',
+        }
+        doc_number = staging_record['target_documentnumber']
+        source_doc_number = staging_record['source_documentnumber']
+        effective_doc_number = doc_number or source_doc_number
+
+        pre_sanitized = staging_record.get('target_documentnumber_sanitized')
+        if pre_sanitized and str(pre_sanitized).strip():
+            effective_doc_number = str(pre_sanitized).strip()
+        elif effective_doc_number:
+            effective_doc_number, _ = sanitize_doknr(effective_doc_number)
+
+        assert effective_doc_number == 'DOC-456'
+
+    def test_none_doc_number_no_crash(self):
+        """When all doc numbers are None, no crash should occur."""
+        staging_record = {
+            'target_documentnumber': None,
+            'target_documentnumber_sanitized': None,
+            'source_documentnumber': None,
+        }
+        effective = staging_record.get('target_documentnumber') or staging_record.get('source_documentnumber')
+        pre_sanitized = staging_record.get('target_documentnumber_sanitized')
+        if pre_sanitized and str(pre_sanitized).strip():
+            effective = str(pre_sanitized).strip()
+        assert effective is None

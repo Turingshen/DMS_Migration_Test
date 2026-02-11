@@ -9,7 +9,7 @@ import datetime as dt
 from flask import session as http_session
 from sqlalchemy import text
 from app_config import MiscEngine, DilEngine
-from app.db_schema import init_staging_tables
+from app.process import sanitize_doknr
 
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
@@ -314,6 +314,130 @@ def enrich_file_sizes(data_df):
     return data_df
 
 
+def enrich_descriptions(data_df):
+    """
+    Enrich dataframe with document descriptions from DIL.DRAT table.
+    DRAT contains the document short texts (DKTXT) that the ZHL custom API fails to return.
+    Uses document keys (documentnumber, documenttype, documentversion, documentpart) to lookup descriptions.
+    Prefers English (LANGU='E'), falls back to any available language.
+    
+    Only fills rows where 'description' column is empty/NULL (does not overwrite existing values).
+    
+    Returns dataframe with 'description' column populated.
+    """
+    required_cols = ['documentnumber', 'documenttype', 'documentversion', 'documentpart']
+    cols = [c.lower() for c in data_df.columns]
+    
+    if not all(k in cols for k in required_cols):
+        print("[PREPARE] Missing document key columns for DRAT description lookup")
+        return data_df
+    
+    if len(data_df) == 0:
+        return data_df
+    
+    # Check how many rows already have a description
+    if 'description' not in data_df.columns:
+        data_df['description'] = None
+    
+    needs_desc = data_df['description'].isna() | (data_df['description'].astype(str).str.strip() == '') | (data_df['description'].astype(str) == 'None')
+    if not needs_desc.any():
+        print("[PREPARE] All rows already have descriptions, skipping DRAT lookup")
+        return data_df
+    
+    print(f"[PREPARE] Looking up descriptions from DIL.DRAT for {needs_desc.sum()}/{len(data_df)} rows...")
+    
+    try:
+        # Build WHERE clause conditions for batch lookup
+        conditions = []
+        for _, row in data_df[needs_desc].iterrows():
+            doknr = str(row.get('documentnumber', '')).replace("'", "''")
+            dokar = str(row.get('documenttype', '')).replace("'", "''")
+            dokvr = str(row.get('documentversion', '')).replace("'", "''").zfill(2)
+            doktl = str(row.get('documentpart', '')).replace("'", "''").zfill(3)
+            conditions.append(
+                f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
+            )
+        
+        # Query in chunks
+        chunk_size = 200
+        all_descs = []
+        
+        for i in range(0, len(conditions), chunk_size):
+            chunk = conditions[i:i + chunk_size]
+            where_clause = " OR ".join(chunk)
+            query = f"""
+                SELECT DOKNR, DOKAR, DOKVR, DOKTL, LANGU, DKTXT
+                FROM DIL.DRAT
+                WHERE MANDT = '100'
+                AND ({where_clause})
+            """
+            with dil_engine.begin() as con:
+                chunk_df = pd.read_sql(query, con)
+            all_descs.append(chunk_df)
+        
+        if all_descs:
+            desc_df = pd.concat(all_descs, ignore_index=True)
+            desc_df.columns = [c.lower() for c in desc_df.columns]
+            
+            if len(desc_df) > 0:
+                # Prefer English descriptions, fall back to any language
+                desc_en = desc_df[desc_df['langu'] == 'E'].drop_duplicates(
+                    subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first'
+                )
+                desc_any = desc_df.drop_duplicates(
+                    subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first'
+                )
+                # Use English where available, fall back to any
+                desc_final = desc_en if len(desc_en) > 0 else desc_any
+                if len(desc_en) > 0 and len(desc_en) < len(desc_any.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'])):
+                    # Merge: English first, then fill gaps from any language
+                    desc_final = desc_en.merge(
+                        desc_any[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']],
+                        on=['doknr', 'dokar', 'dokvr', 'doktl'],
+                        how='right',
+                        suffixes=('_en', '_any')
+                    )
+                    desc_final['dktxt'] = desc_final.get('dktxt_en', desc_final.get('dktxt'))
+                    if 'dktxt_any' in desc_final.columns:
+                        desc_final['dktxt'] = desc_final['dktxt'].fillna(desc_final['dktxt_any'])
+                    desc_final = desc_final.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
+                
+                # Merge descriptions into data_df
+                data_df['_doknr'] = data_df['documentnumber'].astype(str)
+                data_df['_dokar'] = data_df['documenttype'].astype(str)
+                data_df['_dokvr'] = data_df['documentversion'].astype(str).str.zfill(2)
+                data_df['_doktl'] = data_df['documentpart'].astype(str).str.zfill(3)
+                
+                data_df = data_df.merge(
+                    desc_final[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']],
+                    how='left',
+                    left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
+                    right_on=['doknr', 'dokar', 'dokvr', 'doktl']
+                )
+                
+                # Fill missing descriptions from DRAT
+                drat_filled = data_df['dktxt'].notna() & needs_desc
+                data_df.loc[drat_filled, 'description'] = data_df.loc[drat_filled, 'dktxt']
+                
+                filled_count = drat_filled.sum()
+                print(f"[PREPARE] Enriched {filled_count}/{needs_desc.sum()} descriptions from DIL.DRAT")
+                
+                # Cleanup merge columns
+                data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                                      'doknr', 'dokar', 'dokvr', 'doktl', 'dktxt', 'langu',
+                                      'dktxt_en', 'dktxt_any'],
+                             errors='ignore', inplace=True)
+            else:
+                print("[PREPARE] No descriptions found in DIL.DRAT")
+        else:
+            print("[PREPARE] No DRAT query results")
+            
+    except Exception as e:
+        print(f"[WARN] Failed to enrich descriptions from DRAT: {e}")
+    
+    return data_df
+
+
 def apply_translations(data_df, rules):
     """Apply migration rules: translation mappings and overwrites with optional conditions."""
     if not rules or len(data_df) == 0:
@@ -449,14 +573,17 @@ def enrich_with_metadata(data_df):
     if translation_map:
         data_df = apply_translations(data_df, translation_map)
     
-    # NOTE: DOKOB/OBJKY are now fetched from API ObjectlinksSet during Execute phase
-    # No DIL.DRAD query needed here - just initialize empty columns
-    data_df['source_dokob'] = None
-    data_df['source_objky'] = None
+    # Preserve source_dokob/source_objky from Excel/SQL if present, otherwise init empty
+    if 'source_dokob' not in data_df.columns:
+        data_df['source_dokob'] = None
+    if 'source_objky' not in data_df.columns:
+        data_df['source_objky'] = None
     
     # Initialize target DOKOB/OBJKY columns (will be filled when mappings are uploaded for this batch)
-    data_df['target_dokob'] = None
-    data_df['target_objky'] = None
+    if 'target_dokob' not in data_df.columns:
+        data_df['target_dokob'] = None
+    if 'target_objky' not in data_df.columns:
+        data_df['target_objky'] = None
     
     # Document status: initialize if not already provided (from Excel or SQL query)
     if 'source_document_status' not in data_df.columns:
@@ -470,6 +597,9 @@ def enrich_with_metadata(data_df):
     # Enrich with file sizes from DIL.DMS_FILE_SIZE
     data_df = enrich_file_sizes(data_df)
     
+    # Enrich with descriptions from DIL.DRAT (SAP document text table)
+    data_df = enrich_descriptions(data_df)
+    
     # NOTE: Filenames are now extracted from API Docpath during Execute phase
     # No DIL.DRAW query needed here - the API provides full path with extension
     data_df['source_filename'] = None
@@ -477,9 +607,14 @@ def enrich_with_metadata(data_df):
     # Compute target document numbers based on target document type
     # Rules (apply_translations above) may have already changed target_documenttype,
     # so we use the effective target type to decide:
-    # - IY1/IY2: internal numbering → target_documentnumber = None (S4 auto-generates)
-    # - Other types: preserve source document number (manual ID)
+    # - IY1/IY2 with purely numeric DOKNR → None (S4 auto-generates)
+    # - IY1/IY2 with alphanumeric DOKNR → preserve (manual override)
+    # - Other types: preserve source document number
     INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
+    
+    def _is_purely_numeric(val):
+        """Check if value is purely numeric (digits only)."""
+        return bool(val) and str(val).strip().isdigit()
     
     def compute_target_docnumber(row):
         """Determine target document number based on target type and source number."""
@@ -490,14 +625,25 @@ def enrich_with_metadata(data_df):
         
         # Check target document type (may have been mapped by rules)
         target_type = str(row.get('target_documenttype', '') or '').strip().upper()
-        if target_type in INTERNAL_NUMBERING_TYPES:
-            return None  # Internal numbering - S4 will auto-generate
         
-        # Non-internal-numbering type: preserve source document number
+        # Get source document number
         dn = row.get('documentnumber') if 'documentnumber' in row.index else None
-        if pd.isnull(dn):
+        source_nr = str(dn)[:25] if pd.notnull(dn) else None
+        
+        if target_type in INTERNAL_NUMBERING_TYPES:
+            # Internal numbering types: only preserve alphanumeric values
+            # Purely numeric → None (S4 auto-generates)
+            # Alphanumeric → preserve (manual override)
+            if source_nr and not _is_purely_numeric(source_nr):
+                # Pre-check: would sanitization leave anything useful?
+                sanitized_check, _ = sanitize_doknr(source_nr)
+                if not sanitized_check or not sanitized_check.strip():
+                    return None  # Sanitization empties this value → treat as auto-generate
+                return source_nr
             return None
-        return str(dn)[:25]
+        
+        # Non-internal-numbering type: always preserve source document number
+        return source_nr
 
     # Ensure target_documentnumber column exists
     if 'target_documentnumber' not in data_df.columns:
@@ -507,8 +653,25 @@ def enrich_with_metadata(data_df):
     if 'documentnumber' in data_df.columns or 'target_documenttype' in data_df.columns:
         data_df['target_documentnumber'] = data_df.apply(compute_target_docnumber, axis=1)
     
+    internal_mask = data_df['target_documenttype'].astype(str).str.strip().str.upper().isin(INTERNAL_NUMBERING_TYPES)
+    internal_null = (internal_mask & data_df['target_documentnumber'].isna()).sum()
+    internal_kept = (internal_mask & data_df['target_documentnumber'].notna()).sum()
     print(f"[PREPARE] target_documentnumber: {data_df['target_documentnumber'].notna().sum()} set, "
-          f"{data_df['target_documentnumber'].isna().sum()} null (internal numbering)")
+          f"{internal_null} null (numeric→auto-generate), {internal_kept} kept (alphanumeric→manual)")
+    
+    # Compute sanitized document numbers (fix slashes, umlauts, OData-unsafe chars)
+    def _sanitize_target_docnumber(val):
+        if pd.isna(val) or not str(val).strip():
+            return None
+        sanitized, _changed = sanitize_doknr(str(val))
+        if not sanitized or not sanitized.strip():
+            return None  # Sanitization emptied the value
+        return sanitized
+    
+    data_df['target_documentnumber_sanitized'] = data_df['target_documentnumber'].apply(_sanitize_target_docnumber)
+    changed_count = ((data_df['target_documentnumber'].notna()) & 
+                     (data_df['target_documentnumber_sanitized'] != data_df['target_documentnumber'])).sum()
+    print(f"[PREPARE] target_documentnumber_sanitized: {changed_count} values changed by sanitization")
     
     # Clean up any duplicate columns (can occur from multiple merges)
     if data_df.columns.duplicated().any():
@@ -520,12 +683,62 @@ def enrich_with_metadata(data_df):
 
 
 def prepare_staging_records(data_df, batch_id, source_file_name=None):
-    """Transform source data into staging records format."""
-    staging_records = []
+    """Transform source data into staging records format.
+    
+    Deduplicates by (documentnumber, documentpart, documentversion) so that
+    each unique source document produces exactly ONE staging record.
+    Multiple DOKOB/OBJKY entries for the same document are collected into
+    a JSON array in source_object_links.
+    """
+    import json
     
     current_user = http_session.get('user_email', 'system')
     
+    # --- Deduplication: collect all DOKOB/OBJKY pairs per unique document ---
+    doc_key_cols = ['documentnumber', 'documentpart', 'documentversion']
+    
+    # Build a composite key for grouping (handles NaN gracefully)
+    def _doc_key(row):
+        return (
+            str(row.get('documentnumber', '') or ''),
+            str(row.get('documentpart', '000') or '000'),
+            str(row.get('documentversion', '00') or '00'),
+        )
+    
+    # Collect all object links per unique document
+    object_links_map = {}  # doc_key -> list of unique (dokob, objky) tuples
     for _, row in data_df.iterrows():
+        key = _doc_key(row)
+        dokob = row.get('source_dokob')
+        objky = row.get('source_objky')
+        if key not in object_links_map:
+            object_links_map[key] = []
+        if pd.notnull(dokob) and pd.notnull(objky):
+            pair = (str(dokob).strip(), str(objky).strip())
+            if pair not in object_links_map[key]:  # Deduplicate (dokob, objky) pairs
+                object_links_map[key].append(pair)
+    
+    # Deduplicate DataFrame: keep first occurrence of each document
+    before_count = len(data_df)
+    data_df = data_df.drop_duplicates(subset=[c for c in doc_key_cols if c in data_df.columns], keep='first')
+    dedup_count = before_count - len(data_df)
+    if dedup_count > 0:
+        print(f"[PREPARE] Deduplicated: {before_count} → {len(data_df)} records ({dedup_count} duplicate rows removed)")
+    
+    # --- Build staging records ---
+    staging_records = []
+    
+    for _, row in data_df.iterrows():
+        key = _doc_key(row)
+        links = object_links_map.get(key, [])
+        
+        # First DOKOB/OBJKY goes into the primary columns (backward compatible)
+        first_dokob = links[0][0] if links else (str(row.get('source_dokob', '') or '').strip() or None)
+        first_objky = links[0][1] if links else (str(row.get('source_objky', '') or '').strip() or None)
+        
+        # All links as JSON array
+        links_json = json.dumps([{'dokob': d, 'objky': o} for d, o in links]) if links else None
+        
         record = {
             'batch_id': batch_id,
             'created_by': current_user,
@@ -535,9 +748,11 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'source_documentversion': row.get('documentversion', '00'),
             'source_loioid': row.get('loioid'),
             'source_description': row.get('description') or row.get('documentdescription'),
-            'source_dokob': row.get('source_dokob'),
-            'source_objky': row.get('source_objky'),
+            'source_dokob': first_dokob,
+            'source_objky': first_objky,
+            'source_object_links': links_json,
             'target_documentnumber': row.get('target_documentnumber'),
+            'target_documentnumber_sanitized': row.get('target_documentnumber_sanitized'),
             'target_documentpart': row.get('documentpart', '000'),
             'target_documenttype': row.get('documenttype', 'IY1'),
             'target_documentversion': row.get('documentversion', '00'),
@@ -556,14 +771,16 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
         }
         staging_records.append(record)
     
+    # Log object link stats
+    multi_link_count = sum(1 for links in object_links_map.values() if len(links) > 1)
+    if multi_link_count > 0:
+        print(f"[PREPARE] {multi_link_count} documents have multiple object links (stored in source_object_links)")
+    
     return pd.DataFrame(staging_records)
 
 
 def save_to_staging(staging_df, batch_id, source_file_name=None, wave=None, description=None, notes=None):
     """Save prepared records to staging database."""
-    # Ensure tables exist
-    init_staging_tables(misc_engine)
-    
     current_user = http_session.get('user_email', 'system')
     
     # Save staging records in chunks (SQL Server limit: 1000 rows per INSERT)

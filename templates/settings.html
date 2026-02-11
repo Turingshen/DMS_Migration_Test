@@ -127,13 +127,13 @@
         </div>
     </div>
 
-    <!-- SAP Direct Access Credentials (Basic Auth) -->
+    <!-- SAP System Credentials -->
     <div class="row mt-4">
         <div class="col-12">
             <div class="card">
                 <div class="card-header bg-dark text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-key"></i> SAP Direktzugang (Basic Auth)
+                        <i class="fas fa-key"></i> SAP Zugangsdaten
                         <button class="btn btn-sm btn-light float-right" onclick="loadCredentials()">
                             <i class="fas fa-sync-alt"></i> Aktualisieren
                         </button>
@@ -141,7 +141,8 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted">
-                        Zugangsdaten für SAP-Systeme mit direktem Zugang (ohne API-Gateway/OAuth).
+                        Zugangsdaten für SAP-Systeme. Bei Systemen mit <code>auth_type: basic</code> werden diese für den API-Zugriff verwendet.
+                        Bei OAuth-Systemen können optional Credentials für den Direktzugang hinterlegt werden.
                         Die Passwörter werden verschlüsselt in der Datenbank gespeichert.
                     </p>
                     
@@ -152,11 +153,123 @@
                     
                     <div id="credentialsContent" style="display: none;">
                         <div id="credentialsNoSystems" class="alert alert-info" style="display: none;">
-                            <i class="fas fa-info-circle"></i> Keine Basic-Auth-Systeme in der Konfiguration vorhanden.
+                            <i class="fas fa-info-circle"></i> Keine SAP-Systeme in der Konfiguration vorhanden.
                         </div>
                         
                         <div id="credentialsList"></div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SAP System Management -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-server"></i> SAP Systeme verwalten
+                        <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
+                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                        </button>
+                        <button class="btn btn-sm btn-light float-right" onclick="showAddSystemForm()">
+                            <i class="fas fa-plus"></i> Neues System
+                        </button>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        SAP-Systeme und deren API-Endpunkte konfigurieren. 
+                        <strong>YAML</strong> liefert die Defaults, <strong>DB-Einträge</strong> haben Vorrang.
+                        Neue Systeme werden in der Datenbank gespeichert.
+                    </p>
+
+                    <!-- Add/Edit System Form (hidden by default) -->
+                    <div id="systemFormCard" class="card mb-3 border-success" style="display: none;">
+                        <div class="card-header bg-light">
+                            <h6 class="mb-0" id="systemFormTitle"><i class="fas fa-plus"></i> Neues System anlegen</h6>
+                        </div>
+                        <div class="card-body">
+                            <form id="systemForm" onsubmit="saveSapSystem(event)">
+                                <div class="form-row">
+                                    <div class="col-md-2">
+                                        <div class="form-group">
+                                            <label>System-ID</label>
+                                            <input type="text" class="form-control" id="sysId" placeholder="z.B. zhl" 
+                                                   pattern="[a-z0-9_]+" title="Nur Kleinbuchstaben, Zahlen, Unterstrich" required>
+                                            <small class="form-text text-muted">Eindeutig, lowercase</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-group">
+                                            <label>Label</label>
+                                            <input type="text" class="form-control" id="sysLabel" 
+                                                   placeholder="z.B. ZHL Testsystem Ludwigshafen" required>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>Typ</label>
+                                            <select class="form-control" id="sysType" required>
+                                                <option value="R3">R/3</option>
+                                                <option value="S4">S/4</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-group">
+                                            <label>Host</label>
+                                            <input type="text" class="form-control" id="sysHost" 
+                                                   placeholder="z.B. qa-sap.api.basf.com:443">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>Auth</label>
+                                            <select class="form-control" id="sysAuth">
+                                                <option value="oauth">OAuth</option>
+                                                <option value="basic">Basic</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <div class="form-group">
+                                            <label>API-Key</label>
+                                            <input type="text" class="form-control" id="sysApiKey" placeholder="Optional">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- APIs for this system -->
+                                <div class="mb-3">
+                                    <label><strong><i class="fas fa-plug"></i> API-Endpunkte</strong></label>
+                                    <div id="systemApisEditor">
+                                        <!-- Dynamic API rows added here -->
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addApiRow()">
+                                        <i class="fas fa-plus"></i> API hinzufügen
+                                    </button>
+                                </div>
+
+                                <div class="form-group mb-0">
+                                    <button type="submit" class="btn btn-success mr-1">
+                                        <i class="fas fa-save"></i> Speichern
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="hideSystemForm()">
+                                        Abbrechen
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div id="sapSystemsLoading" class="text-center py-3">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p class="mt-2">Lade SAP-Systeme...</p>
+                    </div>
+                    
+                    <div id="sapSystemsList" style="display: none;"></div>
                 </div>
             </div>
         </div>
@@ -221,6 +334,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateThroughput();
     loadPacingStats();
     loadCredentials();
+    loadSapSystems();
     
     document.getElementById('maxWorkers').addEventListener('input', updateThroughput);
     document.getElementById('pacingSeconds').addEventListener('input', updateThroughput);
@@ -406,6 +520,14 @@ function loadCredentials() {
                     ? '<span class="badge badge-success"><i class="fas fa-check"></i> Konfiguriert</span>'
                     : '<span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> Nicht konfiguriert</span>';
                 
+                const typeBadge = sys.system_type === 'R3'
+                    ? '<span class="badge badge-info ml-1">R/3 Source</span>'
+                    : '<span class="badge badge-primary ml-1">S/4 Target</span>';
+                
+                const authBadge = sys.auth_type === 'basic'
+                    ? '<span class="badge badge-dark ml-1">Basic Auth</span>'
+                    : '<span class="badge badge-secondary ml-1">OAuth</span>';
+                
                 const userInfo = sys.has_credentials
                     ? `<span class="text-muted">Benutzer: <strong>${sys.username}</strong></span>
                        <span class="text-muted ml-3">Aktualisiert: ${sys.updated_at ? new Date(sys.updated_at).toLocaleString('de-DE') : '-'}</span>
@@ -416,6 +538,7 @@ function loadCredentials() {
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span>
                             <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
+                            ${typeBadge}${authBadge}
                             <small class="text-muted ml-2">${sys.system_label}</small>
                         </span>
                         ${statusBadge}
@@ -563,6 +686,316 @@ function deleteCredential(systemId) {
         .then(data => {
             if (data.success) {
                 loadCredentials();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(error => alert('Fehler: ' + error));
+}
+
+// ─── SAP System Management ──────────────────────────────────────────
+
+let editingSystemId = null;
+
+function loadSapSystems() {
+    document.getElementById('sapSystemsLoading').style.display = 'block';
+    document.getElementById('sapSystemsList').style.display = 'none';
+    
+    fetch('/sap-systems')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('sapSystemsLoading').style.display = 'none';
+            document.getElementById('sapSystemsList').style.display = 'block';
+            
+            if (!data.success || !data.systems || data.systems.length === 0) {
+                document.getElementById('sapSystemsList').innerHTML = 
+                    '<div class="alert alert-info"><i class="fas fa-info-circle"></i> Keine SAP-Systeme konfiguriert.</div>';
+                return;
+            }
+
+            const container = document.getElementById('sapSystemsList');
+            container.innerHTML = '';
+            
+            data.systems.forEach(sys => {
+                const card = document.createElement('div');
+                card.className = 'card mb-3';
+                
+                const typeBadge = sys.system_type === 'R3'
+                    ? '<span class="badge badge-info">R/3 Source</span>'
+                    : '<span class="badge badge-primary">S/4 Target</span>';
+                
+                const sourceBadge = sys.source === 'yaml' 
+                    ? '<span class="badge badge-secondary ml-1" title="Aus config-env.yml">YAML</span>'
+                    : sys.source === 'db+yaml'
+                    ? '<span class="badge badge-warning ml-1" title="YAML + DB Override">DB+YAML</span>'
+                    : '<span class="badge badge-success ml-1" title="Nur in Datenbank">DB</span>';
+                
+                const authBadge = sys.auth_type === 'basic'
+                    ? '<span class="badge badge-dark ml-1">Basic</span>'
+                    : '<span class="badge badge-secondary ml-1">OAuth</span>';
+
+                // Build APIs table
+                let apisHtml = '';
+                if (sys.apis && sys.apis.length > 0) {
+                    apisHtml = '<table class="table table-sm table-bordered mt-2 mb-0"><thead class="thead-light"><tr>' +
+                        '<th>API</th><th>Label</th><th>Base URL</th><th>Quelle</th><th></th></tr></thead><tbody>';
+                    sys.apis.forEach(api => {
+                        const apiSourceBadge = api.source === 'db' 
+                            ? '<span class="badge badge-success">DB</span>' 
+                            : '<span class="badge badge-secondary">YAML</span>';
+                        apisHtml += `<tr>
+                            <td><code>${api.api_name}</code></td>
+                            <td>${api.api_label || ''}</td>
+                            <td><small class="text-monospace">${api.base_url}</small></td>
+                            <td>${apiSourceBadge}</td>
+                            <td>
+                                <button class="btn btn-xs btn-outline-danger" title="API entfernen"
+                                        onclick="deleteSapApi('${sys.system_id}', '${api.api_name}')">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+                    apisHtml += '</tbody></table>';
+                } else {
+                    apisHtml = '<small class="text-muted">Keine APIs konfiguriert</small>';
+                }
+
+                // Add API inline form
+                const addApiFormId = 'add-api-' + sys.system_id;
+                const addApiHtml = `
+                    <div id="${addApiFormId}" class="form-row mt-2" style="display:none;">
+                        <div class="col-md-2">
+                            <input type="text" class="form-control form-control-sm" id="new-api-name-${sys.system_id}" placeholder="API Name">
+                        </div>
+                        <div class="col-md-2">
+                            <input type="text" class="form-control form-control-sm" id="new-api-label-${sys.system_id}" placeholder="Label">
+                        </div>
+                        <div class="col-md-5">
+                            <input type="text" class="form-control form-control-sm" id="new-api-url-${sys.system_id}" placeholder="Base URL">
+                        </div>
+                        <div class="col-md-3">
+                            <button class="btn btn-sm btn-success mr-1" onclick="saveNewApi('${sys.system_id}')">
+                                <i class="fas fa-check"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('${addApiFormId}').style.display='none'">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>`;
+
+                card.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center py-2">
+                        <span>
+                            <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
+                            ${typeBadge}${authBadge}${sourceBadge}
+                            <small class="text-muted ml-2">${sys.system_label}</small>
+                        </span>
+                        <span>
+                            <small class="text-muted mr-2">${sys.host || ''}</small>
+                            <button class="btn btn-xs btn-outline-primary" onclick="editSystem('${sys.system_id}')" title="Bearbeiten">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            ${sys.source !== 'yaml' ? `
+                                <button class="btn btn-xs btn-outline-danger ml-1" onclick="deleteSapSystem('${sys.system_id}')" title="Deaktivieren">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            ` : ''}
+                        </span>
+                    </div>
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <small><strong>API-Endpunkte:</strong></small>
+                            <button class="btn btn-xs btn-outline-success" onclick="document.getElementById('${addApiFormId}').style.display='flex'">
+                                <i class="fas fa-plus"></i> API
+                            </button>
+                        </div>
+                        ${apisHtml}
+                        ${addApiHtml}
+                        ${sys.api_key_masked ? `<small class="text-muted mt-1 d-block">API-Key: <code>${sys.api_key_masked}</code></small>` : ''}
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        })
+        .catch(error => {
+            console.error('Error loading SAP systems:', error);
+            document.getElementById('sapSystemsLoading').style.display = 'none';
+            document.getElementById('sapSystemsList').style.display = 'block';
+            document.getElementById('sapSystemsList').innerHTML = 
+                '<div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> ' + error + '</div>';
+        });
+}
+
+function showAddSystemForm() {
+    editingSystemId = null;
+    document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-plus"></i> Neues System anlegen';
+    document.getElementById('sysId').value = '';
+    document.getElementById('sysId').readOnly = false;
+    document.getElementById('sysLabel').value = '';
+    document.getElementById('sysType').value = 'R3';
+    document.getElementById('sysHost').value = '';
+    document.getElementById('sysAuth').value = 'oauth';
+    document.getElementById('sysApiKey').value = '';
+    document.getElementById('systemApisEditor').innerHTML = '';
+    document.getElementById('systemFormCard').style.display = 'block';
+    document.getElementById('sysId').focus();
+}
+
+function editSystem(systemId) {
+    // Load system data and populate form
+    fetch('/sap-systems')
+        .then(r => r.json())
+        .then(data => {
+            const sys = data.systems.find(s => s.system_id === systemId);
+            if (!sys) return;
+            
+            editingSystemId = systemId;
+            document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-edit"></i> System bearbeiten: ' + systemId.toUpperCase();
+            document.getElementById('sysId').value = sys.system_id;
+            document.getElementById('sysId').readOnly = true;
+            document.getElementById('sysLabel').value = sys.system_label;
+            document.getElementById('sysType').value = sys.system_type;
+            document.getElementById('sysHost').value = sys.host || '';
+            document.getElementById('sysAuth').value = sys.auth_type || 'oauth';
+            document.getElementById('sysApiKey').value = sys.api_key || '';
+            
+            // Populate APIs
+            const apisDiv = document.getElementById('systemApisEditor');
+            apisDiv.innerHTML = '';
+            (sys.apis || []).forEach(api => {
+                addApiRow(api.api_name, api.api_label, api.base_url);
+            });
+            
+            document.getElementById('systemFormCard').style.display = 'block';
+        });
+}
+
+function hideSystemForm() {
+    document.getElementById('systemFormCard').style.display = 'none';
+    editingSystemId = null;
+}
+
+function addApiRow(name, label, url) {
+    const container = document.getElementById('systemApisEditor');
+    const idx = container.children.length;
+    const row = document.createElement('div');
+    row.className = 'form-row mb-1 api-row';
+    row.innerHTML = `
+        <div class="col-md-2">
+            <input type="text" class="form-control form-control-sm api-name" value="${name || ''}" placeholder="Name (z.B. document)">
+        </div>
+        <div class="col-md-2">
+            <input type="text" class="form-control form-control-sm api-label" value="${label || ''}" placeholder="Label">
+        </div>
+        <div class="col-md-7">
+            <input type="text" class="form-control form-control-sm api-url" value="${url || ''}" placeholder="Base URL">
+        </div>
+        <div class="col-md-1">
+            <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.api-row').remove()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    container.appendChild(row);
+}
+
+function saveSapSystem(event) {
+    event.preventDefault();
+    
+    const systemId = document.getElementById('sysId').value.trim().toLowerCase();
+    const systemLabel = document.getElementById('sysLabel').value.trim();
+    const systemType = document.getElementById('sysType').value;
+    const host = document.getElementById('sysHost').value.trim();
+    const authType = document.getElementById('sysAuth').value;
+    const apiKey = document.getElementById('sysApiKey').value.trim();
+    
+    if (!systemId || !systemLabel) {
+        alert('System-ID und Label sind erforderlich');
+        return;
+    }
+    
+    // Collect APIs from form
+    const apis = [];
+    document.querySelectorAll('#systemApisEditor .api-row').forEach(row => {
+        const name = row.querySelector('.api-name').value.trim();
+        const label = row.querySelector('.api-label').value.trim();
+        const url = row.querySelector('.api-url').value.trim();
+        if (name && url) {
+            apis.push({ api_name: name, api_label: label || name, base_url: url });
+        }
+    });
+    
+    fetch('/sap-systems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            system_id: systemId, system_label: systemLabel, system_type: systemType,
+            host: host, auth_type: authType, api_key: apiKey, verify_ssl: true, apis: apis
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            hideSystemForm();
+            loadSapSystems();
+            loadCredentials();  // Refresh credentials list too (new system might appear)
+        } else {
+            alert('Fehler: ' + data.error);
+        }
+    })
+    .catch(error => alert('Fehler: ' + error));
+}
+
+function deleteSapSystem(systemId) {
+    if (!confirm('System ' + systemId.toUpperCase() + ' wirklich deaktivieren? (YAML-Defaults bleiben erhalten)')) return;
+    
+    fetch('/sap-systems/' + systemId, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadSapSystems();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(error => alert('Fehler: ' + error));
+}
+
+function saveNewApi(systemId) {
+    const name = document.getElementById('new-api-name-' + systemId).value.trim();
+    const label = document.getElementById('new-api-label-' + systemId).value.trim();
+    const url = document.getElementById('new-api-url-' + systemId).value.trim();
+    
+    if (!name || !url) {
+        alert('API Name und Base URL sind erforderlich');
+        return;
+    }
+    
+    fetch('/sap-systems/' + systemId + '/apis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_name: name, api_label: label || name, base_url: url })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            loadSapSystems();
+        } else {
+            alert('Fehler: ' + data.error);
+        }
+    })
+    .catch(error => alert('Fehler: ' + error));
+}
+
+function deleteSapApi(systemId, apiName) {
+    if (!confirm('API "' + apiName + '" von ' + systemId.toUpperCase() + ' entfernen?')) return;
+    
+    fetch('/sap-systems/' + systemId + '/apis/' + apiName, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadSapSystems();
             } else {
                 alert('Fehler: ' + data.error);
             }

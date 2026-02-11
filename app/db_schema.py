@@ -21,10 +21,12 @@ CREATE TABLE dbo.migration_staging (
     source_description NVARCHAR(255),
     source_dokob VARCHAR(10),
     source_objky VARCHAR(100),
+    source_object_links NVARCHAR(MAX),
     source_document_status VARCHAR(20),
     
     -- Target document identifiers (computed from source)
     target_documentnumber VARCHAR(25),
+    target_documentnumber_sanitized NVARCHAR(25),
     target_documentpart VARCHAR(3),
     target_documenttype VARCHAR(10),
     target_documentversion VARCHAR(2),
@@ -227,6 +229,45 @@ CREATE TABLE dbo.sap_credentials (
 );
 """
 
+CREATE_SAP_SYSTEMS_TABLE = """
+CREATE TABLE dbo.sap_systems (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    system_id VARCHAR(50) NOT NULL UNIQUE,     -- e.g. 'zhl', 'zvfr3'
+    system_label NVARCHAR(200) NOT NULL,       -- e.g. 'ZHL Testsystem Ludwigshafen'
+    system_type VARCHAR(10) NOT NULL,          -- 'R3' or 'S4'
+    host VARCHAR(255),                         -- e.g. 'qa-sap.api.basf.com:443'
+    auth_type VARCHAR(20) DEFAULT 'oauth',     -- 'oauth' or 'basic'
+    api_key VARCHAR(255),                      -- X-API-Key (for oauth systems)
+    verify_ssl BIT DEFAULT 1,                  -- SSL certificate verification
+    active BIT DEFAULT 1,
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    created_by VARCHAR(100),
+    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+    updated_by VARCHAR(100),
+    
+    INDEX idx_system_id (system_id),
+    INDEX idx_system_type (system_type),
+    INDEX idx_active (active)
+);
+"""
+
+CREATE_SAP_SYSTEM_APIS_TABLE = """
+CREATE TABLE dbo.sap_system_apis (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    system_id VARCHAR(50) NOT NULL,            -- FK to sap_systems.system_id
+    api_name VARCHAR(50) NOT NULL,             -- e.g. 'document', 'attachment', 'equipment'
+    api_label NVARCHAR(100),                   -- e.g. 'Document', 'Attachment'
+    base_url VARCHAR(500) NOT NULL,            -- Full base URL for the API
+    active BIT DEFAULT 1,
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+    
+    CONSTRAINT UQ_system_api UNIQUE (system_id, api_name),
+    INDEX idx_system_id (system_id),
+    INDEX idx_active (active)
+);
+"""
+
 def init_staging_tables(engine):
     """Initialize migration staging tables if they don't exist."""
     with engine.begin() as con:
@@ -423,6 +464,26 @@ def init_staging_tables(engine):
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add ablage column: {e}")
 
+        # Sanitized document number (DOKNR with slashes, umlauts, etc. fixed)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'target_documentnumber_sanitized') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_documentnumber_sanitized NVARCHAR(25) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has target_documentnumber_sanitized column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add target_documentnumber_sanitized column: {e}")
+
+        # Source object links (JSON array of all DOKOB/OBJKY pairs for a document)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'source_object_links') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD source_object_links NVARCHAR(MAX) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has source_object_links column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add source_object_links column: {e}")
+
         # Check and create sap_credentials table (encrypted Basic Auth storage)
         check_credentials = text("""
         SELECT COUNT(*) as cnt 
@@ -435,3 +496,29 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created sap_credentials table")
         else:
             print("[DB_INIT] sap_credentials table already exists")
+
+        # Check and create sap_systems table
+        check_sap_systems = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'sap_systems'
+        """)
+        result = con.execute(check_sap_systems).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_SAP_SYSTEMS_TABLE))
+            print("[DB_INIT] Created sap_systems table")
+        else:
+            print("[DB_INIT] sap_systems table already exists")
+
+        # Check and create sap_system_apis table
+        check_sap_apis = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'sap_system_apis'
+        """)
+        result = con.execute(check_sap_apis).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_SAP_SYSTEM_APIS_TABLE))
+            print("[DB_INIT] Created sap_system_apis table")
+        else:
+            print("[DB_INIT] sap_system_apis table already exists")

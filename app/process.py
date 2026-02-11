@@ -55,12 +55,18 @@ def get_target_system(session_snapshot=None):
 
 
 def get_systems_by_type():
-    """Return dict of source (R3) and target (S4) system lists from config."""
+    """Return dict of source (R3) and target (S4) system lists from config.
+    
+    Each system entry contains:
+      - label: human-readable system name
+      - auth_type: 'oauth' (default) or 'basic'
+    """
     source_systems = {}  # R3 systems
     target_systems = {}  # S4 systems
     config = cfg.config_env
     for key, value in config.items():
         if isinstance(value, dict) and 'system_label' in value and 'system_type' in value:
+            auth_type = value.get('auth_type', 'oauth')
             if value['system_type'] == 'R3':
                 source_systems[key] = value['system_label']
             elif value['system_type'] == 'S4':
@@ -490,6 +496,71 @@ def get_error_details(category):
     return descriptions.get(category, (category, ''))
 
 
+# --- DOKNR sanitization for S4 migration ---
+# OData-unsafe characters that break API URLs or key syntax
+_DOKNR_UNSAFE_CHARS = set("/'\\#()")
+
+# Umlaut / special char replacement map
+_DOKNR_CHAR_MAP = {
+    'Ä': 'AE', 'Ö': 'OE', 'Ü': 'UE', 'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'SS',
+    'İ': 'I', 'Ğ': 'G', 'Ç': 'C', 'Ş': 'S',
+    'ğ': 'g', 'ç': 'c', 'ş': 's', 'ı': 'i',
+    'Ê': 'E', 'É': 'E', 'È': 'E', 'Â': 'A', 'Á': 'A', 'À': 'A',
+    'Ô': 'O', 'Î': 'I', 'Û': 'U',
+    '廠': '_',   # Chinese chars → underscore
+    '„': '_', '"': '_', '‚': '_',  # German/typographic quotes
+}
+
+MAX_DOKNR_LEN = 25
+
+
+def sanitize_doknr(doknr):
+    """Sanitize a document number (DOKNR) for safe use in S4 OData APIs.
+    
+    Handles the critical cases that cause API failures:
+    1. Leading/trailing whitespace  → strip
+    2. Slashes /                    → replace with -
+    3. Quotes ', backslash, #, ()  → remove (OData-unsafe)
+    4. Umlauts ÄÖÜß, Turkish İĞÇŞ → transliterate (avoids UTF-8 byte-length issues)
+    5. Truncate to 25 chars         → CHAR(25) field limit
+    
+    Returns the original value unchanged if no sanitization is needed.
+    Returns (sanitized_value, changed: bool) tuple.
+    """
+    if not doknr:
+        return doknr, False
+    
+    original = doknr
+    result = doknr.strip()
+    
+    # Replace umlauts / special chars via mapping
+    for old_char, new_chars in _DOKNR_CHAR_MAP.items():
+        if old_char in result:
+            result = result.replace(old_char, new_chars)
+    
+    # Replace slashes with dash (preserves readability: PB/V107 → PB-V107)
+    result = result.replace('/', '-')
+    
+    # Remove OData-unsafe characters: ' \ # ( )
+    result = ''.join(c for c in result if c not in {"'", '\\', '#', '(', ')'})
+    
+    # Collapse multiple dashes/underscores
+    while '--' in result:
+        result = result.replace('--', '-')
+    while '__' in result:
+        result = result.replace('__', '_')
+    
+    # Strip leading/trailing dashes/underscores that may have appeared
+    result = result.strip('-_')
+    
+    # Truncate to 25 chars
+    if len(result) > MAX_DOKNR_LEN:
+        result = result[:MAX_DOKNR_LEN].rstrip('-_')
+    
+    changed = result != original
+    return result, changed
+
+
 def _sanitize_filename(name):
     """Replace forbidden characters in filenames with underscore.
     Keeps extension; collapsing multiple consecutive underscores into one for readability.
@@ -597,20 +668,33 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
                 first_desc = descriptions[0]
                 primary_description = first_desc.get('Dktxt') or first_desc.get('Description') or first_desc.get('DocumentDescription')
         
+        # Also get document-level description from parent entity (ET_DOCUMENT)
+        parent_description = None
+        try:
+            parent_desc_val = full_raw['d'].get('Description')
+            if isinstance(parent_desc_val, str) and parent_desc_val.strip():
+                parent_description = parent_desc_val.strip()
+        except (KeyError, TypeError, AttributeError):
+            pass
+        
         # list of documents
         for item in data:
             item.pop('__metadata')
-            # Attempt to inject a generic 'DocumentDescription' if present in parent structures or item itself
-            # Common field paths: item['DocumentDescription'], item['Description'], etc.
+            # Description priority:
+            #   1) DESCRIPTIONSSet primary_description (best: multi-language document description)
+            #   2) Parent ET_DOCUMENT Description
+            #   3) File-level Description (often contains filename/GUID – last resort)
             possible_desc = None
-            for cand_key in ['DocumentDescription', 'Description', 'DocDescription', 'DOCUMENTDESCRIPTION']:
-                cand_val = item.get(cand_key)
-                if isinstance(cand_val, str) and cand_val.strip():
-                    possible_desc = cand_val.strip()
-                    break
-            # Use primary description from DESCRIPTIONSSet if available
-            if not possible_desc and primary_description:
+            if primary_description:
                 possible_desc = primary_description
+            elif parent_description:
+                possible_desc = parent_description
+            else:
+                for cand_key in ['DocumentDescription', 'Description', 'DocDescription', 'DOCUMENTDESCRIPTION']:
+                    cand_val = item.get(cand_key)
+                    if isinstance(cand_val, str) and cand_val.strip():
+                        possible_desc = cand_val.strip()
+                        break
             if possible_desc:
                 item['DocumentDescription'] = possible_desc  # normalize
             

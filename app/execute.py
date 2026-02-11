@@ -36,6 +36,7 @@ from app.process import (
     _sanitize_filename,
     _classify_error,
     get_error_description,
+    sanitize_doknr,
     MAX_API_WORKERS,
     MAX_DESC_LEN,
     read_sap_system,
@@ -101,6 +102,68 @@ def get_filename_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> st
     return ''
 
 
+def get_filename_from_dms_doc_files(doknr: str, dokar: str, dokvr: str, doktl: str, file_index: int = 0) -> str:
+    """
+    Fallback: Get filename with extension from DIL.DMS_DOC_FILES.
+    Used when API Docpath contains a GUID (KPRO files) without file extension.
+    
+    DMS_DOC_FILES has per-file records with:
+      - FILENAME: real filename (e.g. '15B 100_2676.JPG')
+      - DAPPL: file application/type (e.g. 'JPG', 'PDF', 'XLS')
+      - FILE_IDX: 1-based file index within the document
+    
+    Args:
+        doknr: Document number (25 chars, e.g. '0000000000000010002006217')
+        dokar: Document type (e.g. 'IY1')
+        dokvr: Document version (e.g. '00')
+        doktl: Document part (e.g. '000')
+        file_index: 0-based file index from the API loop (mapped to FILE_IDX = file_index + 1)
+    
+    Returns:
+        Filename with extension, or empty string if not found.
+    """
+    if not DIL_AVAILABLE or not dil_engine:
+        return ''
+    
+    try:
+        # FILE_IDX in DMS_DOC_FILES is 1-based
+        file_idx = file_index + 1
+        query = text("""
+            SELECT FILENAME, DAPPL
+            FROM DIL.DMS_DOC_FILES
+            WHERE DOKNR = :doknr
+              AND DOKAR = :dokar
+              AND DOKVR = :dokvr
+              AND DOKTL = :doktl
+              AND FILE_IDX = :file_idx
+        """)
+        with dil_engine.begin() as con:
+            result = con.execute(query, {
+                'doknr': doknr,
+                'dokar': dokar,
+                'dokvr': str(dokvr).zfill(2),
+                'doktl': str(doktl).zfill(3),
+                'file_idx': file_idx
+            }).fetchone()
+        
+        if result:
+            filename = str(result[0] or '').strip()
+            dappl = str(result[1] or '').strip()
+            
+            # Prefer FILENAME if it has an extension
+            if filename and '.' in filename:
+                return filename
+            # Construct from DAPPL if available (e.g. append .pdf)
+            if dappl and filename:
+                return f"{filename}.{dappl.lower()}"
+            if dappl:
+                return f"document.{dappl.lower()}"
+    except Exception as e:
+        print(f"[WARN] DMS_DOC_FILES fallback failed: {e}")
+    
+    return ''
+
+
 def has_valid_extension(filename: str) -> bool:
     """Check if filename has a valid file extension (not just numbers)."""
     if not filename or '.' not in filename:
@@ -141,6 +204,8 @@ def warmup_api(session_snapshot, first_loio_id=None):
     Send warmup requests to wake up the API before starting migration.
     This helps avoid initial 401/403/500 errors due to cold API instances.
     
+    Supports both OAuth (Bearer + API-Key) and Basic Auth source systems.
+    
     Args:
         session_snapshot: Dict with bearer_token and other auth info
         first_loio_id: Optional LOIO ID to use for warmup (from first record)
@@ -156,52 +221,41 @@ def warmup_api(session_snapshot, first_loio_id=None):
     results = []
     start_time = time.time()
     
+    source_system = session_snapshot.get('source_system', read_sap_system)
+    target_system = session_snapshot.get('target_system', write_sap_system)
+    
     for i in range(WARMUP_REQUESTS):
         try:
-            # Prepare headers with auth
-            headers = {
-                'Authorization': f"Bearer {session_snapshot.get('bearer_token')}",
-                'Accept': 'application/json',
-            }
+            # Create a temporary session for warmup
+            warmup_session = requests.Session()
             
-            # Add CSRF token if available
-            if session_snapshot.get('x_csrf_token'):
-                headers['x-csrf-token'] = session_snapshot['x_csrf_token']
-            
-            # Use cookies if available
-            cookies = session_snapshot.get('cookies', {})
-            
-            # Get target API base URL from config
-            sap_system = session_snapshot.get('sap_system', 'P')
-            target_base_url = cfg.get('sap', {}).get(sap_system, {}).get('sdm', {}).get('url', '')
-            
-            if target_base_url:
-                # Warmup request to target API (simple GET to root or health endpoint)
-                warmup_url = f"{target_base_url}"
-                response = requests.get(
-                    warmup_url, 
-                    headers=headers, 
-                    cookies=cookies,
-                    timeout=10
-                )
-                results.append({
-                    'target': 'target_api',
-                    'status': response.status_code,
-                    'ok': response.status_code in [200, 401, 403]  # Even auth errors mean API is awake
-                })
-            
-            # Optional: warmup source API if we have a LOIO
-            if first_loio_id and i == 0:
-                # Just try to get info - even if it fails, it wakes up the API
-                try:
-                    info_result = get_info(first_loio_id, session_snapshot)
+            # Try to warm up source API using prepare_session_headers (handles OAuth + Basic Auth)
+            try:
+                prepare_session_headers(warmup_session, session_snapshot, source_system)
+                source_base_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+                if source_base_url:
+                    resp = warmup_session.get(source_base_url, timeout=10)
                     results.append({
                         'target': 'source_api',
-                        'status': 'ok' if info_result else 'error',
-                        'ok': True  # Any response means API is awake
+                        'status': resp.status_code,
+                        'ok': resp.status_code in [200, 401, 403]
                     })
-                except Exception:
-                    results.append({'target': 'source_api', 'status': 'error', 'ok': True})
+            except Exception as e:
+                results.append({'target': 'source_api', 'status': str(e)[:50], 'ok': False})
+            
+            # Try to warm up target API
+            try:
+                prepare_session_headers(warmup_session, session_snapshot, target_system)
+                target_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                if target_base_url:
+                    resp = warmup_session.get(target_base_url, timeout=10)
+                    results.append({
+                        'target': 'target_api',
+                        'status': resp.status_code,
+                        'ok': resp.status_code in [200, 401, 403]
+                    })
+            except Exception as e:
+                results.append({'target': 'target_api', 'status': str(e)[:50], 'ok': False})
             
             if i < WARMUP_REQUESTS - 1:
                 time.sleep(WARMUP_DELAY)
@@ -379,6 +433,7 @@ def load_approved_records(batch_id):
             source_loioid,
             source_description,
             target_documentnumber,
+            target_documentnumber_sanitized,
             target_documentpart,
             target_documenttype,
             target_documentversion,
@@ -417,6 +472,7 @@ def load_specific_records(batch_id, record_ids):
             source_loioid,
             source_description,
             target_documentnumber,
+            target_documentnumber_sanitized,
             target_documentpart,
             target_documenttype,
             target_documentversion,
@@ -858,7 +914,8 @@ def execute_single_document(staging_record, session_snapshot):
         # Extract metadata from first document for updating staging table
         first_doc = documents[2][0] if documents[2] else {}
         doc_loioid = first_doc.get('LOIOID')
-        doc_description = first_doc.get('Description') or first_doc.get('DocumentDescription')
+        # Prefer DocumentDescription (enriched from DESCRIPTIONSSet/parent) over file-level Description
+        doc_description = first_doc.get('DocumentDescription') or first_doc.get('Description')
         doc_authgroup = first_doc.get('Authoritygroup')  # BEGRU from API
         
         # Extract ObjectlinksSet from API response (replaces DIL.DRAD query)
@@ -954,20 +1011,30 @@ def execute_single_document(staging_record, session_snapshot):
             base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
             request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
             
+            download_start = time.time()
+            logger.info(f"Downloading file {file_index} from source: LOIOID={document.get('LOIOID')}", category="READ")
+            logger.debug(f"Download URL: {request_url}", category="READ")
             try:
                 response = server_session.get(request_url, timeout=300)  # 5 min timeout for large files
             except Exception as read_ex:
+                download_elapsed = time.time() - download_start
                 error_msg = f'READ_TIMEOUT: {str(read_ex)}'
-                logger.error(f"File read timeout/error: {error_msg}", category="READ")
+                logger.error(f"File read timeout/error after {download_elapsed:.1f}s: {error_msg}", category="READ")
                 file_result = {
                     'file': document.get('LOIOID'), 
                     'status': error_msg,
-                    'error_detail': {'status_code': 0, 'detail': str(read_ex)},
+                    'error_detail': {'status_code': 0, 'detail': str(read_ex), 'elapsed_seconds': round(download_elapsed, 1)},
                     'error_category': 'TIMEOUT'
                 }
                 results.append(file_result)
                 save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue
+            
+            download_elapsed = time.time() - download_start
+            download_size = len(response.content) if response.content else 0
+            download_size_mb = download_size / 1024 / 1024
+            throughput_info = f" [{download_size_mb/download_elapsed:.1f} MB/s]" if download_elapsed > 0.1 else ""
+            logger.info(f"Download complete: {download_size:,} bytes ({download_size_mb:.2f} MB) in {download_elapsed:.1f}s{throughput_info}", category="READ")
             
             if response.status_code != 200:
                 error_info = _extract_error_fields(response)
@@ -987,6 +1054,16 @@ def execute_single_document(staging_record, session_snapshot):
                     
                     # Add hint about likely cause
                     error_info['hint'] = 'Token may have expired or API requires re-authentication. Try refreshing login.'
+                
+                # Log extra detail for 502/503/504 gateway errors on READ
+                if response.status_code in (502, 503, 504):
+                    body_preview = (response.text or '')[:500]
+                    resp_headers = dict(response.headers) if response.headers else {}
+                    logger.error(f"Gateway error on READ: {response.status_code} after {download_elapsed:.1f}s "
+                                 f"URL={request_url} body={body_preview}", category="READ")
+                    error_info['response_body_preview'] = body_preview
+                    error_info['response_headers'] = {k: v for k, v in resp_headers.items() if k.lower() in ('content-type', 'server', 'x-sap-srt-id', 'sap-message', 'retry-after')}
+                    error_info['download_elapsed_seconds'] = round(download_elapsed, 1)
                 
                 logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
                 file_result = {
@@ -1016,21 +1093,45 @@ def execute_single_document(staging_record, session_snapshot):
                 filename = 'unnamed'
             
             # CRITICAL: Check if filename has a valid extension
-            # If not, try to get the proper filename from DIL.DRAW
-            # This happens when API returns timestamp-based filenames like '1558619205557'
+            # If not, try fallbacks:
+            #   0) Wsapplication from API (DAPPL / file-type code, e.g. "PDF", "XLS")
+            #   1) DRAW.filep
+            #   2) DMS_DOC_FILES (FILENAME + DAPPL)
+            # This happens when API returns GUIDs (KPRO) or timestamps as filenames
             if not has_valid_extension(filename):
-                draw_filename = get_filename_from_draw(
-                    staging_record.get('source_documentnumber', ''),
-                    staging_record.get('source_documenttype', ''),
-                    staging_record.get('source_documentversion', ''),
-                    staging_record.get('source_documentpart', '')
-                )
-                if draw_filename and has_valid_extension(draw_filename):
-                    logger.info(f"Using DRAW fallback filename: {draw_filename} (API had: {filename})", category="READ")
-                    filename = draw_filename
+                # Fallback 0: Wsapplication from API response (available since 2026 metadata update)
+                ws_appl = (document.get('Wsapplication', '') or '').strip()
+                if ws_appl:
+                    # Wsapplication is a short code like "PDF", "XLS", "DOC" – use as extension
+                    ext = ws_appl.lower()
+                    new_filename = f"{filename}.{ext}" if filename and filename != 'unnamed' else f"document.{ext}"
+                    logger.info(f"Using Wsapplication fallback: {new_filename} (API Wsapplication={ws_appl}, original: {filename})", category="READ")
+                    filename = new_filename
                 else:
-                    # Try to guess extension from content-type header or content
-                    logger.warning(f"No valid extension found for: {filename}", category="READ")
+                    # Fallback 1: DRAW.filep (works for non-KPRO files)
+                    draw_filename = get_filename_from_draw(
+                        staging_record.get('source_documentnumber', ''),
+                        staging_record.get('source_documenttype', ''),
+                        staging_record.get('source_documentversion', ''),
+                        staging_record.get('source_documentpart', '')
+                    )
+                    if draw_filename and has_valid_extension(draw_filename):
+                        logger.info(f"Using DRAW fallback filename: {draw_filename} (API had: {filename})", category="READ")
+                        filename = draw_filename
+                    else:
+                        # Fallback 2: DMS_DOC_FILES (has real filename + DAPPL per file)
+                        dms_filename = get_filename_from_dms_doc_files(
+                            staging_record.get('source_documentnumber', ''),
+                            staging_record.get('source_documenttype', ''),
+                            staging_record.get('source_documentversion', ''),
+                            staging_record.get('source_documentpart', ''),
+                            file_index
+                        )
+                        if dms_filename and has_valid_extension(dms_filename):
+                            logger.info(f"Using DMS_DOC_FILES fallback filename: {dms_filename} (API had: {filename})", category="READ")
+                            filename = dms_filename
+                        else:
+                            logger.warning(f"No valid extension found for: {filename} (Wsapplication, DRAW and DMS_DOC_FILES fallbacks exhausted)", category="READ")
             
             # Update metadata fields in staging table (once, on first successful file read)
             if not metadata_updated:
@@ -1078,12 +1179,22 @@ def execute_single_document(staging_record, session_snapshot):
                 else:
                     logger.info(f"Source document {source_doc_number} is manually assigned. Using as target ID.", category="CREATE")
                 
-                # Prepare description
-                source_description = staging_record.get('source_description') or filename
-                if isinstance(source_description, str):
-                    source_description = source_description.strip()
-                if len(source_description) > MAX_DESC_LEN:
-                    source_description = source_description[:MAX_DESC_LEN]
+                # Prepare description — prefer live API value over stale Prepare-time value
+                # Priority: 1) doc_description (live from source API)
+                #           2) staging source_description (from Prepare / previous retry)
+                #           3) filename (last resort)
+                effective_description = doc_description or staging_record.get('source_description') or filename
+                if isinstance(effective_description, str):
+                    effective_description = effective_description.strip()
+                if not effective_description:
+                    effective_description = filename  # Safety net if all sources were whitespace-only
+                if len(effective_description) > MAX_DESC_LEN:
+                    effective_description = effective_description[:MAX_DESC_LEN]
+                
+                if doc_description and doc_description != staging_record.get('source_description'):
+                    logger.info(f"Using live API description: '{effective_description}'", category="CREATE")
+                elif not doc_description and not staging_record.get('source_description'):
+                    logger.info(f"No description available, using filename: '{effective_description}'", category="CREATE")
                 
                 # Create payload
                 doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
@@ -1095,8 +1206,8 @@ def execute_single_document(staging_record, session_snapshot):
                     'DocumentInfoRecordDocVersion': doc_version,
                     'DocumentInfoRecordDocPart': doc_part,
                     'to_DocDesc': [
-                        {'Language': 'DE', 'DocumentDescription': source_description},
-                        {'Language': 'EN', 'DocumentDescription': source_description}
+                        {'Language': 'DE', 'DocumentDescription': effective_description},
+                        {'Language': 'EN', 'DocumentDescription': effective_description}
                     ]
                 }
                 
@@ -1109,6 +1220,19 @@ def execute_single_document(staging_record, session_snapshot):
                 INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
                 target_has_internal_numbering = doc_type in INTERNAL_NUMBERING_TYPES
                 effective_doc_number = doc_number or source_doc_number
+                
+                # Use pre-sanitized value from Prepare phase if available, else sanitize inline (safety net)
+                pre_sanitized = staging_record.get('target_documentnumber_sanitized')
+                if pre_sanitized and str(pre_sanitized).strip():
+                    original_for_log = effective_doc_number
+                    effective_doc_number = str(pre_sanitized).strip()
+                    if effective_doc_number != (doc_number or source_doc_number):
+                        logger.info(f"Using pre-sanitized DOKNR from Prepare: '{original_for_log}' → '{effective_doc_number}'", category="CREATE")
+                elif effective_doc_number:
+                    # Fallback: sanitize inline
+                    effective_doc_number, doknr_changed = sanitize_doknr(effective_doc_number)
+                    if doknr_changed:
+                        logger.info(f"Sanitized DOKNR inline (fallback): '{doc_number or source_doc_number}' → '{effective_doc_number}'", category="CREATE")
                 
                 def _is_purely_numeric(val):
                     """Check if value is purely numeric (digits only)."""
@@ -1287,16 +1411,37 @@ def execute_single_document(staging_record, session_snapshot):
                 if not current_mime_type:
                     current_mime_type = 'application/octet-stream'
                 
-                logger.info(f"Uploading file: {filename} ({file_size} bytes / {file_size_mb:.2f} MB)", category="UPLOAD")
+                logger.info(f"Uploading file: {filename} ({file_size:,} bytes / {file_size_mb:.2f} MB)", category="UPLOAD")
+                logger.info(f"Upload URL: {attachment_url}", category="UPLOAD")
+                logger.info(f"Upload headers: Content-Type={mime_type}, Slug={filename}", category="UPLOAD")
                 
                 # Upload mit Timeout: 60s base + 10s pro MB (für große Dateien)
                 upload_timeout = max(60, 60 + int(file_size_mb * 10))
+                logger.info(f"Upload timeout set to {upload_timeout}s (60 + {int(file_size_mb)}*10)", category="UPLOAD")
+                upload_start = time.time()
                 try:
                     upload_resp = server_session.post(attachment_url, data=content, timeout=upload_timeout)
+                except requests.exceptions.ConnectionError as conn_ex:
+                    upload_elapsed = time.time() - upload_start
+                    error_msg = f'UPLOAD_CONNECTION_ERROR after {upload_elapsed:.1f}s'
+                    logger.error(f"Upload connection error: {filename} ({file_size_mb:.2f} MB) after {upload_elapsed:.1f}s - {str(conn_ex)[:300]}", category="UPLOAD")
+                    file_result = {
+                        'file': filename,
+                        'status': error_msg,
+                        'error_detail': {'status_code': 0, 'detail': str(conn_ex)[:500], 'elapsed_seconds': round(upload_elapsed, 1), 'file_size_mb': round(file_size_mb, 2)},
+                        'error_category': 'CONNECTION_ERROR',
+                        'file_size': file_size,
+                        'file_size_mb': round(file_size_mb, 2),
+                        'mime_type': current_mime_type,
+                        'actual_time_seconds': round(upload_elapsed, 2)
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                    continue
                 except requests.exceptions.Timeout as timeout_ex:
-                    upload_time = time.time() - start_time
-                    error_msg = f'UPLOAD_TIMEOUT after {upload_timeout}s'
-                    logger.error(f"Upload timeout: {filename} ({file_size_mb:.2f} MB) - {error_msg}", category="UPLOAD")
+                    upload_elapsed = time.time() - upload_start
+                    error_msg = f'UPLOAD_TIMEOUT after {upload_elapsed:.1f}s (limit={upload_timeout}s)'
+                    logger.error(f"Upload timeout: {filename} ({file_size_mb:.2f} MB) after {upload_elapsed:.1f}s - {error_msg}", category="UPLOAD")
                     file_result = {
                         'file': filename,
                         'status': error_msg,
@@ -1305,15 +1450,20 @@ def execute_single_document(staging_record, session_snapshot):
                         'file_size': file_size,
                         'file_size_mb': round(file_size_mb, 2),
                         'mime_type': current_mime_type,
-                        'actual_time_seconds': round(upload_time, 2)
+                        'actual_time_seconds': round(upload_elapsed, 2)
                     }
                     results.append(file_result)
                     save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                     continue
                 
+                upload_elapsed = time.time() - upload_start
+                resp_headers = dict(upload_resp.headers) if upload_resp.headers else {}
+                throughput_info = f" ({file_size_mb/upload_elapsed:.1f} MB/s)" if upload_elapsed > 0.1 else ""
+                logger.info(f"Upload response: status={upload_resp.status_code} in {upload_elapsed:.1f}s{throughput_info}", category="UPLOAD")
+                
                 if upload_resp.status_code in (200, 201):
                     upload_time = time.time() - start_time  # Actual processing time (no pacing)
-                    logger.info(f"File uploaded successfully: {filename} (status {upload_resp.status_code})", category="UPLOAD")
+                    logger.info(f"File uploaded successfully: {filename} (status {upload_resp.status_code}, {upload_elapsed:.1f}s, {file_size_mb:.2f} MB)", category="UPLOAD")
                     file_result = {
                         'file': filename, 
                         'status': 'SUCCESS', 
@@ -1340,7 +1490,13 @@ def execute_single_document(staging_record, session_snapshot):
                     else:
                         if error_info.get('detail'):
                             error_msg += f": {error_info['detail'][:100]}"
-                        logger.error(f"Upload failed: {filename} - {error_msg}", category="UPLOAD", details=error_info)
+                        # Log extra detail for 502/503/504 gateway errors
+                        if upload_resp.status_code in (502, 503, 504):
+                            logger.error(f"Gateway error uploading {filename} ({file_size_mb:.2f} MB) after {upload_elapsed:.1f}s: "
+                                         f"status={upload_resp.status_code}, response_body={upload_resp.text[:500] if upload_resp.text else 'empty'}, "
+                                         f"response_headers={dict(upload_resp.headers)}",
+                                         category="UPLOAD")
+                        logger.error(f"Upload failed: {filename} ({file_size_mb:.2f} MB, {upload_elapsed:.1f}s) - {error_msg}", category="UPLOAD", details=error_info)
                     
                     file_result = {
                         'file': filename, 

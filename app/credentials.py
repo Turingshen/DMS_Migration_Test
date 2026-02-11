@@ -140,3 +140,18 @@ def list_basic_auth_systems() -> list[str]:
         if isinstance(value, dict) and value.get('auth_type') == 'basic':
             systems.append(key)
     return systems
+
+
+def list_all_sap_systems() -> list[dict]:
+    """Return list of all SAP systems with their auth type and system type."""
+    systems = []
+    config = cfg.config_env
+    for key, value in config.items():
+        if isinstance(value, dict) and 'system_label' in value and 'system_type' in value:
+            systems.append({
+                'system_id': key,
+                'system_label': value['system_label'],
+                'system_type': value['system_type'],
+                'auth_type': value.get('auth_type', 'oauth'),
+            })
+    return systems

@@ -2399,13 +2399,13 @@ def execute_migration(batch_id, record_ids=None):
             'details': all_error_details[:50]  # Limit to first 50 detailed errors
         }
         
-        # Save statistics to database
+        # Save statistics to database (separate column, not notes)
         import json
         stats_json = json.dumps(batch_stats).replace("'", "''")
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_batch
-                SET notes = '{stats_json}'
+                SET execution_stats = '{stats_json}'
                 WHERE batch_id = '{batch_id}'
             """))
         

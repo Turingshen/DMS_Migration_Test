@@ -460,6 +460,15 @@ def get_batches():
                 b.notes,
                 b.wave,
                 b.migration_phase,
+                b.estimated_duration_h,
+                ISNULL(b.task_qual_load, 0) as task_qual_load,
+                ISNULL(b.task_qual_link, 0) as task_qual_link,
+                ISNULL(b.task_prod_load, 0) as task_prod_load,
+                ISNULL(b.task_prod_link, 0) as task_prod_link,
+                b.task_qual_load_start, b.task_qual_load_dur,
+                b.task_qual_link_start, b.task_qual_link_dur,
+                b.task_prod_load_start, b.task_prod_load_dur,
+                b.task_prod_link_start, b.task_prod_link_dur,
                 COALESCE(s.total_count, b.total_records) as total_records,
                 b.approved_records,
                 COALESCE(s.executed_count, b.executed_records) as executed_records,
@@ -495,6 +504,13 @@ def get_batches():
         
         # Replace NaN/NaT with None for JSON serialization
         df = df.where(pd.notnull(df), None)
+        # Extra safety: replace any remaining NaN/inf values
+        import numpy as np
+        df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
+        # Convert date columns to string for JSON
+        for col in ['task_qual_load_start','task_qual_link_start','task_prod_load_start','task_prod_link_start']:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: str(x)[:10] if x is not None and pd.notnull(x) else None)
         batches = df.to_dict(orient='records')
         return jsonify({'success': True, 'batches': batches})
         
@@ -517,7 +533,8 @@ def get_batch_statistics():
                 executed_records,
                 successful_records,
                 failed_records,
-                notes
+                notes,
+                execution_stats
             FROM dbo.migration_batch
             WHERE batch_id = :batch_id
         """
@@ -528,12 +545,13 @@ def get_batch_statistics():
         if not result:
             return jsonify({'success': False, 'error': 'Batch not found'}), 404
         
-        # Parse notes as JSON for statistics
+        # Parse execution_stats as JSON for statistics (fall back to notes for legacy data)
         import json
         statistics = {}
-        if result.notes:
+        stats_source = result.execution_stats if hasattr(result, 'execution_stats') and result.execution_stats else result.notes
+        if stats_source:
             try:
-                statistics = json.loads(result.notes)
+                statistics = json.loads(stats_source)
             except json.JSONDecodeError:
                 pass
         
@@ -613,12 +631,15 @@ def prepare():
             file.save(filepath)
             
             # Prepare migration from file
-            result = prepare_migration(filepath, wave=wave, description=description, notes=notes)
+            # Pass session snapshot so prepare can call source API for descriptions
+            snap = dict(session)
+            result = prepare_migration(filepath, wave=wave, description=description, notes=notes, session_snapshot=snap)
         else:
             # Prepare migration from database query
             custom_query = request.form.get('custom_query', '').strip()
             query_source = request.form.get('query_source', 'dil')  # 'dil' or 'datastore'
-            result = prepare_migration(custom_query=custom_query if custom_query else None, query_source=query_source, wave=wave, description=description, notes=notes)
+            snap = dict(session)
+            result = prepare_migration(custom_query=custom_query if custom_query else None, query_source=query_source, wave=wave, description=description, notes=notes, session_snapshot=snap)
         
         if result['success']:
             return jsonify(result)
@@ -637,18 +658,94 @@ def update_batch(batch_id):
         description = data.get('description', '').strip()[:40] if data.get('description') else None
         notes = data.get('notes', '').strip() if data.get('notes') else None
         wave = data.get('wave', '').strip() if data.get('wave') else None
+        estimated_duration_h = data.get('estimated_duration_h')
+        if estimated_duration_h is not None:
+            try:
+                estimated_duration_h = float(estimated_duration_h) if estimated_duration_h != '' else None
+            except (ValueError, TypeError):
+                estimated_duration_h = None
+
+        task_qual_load = 1 if data.get('task_qual_load') else 0
+        task_qual_link = 1 if data.get('task_qual_link') else 0
+        task_prod_load = 1 if data.get('task_prod_load') else 0
+        task_prod_link = 1 if data.get('task_prod_link') else 0
+
+        # Per-task start dates and durations
+        task_qual_load_start = data.get('task_qual_load_start') or None
+        task_qual_load_dur = int(data['task_qual_load_dur']) if data.get('task_qual_load_dur') else None
+        task_qual_link_start = data.get('task_qual_link_start') or None
+        task_qual_link_dur = int(data['task_qual_link_dur']) if data.get('task_qual_link_dur') else None
+        task_prod_load_start = data.get('task_prod_load_start') or None
+        task_prod_load_dur = int(data['task_prod_load_dur']) if data.get('task_prod_load_dur') else None
+        task_prod_link_start = data.get('task_prod_link_start') or None
+        task_prod_link_dur = int(data['task_prod_link_dur']) if data.get('task_prod_link_dur') else None
         
         with misc_engine.begin() as con:
             con.execute(text("""
                 UPDATE dbo.migration_batch
                 SET description = :description,
                     notes = :notes,
-                    wave = :wave
+                    wave = :wave,
+                    estimated_duration_h = :estimated_duration_h,
+                    task_qual_load = :task_qual_load,
+                    task_qual_link = :task_qual_link,
+                    task_prod_load = :task_prod_load,
+                    task_prod_link = :task_prod_link,
+                    task_qual_load_start = :tqls, task_qual_load_dur = :tqld,
+                    task_qual_link_start = :tkls, task_qual_link_dur = :tkld,
+                    task_prod_load_start = :tpls, task_prod_load_dur = :tpld,
+                    task_prod_link_start = :tpks, task_prod_link_dur = :tpkd
                 WHERE batch_id = :batch_id
-            """), {'description': description, 'notes': notes, 'wave': wave, 'batch_id': batch_id})
+            """), {'description': description, 'notes': notes, 'wave': wave,
+                   'estimated_duration_h': estimated_duration_h,
+                   'task_qual_load': task_qual_load, 'task_qual_link': task_qual_link,
+                   'task_prod_load': task_prod_load, 'task_prod_link': task_prod_link,
+                   'tqls': task_qual_load_start, 'tqld': task_qual_load_dur,
+                   'tkls': task_qual_link_start, 'tkld': task_qual_link_dur,
+                   'tpls': task_prod_load_start, 'tpld': task_prod_load_dur,
+                   'tpks': task_prod_link_start, 'tpkd': task_prod_link_dur,
+                   'batch_id': batch_id})
         
         return jsonify({'success': True, 'message': 'Batch updated successfully'})
         
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/estimate-duration', methods=['POST'])
+def estimate_batch_duration(batch_id):
+    """Auto-calculate estimated duration based on file count and total size."""
+    try:
+        with misc_engine.begin() as con:
+            result = con.execute(text("""
+                SELECT 
+                    COUNT(*) as doc_count,
+                    COALESCE(SUM(CAST(file_size_bytes AS BIGINT)), 0) as total_bytes
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchone()
+
+            doc_count = result[0] or 0
+            total_bytes = result[1] or 0
+            total_gb = total_bytes / (1024 * 1024 * 1024)
+
+            # Estimation: ~100 docs/hour API throughput + ~2 GB/hour upload speed
+            time_by_docs = doc_count / 100.0
+            time_by_size = total_gb / 2.0
+            estimated_h = round(max(time_by_docs, time_by_size, 0.5), 1)
+
+            con.execute(text("""
+                UPDATE dbo.migration_batch
+                SET estimated_duration_h = :dur
+                WHERE batch_id = :batch_id
+            """), {'dur': estimated_h, 'batch_id': batch_id})
+
+        return jsonify({
+            'success': True,
+            'estimated_duration_h': estimated_h,
+            'doc_count': doc_count,
+            'total_gb': round(total_gb, 2)
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -5131,3 +5228,170 @@ def create_dms_migration_batch_stream():
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no'
     })
+
+
+# ========================================================================
+# Wave Plan CRUD
+# ========================================================================
+
+@migrate_bp.route('/wave-plans', methods=['GET'])
+def get_wave_plans():
+    """Get all wave plans."""
+    try:
+        with misc_engine.connect() as con:
+            # Check if table exists first
+            check = text("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='migration_wave_plan'
+            """)
+            if con.execute(check).fetchone()[0] == 0:
+                return jsonify({'success': True, 'waves': []})
+
+            result = con.execute(text("""
+                SELECT id, wave_name,
+                       qual_load_start, qual_load_end, qual_load_status,
+                       qual_link_start, qual_link_end, qual_link_status,
+                       prod_load_start, prod_load_end, prod_load_status,
+                       prod_link_start, prod_link_end, prod_link_status,
+                       notes, created_at, updated_at
+                FROM dbo.migration_wave_plan
+                ORDER BY wave_name
+            """)).fetchall()
+
+            waves = []
+            for row in result:
+                waves.append({
+                    'id': row[0],
+                    'wave_name': row[1],
+                    'qual_load_start': str(row[2]) if row[2] else None,
+                    'qual_load_end': str(row[3]) if row[3] else None,
+                    'qual_load_status': row[4] or 'vorbereitung',
+                    'qual_link_start': str(row[5]) if row[5] else None,
+                    'qual_link_end': str(row[6]) if row[6] else None,
+                    'qual_link_status': row[7] or 'vorbereitung',
+                    'prod_load_start': str(row[8]) if row[8] else None,
+                    'prod_load_end': str(row[9]) if row[9] else None,
+                    'prod_load_status': row[10] or 'vorbereitung',
+                    'prod_link_start': str(row[11]) if row[11] else None,
+                    'prod_link_end': str(row[12]) if row[12] else None,
+                    'prod_link_status': row[13] or 'vorbereitung',
+                    'notes': row[14],
+                    'created_at': str(row[15]) if row[15] else None,
+                    'updated_at': str(row[16]) if row[16] else None,
+                })
+            return jsonify({'success': True, 'waves': waves})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@migrate_bp.route('/wave-plans', methods=['POST'])
+def create_wave_plan():
+    """Create or update a wave plan."""
+    try:
+        data = request.json
+        wave_name = data.get('wave_name', '').strip()
+        if not wave_name:
+            return jsonify({'success': False, 'error': 'wave_name ist erforderlich'})
+
+        with misc_engine.begin() as con:
+            # Check if exists
+            existing = con.execute(text(
+                "SELECT id FROM dbo.migration_wave_plan WHERE wave_name = :wn"
+            ), {'wn': wave_name}).fetchone()
+
+            if existing:
+                # Update
+                con.execute(text("""
+                    UPDATE dbo.migration_wave_plan SET
+                        qual_load_start = :qls, qual_load_end = :qle, qual_load_status = :qlst,
+                        qual_link_start = :qks, qual_link_end = :qke, qual_link_status = :qkst,
+                        prod_load_start = :pls, prod_load_end = :ple, prod_load_status = :plst,
+                        prod_link_start = :pks, prod_link_end = :pke, prod_link_status = :pkst,
+                        notes = :notes, updated_at = GETUTCDATE()
+                    WHERE wave_name = :wn
+                """), {
+                    'wn': wave_name,
+                    'qls': data.get('qual_load_start') or None,
+                    'qle': data.get('qual_load_end') or None,
+                    'qlst': data.get('qual_load_status', 'vorbereitung'),
+                    'qks': data.get('qual_link_start') or None,
+                    'qke': data.get('qual_link_end') or None,
+                    'qkst': data.get('qual_link_status', 'vorbereitung'),
+                    'pls': data.get('prod_load_start') or None,
+                    'ple': data.get('prod_load_end') or None,
+                    'plst': data.get('prod_load_status', 'vorbereitung'),
+                    'pks': data.get('prod_link_start') or None,
+                    'pke': data.get('prod_link_end') or None,
+                    'pkst': data.get('prod_link_status', 'vorbereitung'),
+                    'notes': data.get('notes', ''),
+                })
+                return jsonify({'success': True, 'message': f'{wave_name} aktualisiert'})
+            else:
+                # Insert
+                con.execute(text("""
+                    INSERT INTO dbo.migration_wave_plan
+                        (wave_name, qual_load_start, qual_load_end, qual_load_status,
+                         qual_link_start, qual_link_end, qual_link_status,
+                         prod_load_start, prod_load_end, prod_load_status,
+                         prod_link_start, prod_link_end, prod_link_status, notes)
+                    VALUES
+                        (:wn, :qls, :qle, :qlst, :qks, :qke, :qkst,
+                         :pls, :ple, :plst, :pks, :pke, :pkst, :notes)
+                """), {
+                    'wn': wave_name,
+                    'qls': data.get('qual_load_start') or None,
+                    'qle': data.get('qual_load_end') or None,
+                    'qlst': data.get('qual_load_status', 'vorbereitung'),
+                    'qks': data.get('qual_link_start') or None,
+                    'qke': data.get('qual_link_end') or None,
+                    'qkst': data.get('qual_link_status', 'vorbereitung'),
+                    'pls': data.get('prod_load_start') or None,
+                    'ple': data.get('prod_load_end') or None,
+                    'plst': data.get('prod_load_status', 'vorbereitung'),
+                    'pks': data.get('prod_link_start') or None,
+                    'pke': data.get('prod_link_end') or None,
+                    'pkst': data.get('prod_link_status', 'vorbereitung'),
+                    'notes': data.get('notes', ''),
+                })
+                return jsonify({'success': True, 'message': f'{wave_name} erstellt'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@migrate_bp.route('/wave-plans/<int:wave_id>', methods=['DELETE'])
+def delete_wave_plan(wave_id):
+    """Delete a wave plan."""
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("DELETE FROM dbo.migration_wave_plan WHERE id = :id"), {'id': wave_id})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@migrate_bp.route('/wave-plans/task-status', methods=['PUT'])
+def update_wave_task_status():
+    """Update a single task status for a wave plan."""
+    try:
+        data = request.json
+        wave_id = data.get('wave_id')
+        task_field = data.get('task_field')  # e.g. 'qual_load_status'
+        new_status = data.get('status')
+
+        allowed_fields = ['qual_load_status', 'qual_link_status', 'prod_load_status', 'prod_link_status']
+        allowed_statuses = ['vorbereitung', 'arbeit', 'fertig']
+
+        if task_field not in allowed_fields:
+            return jsonify({'success': False, 'error': f'Ungültiges Feld: {task_field}'})
+        if new_status not in allowed_statuses:
+            return jsonify({'success': False, 'error': f'Ungültiger Status: {new_status}'})
+
+        with misc_engine.begin() as con:
+            con.execute(text(f"""
+                UPDATE dbo.migration_wave_plan
+                SET {task_field} = :status, updated_at = GETUTCDATE()
+                WHERE id = :id
+            """), {'status': new_status, 'id': wave_id})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})

@@ -26,20 +26,16 @@
         </a>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <div class="workflow-step active">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Anreichern &amp; Vorschau
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Vorschau und Vorbereitung
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <a href="/batch/{{ batch_id }}/object-mapping" class="workflow-step text-decoration-none" title="Objekt-Zuordnung">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Objekt-Zuordnung
+        <a href="/batch/{{ batch_id }}/object-mapping" class="workflow-step text-decoration-none" title="Objekt Link &amp; Verlinkung">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Objekt Link
         </a>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Ausführen
-        </div>
-        <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="workflowStep5">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">5</span> Verlinkung
-        </div>
+        <a href="/details?batch_id={{ batch_id }}" class="workflow-step text-decoration-none" title="Auswertung &amp; Details">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Auswertung
+        </a>
     </div>
 
     <div class="row">
@@ -119,25 +115,16 @@
                         <small id="selectionInfo" class="text-muted">0 Datensätze ausgewählt</small>
                     </div>
                     <div class="btn-group">
-                        <button onclick="window.location.href='/details?batch_id={{ batch_id }}'" class="btn btn-secondary" title="Migrationsdetails anzeigen">
-                            <i class="fas fa-list-alt"></i> Details
-                        </button>
-                        <button onclick="window.location.href='/batch/{{ batch_id }}/object-mapping'" class="btn btn-info" title="Objekt-Zuordnung für diesen Batch">
-                            <i class="fas fa-link"></i> Objekt-Zuordnung
-                        </button>
-                        
                         <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Spalten ein-/ausblenden">
                             <i class="fas fa-columns"></i> Spalten
                         </button>
                         <button onclick="refreshData()" class="btn btn-info" id="refreshDataBtn" title="Metadaten, Dateinamen abrufen und Regeln anwenden">
                             <i class="fas fa-sync-alt"></i> Daten aktualisieren
                         </button>
-                        <button onclick="excludeLargeFiles()" class="btn btn-warning" id="excludeLargeBtn" title="Dateien größer als 50MB ausschließen">
-                            <i class="fas fa-ban"></i> >50MB ausschließen
-                        </button>
-                        <button onclick="selectAll()" class="btn btn-secondary" id="selectAllBtn">
-                            <i class="fas fa-check-double"></i> Alle auswählen
-                        </button>
+                        <label class="btn btn-outline-warning mb-0" id="excludeLargeLabel" title="Dateien größer als 50MB ausschließen">
+                            <input type="checkbox" id="excludeLargeCheckbox" onchange="excludeLargeFiles(this.checked)" style="margin-right: 5px;">
+                            <i class="fas fa-ban"></i> &gt;50MB ausschließen
+                        </label>
                         <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
                             <i class="fas fa-play-circle"></i> Ausgewählte ausführen
                         </button>
@@ -152,16 +139,6 @@
                         </button>
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
                             <i class="fas fa-redo"></i> Fehler wiederholen
-                        </button>
-                        <span class="border-left mx-2" style="height:30px; display:inline-block;"></span>
-                        <button onclick="linkAll()" class="btn btn-success" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen">
-                            <i class="fas fa-link"></i> Alle verlinken
-                        </button>
-                        <button onclick="linkSelected()" class="btn btn-success" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen">
-                            <i class="fas fa-link"></i> Ausgewählte verlinken
-                        </button>
-                        <button onclick="cancelLinking()" class="btn btn-danger" id="cancelLinkBtn" style="display: none;">
-                            <i class="fas fa-stop"></i> Verlinkung abbrechen
                         </button>
                     </div>
                 </div>
@@ -1219,7 +1196,6 @@ function selectAll() {
 function updateSelectionInfo() {
     document.getElementById('selectionInfo').textContent = `${selectedRecords.size} Datensätze ausgewählt`;
     document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
-    document.getElementById('linkSelectedBtn').disabled = selectedRecords.size === 0;
 }
 
 // Progress polling for execution
@@ -1555,182 +1531,6 @@ function executeSelected() {
     });
 }
 
-// ============================================================================
-// Phase 2: Linking Functions
-// ============================================================================
-
-let linkProgressInterval = null;
-
-function startLinkProgressPolling() {
-    if (linkProgressInterval) clearInterval(linkProgressInterval);
-    linkProgressInterval = setInterval(() => {
-        fetch(`/batch/${batchId}/link-progress`)
-            .then(response => response.json())
-            .then(data => {
-                // Guard: only update UI if polling is still active (prevents race condition
-                // where an in-flight fetch resolves after stopLinkProgressPolling/hideProgressBar)
-                if (data.success && linkProgressInterval) {
-                    const pct = data.progress_pct || 0;
-                    showProgressBar();
-                    const bar = document.getElementById('progressBar');
-                    bar.style.width = pct + '%';
-                    bar.textContent = pct + '%';
-                    document.getElementById('progressStats').textContent =
-                        `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
-                    document.getElementById('progressDetails').textContent =
-                        `Phase: ${data.migration_phase || '—'}`;
-                    document.getElementById('progressETA').textContent = '';
-                }
-            })
-            .catch(() => {});
-    }, 2000);
-}
-
-function stopLinkProgressPolling() {
-    if (linkProgressInterval) {
-        clearInterval(linkProgressInterval);
-        linkProgressInterval = null;
-    }
-}
-
-function linkAll() {
-    if (!confirm('Objektlinks für alle verlinkbaren Datensätze erstellen?\n\nVoraussetzung: Upload erfolgreich, Objekt-Mapping vorhanden.')) {
-        return;
-    }
-
-    const btn = document.getElementById('linkAllBtn');
-    const cancelBtn = document.getElementById('cancelLinkBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird verlinkt...';
-    cancelBtn.style.display = 'inline-block';
-
-    startLinkProgressPolling();
-
-    fetch('/execute_linking', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_id: batchId })
-    })
-    .then(response => response.json())
-    .then(data => {
-        stopLinkProgressPolling();
-        hideProgressBar();
-        cancelBtn.style.display = 'none';
-
-        if (data.success) {
-            let msg = `Verlinkung abgeschlossen!\n\n`;
-            msg += `Gesamt: ${data.total_records}\n`;
-            msg += `Verlinkt: ${data.linked}\n`;
-            msg += `Bereits vorhanden: ${data.already_existed}\n`;
-            msg += `Fehlgeschlagen: ${data.failed}\n`;
-            msg += `Dauer: ${data.duration_formatted}`;
-            if (data.cancel_reason) msg += `\n\nHinweis: ${data.cancel_reason}`;
-            alert(msg);
-            loadRecords();
-        } else if (data.login_required) {
-            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
-            window.location.href = '/';
-        } else {
-            alert('Verlinkung fehlgeschlagen: ' + data.error);
-        }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-link"></i> Alle verlinken';
-    })
-    .catch(error => {
-        stopLinkProgressPolling();
-        hideProgressBar();
-        cancelBtn.style.display = 'none';
-        alert('Fehler bei der Verlinkung: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-link"></i> Alle verlinken';
-    });
-}
-
-function linkSelected() {
-    if (selectedRecords.size === 0) {
-        alert('Bitte Datensätze auswählen');
-        return;
-    }
-
-    if (!confirm(`Objektlinks für ${selectedRecords.size} ausgewählte Datensätze erstellen?`)) {
-        return;
-    }
-
-    const btn = document.getElementById('linkSelectedBtn');
-    btn.disabled = true;
-    btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Verlinke ${selectedRecords.size}...`;
-
-    startLinkProgressPolling();
-
-    fetch('/execute_linking_selected', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            batch_id: batchId,
-            record_ids: Array.from(selectedRecords)
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        stopLinkProgressPolling();
-        hideProgressBar();
-
-        if (data.success) {
-            let msg = `Verlinkung abgeschlossen!\n\n`;
-            msg += `Verlinkt: ${data.linked}\n`;
-            msg += `Bereits vorhanden: ${data.already_existed}\n`;
-            msg += `Fehlgeschlagen: ${data.failed}`;
-            alert(msg);
-            selectedRecords.clear();
-            loadRecords();
-        } else if (data.login_required) {
-            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
-            window.location.href = '/';
-        } else {
-            alert('Verlinkung fehlgeschlagen: ' + data.error);
-        }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-link"></i> Ausgewählte verlinken';
-    })
-    .catch(error => {
-        stopLinkProgressPolling();
-        hideProgressBar();
-        alert('Fehler bei der Verlinkung: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-link"></i> Ausgewählte verlinken';
-    });
-}
-
-function cancelLinking() {
-    if (!confirm('Verlinkung wirklich abbrechen?\n\nBereits verlinkte Datensätze bleiben erhalten.')) {
-        return;
-    }
-
-    const cancelBtn = document.getElementById('cancelLinkBtn');
-    cancelBtn.disabled = true;
-    cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird abgebrochen...';
-
-    fetch(`/batch/${batchId}/cancel-linking`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            cancelBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Abbruch angefordert...';
-        } else {
-            alert('Abbruch fehlgeschlagen: ' + data.error);
-            cancelBtn.disabled = false;
-            cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Verlinkung abbrechen';
-        }
-    })
-    .catch(error => {
-        alert('Fehler beim Abbrechen: ' + error);
-        cancelBtn.disabled = false;
-        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Verlinkung abbrechen';
-    });
-}
-
 function viewRecordDetail(recordId) {
     $('#detailModal').modal('show');
     $('#detailContent').html('<div class="text-center"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Lade Details...</p></div>');
@@ -1796,7 +1596,7 @@ function displayRecordDetail(record) {
     $('#detailContent').html(html);
 }
 
-function excludeLargeFiles() {
+function excludeLargeFiles(checked) {
     // Find records with file_size_bytes > 50MB
     const largeRecords = allRecords.filter(r => {
         const bytes = r.file_size_bytes;
@@ -1805,18 +1605,27 @@ function excludeLargeFiles() {
     
     if (largeRecords.length === 0) {
         alert('Keine Dateien größer als 50MB in diesem Batch gefunden.');
+        document.getElementById('excludeLargeCheckbox').checked = false;
         return;
     }
     
     const totalMB = largeRecords.reduce((sum, r) => sum + (r.file_size_bytes / (1024 * 1024)), 0);
     
-    if (!confirm(`${largeRecords.length} Dateien größer als 50MB ausschließen?\n\nGesamtgröße: ${totalMB.toFixed(1)} MB\n\nDiese Dateien werden als übersprungen markiert und nicht migriert.`)) {
-        return;
+    if (checked) {
+        if (!confirm(`${largeRecords.length} Dateien größer als 50MB ausschließen?\n\nGesamtgröße: ${totalMB.toFixed(1)} MB\n\nDiese Dateien werden als übersprungen markiert und nicht migriert.`)) {
+            document.getElementById('excludeLargeCheckbox').checked = false;
+            return;
+        }
+    } else {
+        if (!confirm(`${largeRecords.length} Dateien größer als 50MB wieder einschließen?`)) {
+            document.getElementById('excludeLargeCheckbox').checked = true;
+            return;
+        }
     }
     
-    const btn = document.getElementById('excludeLargeBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird ausgeschlossen...';
+    const label = document.getElementById('excludeLargeLabel');
+    const checkbox = document.getElementById('excludeLargeCheckbox');
+    checkbox.disabled = true;
     
     const recordIds = largeRecords.map(r => r.id);
     
@@ -1828,25 +1637,25 @@ function excludeLargeFiles() {
         body: JSON.stringify({ 
             batch_id: batchId,
             record_ids: recordIds,
-            skip: true,
-            reason: 'File size exceeds 50MB limit'
+            skip: checked,
+            reason: checked ? 'File size exceeds 50MB limit' : ''
         })
     })
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(`${data.updated} Datensätze als übersprungen markiert.`);
+            alert(checked ? `${data.updated} Datensätze als übersprungen markiert.` : `${data.updated} Datensätze wieder eingeschlossen.`);
             loadRecords();
         } else {
             alert('Fehler: ' + data.error);
+            checkbox.checked = !checked; // revert
         }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-ban"></i> >50MB ausschließen';
+        checkbox.disabled = false;
     })
     .catch(error => {
         alert('Fehler beim Ausschließen: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-ban"></i> >50MB ausschließen';
+        checkbox.checked = !checked; // revert
+        checkbox.disabled = false;
     });
 }
 

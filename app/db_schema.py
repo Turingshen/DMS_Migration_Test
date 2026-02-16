@@ -268,6 +268,39 @@ CREATE TABLE dbo.sap_system_apis (
 );
 """
 
+CREATE_WAVE_PLAN_TABLE = """
+CREATE TABLE dbo.migration_wave_plan (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    wave_name VARCHAR(20) NOT NULL UNIQUE,           -- e.g. 'Wave 1'
+    
+    -- Qual (Test system) - Load
+    qual_load_start DATE,
+    qual_load_end DATE,
+    qual_load_status VARCHAR(20) DEFAULT 'vorbereitung',
+    
+    -- Qual (Test system) - Verlinkung
+    qual_link_start DATE,
+    qual_link_end DATE,
+    qual_link_status VARCHAR(20) DEFAULT 'vorbereitung',
+    
+    -- Prod (Production system) - Load
+    prod_load_start DATE,
+    prod_load_end DATE,
+    prod_load_status VARCHAR(20) DEFAULT 'vorbereitung',
+    
+    -- Prod (Production system) - Verlinkung
+    prod_link_start DATE,
+    prod_link_end DATE,
+    prod_link_status VARCHAR(20) DEFAULT 'vorbereitung',
+    
+    notes NVARCHAR(MAX),
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+    
+    INDEX idx_wave_name (wave_name)
+);
+"""
+
 def init_staging_tables(engine):
     """Initialize migration staging tables if they don't exist."""
     with engine.begin() as con:
@@ -522,3 +555,82 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created sap_system_apis table")
         else:
             print("[DB_INIT] sap_system_apis table already exists")
+
+        # Add estimated_duration_h to migration_batch if not present
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'estimated_duration_h') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD estimated_duration_h FLOAT NULL;
+            """))
+            print("[DB_INIT] Ensured migration_batch has estimated_duration_h column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add estimated_duration_h column: {e}")
+
+        # Add execution_stats column (separate from user notes)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'execution_stats') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD execution_stats NVARCHAR(MAX) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_batch has execution_stats column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add execution_stats column: {e}")
+
+        # Add task assignment flags to migration_batch
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_load') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_load BIT DEFAULT 0;
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_link') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_link BIT DEFAULT 0;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_load') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_load BIT DEFAULT 0;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_link') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_link BIT DEFAULT 0;
+            """))
+            print("[DB_INIT] Ensured migration_batch has task assignment columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add task assignment columns: {e}")
+
+        # Add per-task start date and duration columns to migration_batch
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_load_start') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_load_start DATE NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_load_dur') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_load_dur INT NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_link_start') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_link_start DATE NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_qual_link_dur') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_qual_link_dur INT NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_load_start') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_load_start DATE NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_load_dur') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_load_dur INT NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_link_start') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_link_start DATE NULL;
+                IF COL_LENGTH('dbo.migration_batch', 'task_prod_link_dur') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD task_prod_link_dur INT NULL;
+            """))
+            print("[DB_INIT] Ensured migration_batch has per-task start/duration columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add per-task start/duration columns: {e}")
+
+        # Check and create wave_plan table
+        check_wave_plan = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_wave_plan'
+        """)
+        result = con.execute(check_wave_plan).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_WAVE_PLAN_TABLE))
+            # Seed default waves 0-7
+            for i in range(8):
+                con.execute(text("""
+                    INSERT INTO dbo.migration_wave_plan (wave_name)
+                    VALUES (:wn)
+                """), {'wn': f'Wave {i}'})
+            print("[DB_INIT] Created migration_wave_plan table with default waves 0-7")
+        else:
+            print("[DB_INIT] migration_wave_plan table already exists")

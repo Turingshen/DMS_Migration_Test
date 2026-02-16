@@ -303,15 +303,8 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                                 <label for="batchWave">Wave *</label>
                                 <select class="form-control" id="batchWave" name="wave" required>
                                     <option value="">-- Wave auswählen --</option>
-                                    <option value="Wave 0">Wave 0</option>
-                                    <option value="Wave 1">Wave 1</option>
-                                    <option value="Wave 2">Wave 2</option>
-                                    <option value="Wave 3">Wave 3</option>
-                                    <option value="Wave 4">Wave 4</option>
-                                    <option value="Wave 5">Wave 5</option>
-                                    <option value="Wave 6">Wave 6</option>
-                                    <option value="Wave 7">Wave 7</option>
                                 </select>
+                                <small class="form-text text-muted">Wellen werden im <a href="/">Dashboard</a> verwaltet</small>
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -487,6 +480,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load Werke + DB status for DMS tab
     loadWerke();
     loadDBStatus();
+    loadWaves();
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -647,6 +641,24 @@ function showBatchResult(success, data) {
         alertEl.innerHTML = `<i class="fas fa-exclamation-circle"></i> <strong>Fehler:</strong> ${data.error || 'Unbekannter Fehler'}`;
         details.innerHTML = '<button onclick="document.getElementById(\'resultSection\').style.display=\'none\'" class="btn btn-secondary"><i class="fas fa-redo"></i> Erneut versuchen</button>';
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Load Waves from DB
+// ═══════════════════════════════════════════════════════════════
+function loadWaves() {
+    fetch('/wave-plans')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.waves) {
+                const select = document.getElementById('batchWave');
+                select.innerHTML = '<option value="">-- Wave auswählen --</option>';
+                data.waves.forEach(w => {
+                    select.innerHTML += `<option value="${w.wave_name}">${w.wave_name}</option>`;
+                });
+            }
+        })
+        .catch(err => console.error('Error loading waves:', err));
 }
 
 // ═══════════════════════════════════════════════════════════════

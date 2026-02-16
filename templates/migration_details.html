@@ -347,6 +347,40 @@
         </div>
     </div>
     
+    <!-- Error Overview Panel -->
+    <div class="row mt-3 mb-3" id="errorOverviewRow" style="display: none;">
+        <div class="col-12">
+            <div class="card border-danger">
+                <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center" style="cursor: pointer;" onclick="toggleErrorPanel()">
+                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> Fehlerübersicht</h5>
+                    <i class="fas fa-chevron-down" id="errorPanelToggle"></i>
+                </div>
+                <div class="card-body" id="errorPanelBody" style="display: none;">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover" id="errorTable">
+                            <thead class="thead-dark">
+                                <tr>
+                                    <th>Kategorie</th>
+                                    <th>Beschreibung</th>
+                                    <th class="text-center">Anzahl</th>
+                                    <th>Aktion</th>
+                                    <th>Aktionen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="errorTableBody">
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="mt-2">
+                        <button class="btn btn-warning" onclick="retryAllErrors()" id="retryAllBtn">
+                            <i class="fas fa-redo"></i> Alle Fehler erneut versuchen
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Filter Panel -->
     <div id="filterPanel" class="filter-panel" style="display: none;">
         <div class="row">
@@ -450,6 +484,7 @@ let fileDetailsCache = {};
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     loadBatches();
+    loadErrorOverview();
     
     // Check for batch_id in URL
     const urlParams = new URLSearchParams(window.location.search);
@@ -460,7 +495,135 @@ document.addEventListener('DOMContentLoaded', function() {
             selectBatch(batchId);
         }, 500);
     }
+    
+    // Check for error_category in URL
+    const errCat = urlParams.get('error_category');
+    if (errCat) {
+        // Auto-open error panel
+        const panel = document.getElementById('errorPanelBody');
+        if (panel) panel.style.display = 'block';
+        const icon = document.getElementById('errorPanelToggle');
+        if (icon) icon.className = 'fas fa-chevron-up';
+    }
 });
+
+// ========================================================================
+// Error Overview (cross-batch aggregation)
+// ========================================================================
+const ERROR_DETAILS = {
+    'API_KEY_INVALID': { desc: 'API-Key ungültig', action: 'API im APIM freischalten' },
+    'TOKEN_EXPIRED': { desc: 'OAuth Token abgelaufen', action: 'Neu einloggen' },
+    'TOKEN_INVALID': { desc: 'OAuth Token ungültig', action: 'Neu einloggen' },
+    'CSRF_FAILED': { desc: 'CSRF Token Fehler', action: 'Session erneuern' },
+    'SOURCE_NOT_FOUND': { desc: 'Dokument nicht gefunden', action: 'Quelldaten prüfen' },
+    'SOURCE_EMPTY': { desc: 'Container ohne Dateien', action: 'Erwartet - leer' },
+    'SOURCE_READ_ERROR': { desc: 'Lesefehler im Quellsystem', action: 'R/3 API prüfen' },
+    'TARGET_CREATE_FAILED': { desc: 'Anlage fehlgeschlagen', action: 'SAP Log prüfen' },
+    'TARGET_EXISTS': { desc: 'Dokument existiert bereits', action: 'Zieldaten prüfen' },
+    'TARGET_LOCKED': { desc: 'Dokument gesperrt', action: 'Sperre aufheben' },
+    'UPLOAD_SIZE_EXCEEDED': { desc: 'Datei zu groß', action: 'Datei aufteilen' },
+    'UPLOAD_TIMEOUT': { desc: 'Upload Timeout', action: 'Später erneut versuchen' },
+    'GATEWAY_TIMEOUT': { desc: 'API Gateway Timeout (504)', action: 'Später erneut versuchen' },
+    'RATE_LIMITED': { desc: 'API Rate Limit erreicht', action: 'Warten und erneut versuchen' },
+    'SERVER_ERROR': { desc: 'SAP Serverfehler (5xx)', action: 'SAP Support kontaktieren' },
+    'BAD_REQUEST': { desc: 'Ungültige Anfrage (400)', action: 'Daten validieren' },
+    'UNKNOWN': { desc: 'Unbekannter Fehler', action: 'Log prüfen' }
+};
+
+function getErrorDetails(category) {
+    return ERROR_DETAILS[category] || { desc: category, action: 'Details prüfen' };
+}
+
+async function loadErrorOverview() {
+    try {
+        const response = await fetch('/error_overview');
+        const data = await response.json();
+        
+        const row = document.getElementById('errorOverviewRow');
+        const tbody = document.getElementById('errorTableBody');
+        
+        if (data.success && data.errors && data.errors.length > 0) {
+            row.style.display = 'block';
+            
+            tbody.innerHTML = data.errors.map(err => {
+                const details = getErrorDetails(err.category);
+                const categoryClass = getCategoryClass(err.category);
+                return `
+                    <tr>
+                        <td><span class="badge ${categoryClass}">${err.category}</span></td>
+                        <td>${details.desc}</td>
+                        <td class="text-center"><strong>${err.count}</strong></td>
+                        <td><small class="text-info">${details.action}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-warning" onclick="retryByCategory('${err.category}')" title="Erneut versuchen">
+                                <i class="fas fa-redo"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+            document.getElementById('retryAllBtn').innerHTML = 
+                '<i class="fas fa-redo"></i> Alle ' + data.total_errors + ' Fehler erneut versuchen';
+        } else {
+            row.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error loading error overview:', error);
+    }
+}
+
+function getCategoryClass(category) {
+    if (category.includes('TOKEN') || category.includes('API_KEY') || category.includes('CSRF')) return 'badge-danger';
+    if (category.includes('SOURCE')) return 'badge-warning';
+    if (category.includes('TARGET')) return 'badge-info';
+    if (category.includes('TIMEOUT') || category.includes('RATE')) return 'badge-secondary';
+    if (category.includes('SERVER')) return 'badge-dark';
+    return 'badge-danger';
+}
+
+async function retryByCategory(category) {
+    if (!confirm('Alle "' + category + '" Fehler erneut versuchen?')) return;
+    try {
+        const response = await fetch('/retry_by_category', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: category })
+        });
+        const data = await response.json();
+        if (data.success) {
+            alert(data.reset_count + ' Datensätze zurückgesetzt.\nStarte Migration im Hintergrund...');
+            loadErrorOverview();
+        } else { alert('Fehler: ' + data.error); }
+    } catch (error) { alert('Fehler: ' + error); }
+}
+
+async function retryAllErrors() {
+    if (!confirm('Alle fehlgeschlagenen Migrationen erneut versuchen?')) return;
+    try {
+        const response = await fetch('/retry_all_errors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+        if (data.success) {
+            alert(data.reset_count + ' Datensätze zurückgesetzt.\nStarte Migration...');
+            loadErrorOverview();
+        } else { alert('Fehler: ' + data.error); }
+    } catch (error) { alert('Fehler: ' + error); }
+}
+
+function toggleErrorPanel() {
+    const body = document.getElementById('errorPanelBody');
+    const icon = document.getElementById('errorPanelToggle');
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        icon.className = 'fas fa-chevron-up';
+    } else {
+        body.style.display = 'none';
+        icon.className = 'fas fa-chevron-down';
+    }
+}
 
 async function loadBatches() {
     try {

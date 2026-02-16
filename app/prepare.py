@@ -6,10 +6,13 @@ Loads source data, enriches it with metadata, and stores in staging database.
 import pandas as pd
 import uuid
 import datetime as dt
+import requests
+import json
+import time
 from flask import session as http_session
 from sqlalchemy import text
-from app_config import MiscEngine, DilEngine
-from app.process import sanitize_doknr
+from app_config import MiscEngine, DilEngine, Config
+from app.process import sanitize_doknr, prepare_session_headers, get_info
 
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
@@ -314,11 +317,79 @@ def enrich_file_sizes(data_df):
     return data_df
 
 
+def enrich_descriptions_from_api(data_df, session_snapshot):
+    """
+    Enrich dataframe with document descriptions from Source API.
+    Calls get_info() for each document and extracts DESCRIPTIONSSet / parent Description.
+    
+    Only fills rows where 'description' column is empty/NULL.
+    Returns dataframe with 'description' column populated where API returned data.
+    """
+    if 'description' not in data_df.columns:
+        data_df['description'] = None
+    
+    needs_desc = data_df['description'].isna() | (data_df['description'].astype(str).str.strip() == '') | (data_df['description'].astype(str) == 'None')
+    if not needs_desc.any():
+        print("[PREPARE] All rows already have descriptions, skipping API enrichment")
+        return data_df
+    
+    cfg = Config.load()
+    source_system = session_snapshot.get('source_system') or cfg.config_env.get('default_sap_system', 'zhl')
+    
+    print(f"[PREPARE] Enriching descriptions from {source_system} API for {needs_desc.sum()}/{len(data_df)} rows...")
+    
+    # Build API session
+    server_session = requests.Session()
+    try:
+        prepare_session_headers(server_session, session_snapshot, source_system)
+    except Exception as e:
+        print(f"[WARN] Cannot prepare API session for description enrichment: {e}")
+        return data_df
+    
+    filled = 0
+    errors = 0
+    for idx in data_df[needs_desc].index:
+        row = data_df.loc[idx]
+        doknr = str(row.get('documentnumber', '') or '')
+        dokar = str(row.get('documenttype', '') or '')
+        dokvr = str(row.get('documentversion', '') or '00')
+        doktl = str(row.get('documentpart', '') or '000')
+        
+        if not doknr or not dokar:
+            continue
+        
+        try:
+            status_code, reason, files = get_info(
+                server_session, source_system,
+                doknr, doktl, dokar, dokvr
+            )
+            if status_code == 200 and files:
+                first_file = files[0]
+                # Priority: DocumentDescription (from DESCRIPTIONSSet/parent) > Description (file-level)
+                desc = first_file.get('DocumentDescription') or first_file.get('Description')
+                if desc and isinstance(desc, str) and desc.strip():
+                    data_df.at[idx, 'description'] = desc.strip()
+                    filled += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                print(f"[WARN] API description error for {doknr}: {e}")
+            if errors == 3:
+                print(f"[WARN] Suppressing further API description errors...")
+        
+        # Brief pause to avoid API throttling
+        if filled % 50 == 0 and filled > 0:
+            time.sleep(0.5)
+    
+    print(f"[PREPARE] API enriched {filled}/{needs_desc.sum()} descriptions ({errors} errors)")
+    return data_df
+
+
 def enrich_descriptions(data_df):
     """
-    Enrich dataframe with document descriptions from DIL.DRAT table.
-    DRAT contains the document short texts (DKTXT) that the ZHL custom API fails to return.
-    Uses document keys (documentnumber, documenttype, documentversion, documentpart) to lookup descriptions.
+    FALLBACK: Enrich dataframe with document descriptions from DIL.DRAT table.
+    Only used for rows where API enrichment did not provide a description.
+    DRAT contains the document short texts (DKTXT).
     Prefers English (LANGU='E'), falls back to any available language.
     
     Only fills rows where 'description' column is empty/NULL (does not overwrite existing values).
@@ -545,8 +616,14 @@ def load_source_data(source_file_path=None, custom_query=None, query_source='dil
     return data_df
 
 
-def enrich_with_metadata(data_df):
-    """Enrich source data with authorization groups and computed target fields."""
+def enrich_with_metadata(data_df, session_snapshot=None):
+    """Enrich source data with authorization groups and computed target fields.
+    
+    Args:
+        data_df: DataFrame with source document data
+        session_snapshot: Optional dict with bearer_token etc. for API enrichment.
+                          If provided, descriptions are fetched from API first, DRAT as fallback.
+    """
     # Fetch authorization groups in batch
     if len(data_df) == 0:
         return data_df
@@ -597,7 +674,11 @@ def enrich_with_metadata(data_df):
     # Enrich with file sizes from DIL.DMS_FILE_SIZE
     data_df = enrich_file_sizes(data_df)
     
-    # Enrich with descriptions from DIL.DRAT (SAP document text table)
+    # Enrich descriptions: API first (if session available), DRAT as fallback
+    if session_snapshot and session_snapshot.get('bearer_token'):
+        data_df = enrich_descriptions_from_api(data_df, session_snapshot)
+    
+    # DRAT fallback for any remaining rows without description
     data_df = enrich_descriptions(data_df)
     
     # NOTE: Filenames are now extracted from API Docpath during Execute phase
@@ -825,9 +906,12 @@ def save_to_staging(staging_df, batch_id, source_file_name=None, wave=None, desc
     return batch_id
 
 
-def prepare_migration(source_file_path=None, custom_query=None, query_source='dil', wave=None, description=None, notes=None):
+def prepare_migration(source_file_path=None, custom_query=None, query_source='dil', wave=None, description=None, notes=None, session_snapshot=None):
     """
     Main entry point for Step 1: Data Preparation
+    
+    Args:
+        session_snapshot: Optional dict with bearer_token etc. for API-based enrichment.
     
     Returns:
         dict with batch_id, record_count, and status
@@ -849,7 +933,7 @@ def prepare_migration(source_file_path=None, custom_query=None, query_source='di
         
         # Enrich with metadata
         print(f"[PREPARE] Enriching with metadata...")
-        data_df = enrich_with_metadata(data_df)
+        data_df = enrich_with_metadata(data_df, session_snapshot=session_snapshot)
         
         # Prepare staging records
         print(f"[PREPARE] Preparing staging records...")

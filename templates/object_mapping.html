@@ -1,4 +1,4 @@
-{% extends "base_simple.html" %}
+﻿{% extends "base_simple.html" %}
 
 {% block title %}Objekt-Zuordnung - Batch {{ batch_id }}{% endblock %}
 
@@ -379,6 +379,25 @@
 </style>
 
 <div class="mapping-container">
+    <!-- Workflow Step Indicator -->
+    <div style="display:flex;align-items:center;margin-bottom:20px;">
+        <a href="/prepare" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Neuen Batch erstellen">
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> Batch erstellen
+        </a>
+        <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
+        <a href="/preview?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Vorschau und Vorbereitung">
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Vorschau und Vorbereitung
+        </a>
+        <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
+        <div style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#007bff;color:#fff;">
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Objekt Link
+        </div>
+        <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
+        <a href="/details?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Auswertung &amp; Details">
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Auswertung
+        </a>
+    </div>
+
     <!-- Batch Header -->
     <div class="batch-header">
         <h2>📦 Objekt-Zuordnung - Batch {{ batch_id }}</h2>
@@ -409,6 +428,29 @@
             <button class="btn btn-apply" onclick="applyMappings()">
                 ✨ Auf Staging anwenden
             </button>
+            <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
+            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" style="background: #28a745;">
+                🔗 Alle verlinken
+            </button>
+            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" style="background: #28a745;">
+                🔗 Ausgewählte verlinken
+            </button>
+            <button class="btn btn-danger" onclick="cancelLinking()" id="cancelLinkBtn" style="display: none;">
+                ⛔ Verlinkung abbrechen
+            </button>
+        </div>
+    </div>
+
+    <!-- Link Progress Bar -->
+    <div id="linkProgressContainer" class="card" style="display: none; margin-bottom: 15px;">
+        <div class="card-body" style="padding: 10px 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                <small id="linkProgressStats" class="text-muted">Verlinkung wird ausgeführt...</small>
+                <small id="linkProgressPhase" class="text-muted"></small>
+            </div>
+            <div style="background: #e9ecef; border-radius: 4px; height: 20px; overflow: hidden;">
+                <div id="linkProgressBar" style="background: #28a745; height: 100%; width: 0%; transition: width 0.3s; text-align: center; color: white; font-size: 0.75rem; line-height: 20px;">0%</div>
+            </div>
         </div>
     </div>
 
@@ -434,13 +476,46 @@
 
     <!-- Tabs -->
     <div class="tabs">
-        <div class="tab active" data-tab="mappings">Zuordnungen</div>
-        <div class="tab" data-tab="unmapped">Nicht zugeordnet</div>
-        <div class="tab" data-tab="add">Zuordnung hinzufügen</div>
+        <div class="tab active" data-tab="unmapped">Nicht zugeordnet</div>
+        <div class="tab" data-tab="mappings">Zuordnungen</div>
+    </div>
+
+    <!-- Tab: Unmapped Objects -->
+    <div id="tab-unmapped" class="tab-content active">
+        <div class="card">
+            <div class="card-header">
+                <h3>Nicht zugeordnete Objekte in diesem Batch</h3>
+                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 Aktualisieren</button>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    Dies sind DOKOB/OBJKY-Kombinationen in diesem Batch, für die keine Zuordnung definiert ist.
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>DOKOB</th>
+                                <th>OBJKY</th>
+                                <th>Anzahl</th>
+                                <th>Aktion</th>
+                            </tr>
+                        </thead>
+                        <tbody id="unmappedBody">
+                            <tr>
+                                <td colspan="4" class="loading">
+                                    <div class="spinner"></div> Lade...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Tab: Mappings List -->
-    <div id="tab-mappings" class="tab-content active">
+    <div id="tab-mappings" class="tab-content">
         <div class="card">
             <div class="card-header">
                 <h3>Objekt-Zuordnungen</h3>
@@ -476,73 +551,6 @@
         </div>
     </div>
 
-    <!-- Tab: Unmapped Objects -->
-    <div id="tab-unmapped" class="tab-content">
-        <div class="card">
-            <div class="card-header">
-                <h3>Nicht zugeordnete Objekte in diesem Batch</h3>
-                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 Aktualisieren</button>
-            </div>
-            <div class="card-body">
-                <div class="alert alert-info">
-                    Dies sind DOKOB/OBJKY-Kombinationen in diesem Batch, für die keine Zuordnung definiert ist.
-                </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>DOKOB</th>
-                                <th>OBJKY</th>
-                                <th>Anzahl</th>
-                                <th>Aktion</th>
-                            </tr>
-                        </thead>
-                        <tbody id="unmappedBody">
-                            <tr>
-                                <td colspan="4" class="loading">
-                                    <div class="spinner"></div> Lade...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Tab: Add Mapping -->
-    <div id="tab-add" class="tab-content">
-        <div class="card">
-            <div class="card-header">
-                <h3>Neue Zuordnung hinzufügen</h3>
-            </div>
-            <div class="card-body">
-                <form id="addMappingForm" onsubmit="addMapping(event)">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Quell-DOKOB</label>
-                            <input type="text" class="form-control" id="addSourceDokob" required maxlength="10">
-                        </div>
-                        <div class="form-group">
-                            <label>Quell-OBJKY</label>
-                            <input type="text" class="form-control" id="addSourceObjky" required maxlength="100">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Ziel-DOKOB</label>
-                            <input type="text" class="form-control" id="addTargetDokob" required maxlength="10">
-                        </div>
-                        <div class="form-group">
-                            <label>Ziel-OBJKY</label>
-                            <input type="text" class="form-control" id="addTargetObjky" required maxlength="100">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary">➕ Zuordnung hinzufügen</button>
-                </form>
-            </div>
-        </div>
-    </div>
 </div>
 
 <!-- Upload Modal -->
@@ -618,6 +626,7 @@
         loadBatchInfo();
         loadMappings();
         loadStats();
+        loadUnmapped();
         setupTabs();
         setupDragDrop();
     });
@@ -779,51 +788,12 @@
         loadStats();
     }
 
-    // Quick add mapping from unmapped
+    // Edit mapping - addMapping/quickAddMapping removed (use Template + Upload instead)
+    // Placeholder kept so existing unmapped-table "Aktion" column still works gracefully
     function quickAddMapping(dokob, objky) {
-        document.getElementById('addSourceDokob').value = dokob;
-        document.getElementById('addSourceObjky').value = objky;
-        document.getElementById('addTargetDokob').value = dokob;
-        document.getElementById('addTargetObjky').value = '';
-        
-        // Switch to add tab
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        document.querySelector('.tab[data-tab="add"]').classList.add('active');
-        document.getElementById('tab-add').classList.add('active');
-        
-        document.getElementById('addTargetObjky').focus();
+        alert('Bitte verwenden Sie "Vorlage herunterladen" und "Excel hochladen" um Zuordnungen hinzuzufügen.');
     }
 
-    // Add mapping
-    function addMapping(event) {
-        event.preventDefault();
-        
-        const data = {
-            source_dokob: document.getElementById('addSourceDokob').value,
-            source_objky: document.getElementById('addSourceObjky').value,
-            target_dokob: document.getElementById('addTargetDokob').value,
-            target_objky: document.getElementById('addTargetObjky').value
-        };
-
-        fetch(`/batch/${BATCH_ID}/object-mapping/add`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        })
-        .then(r => r.json())
-        .then(result => {
-            if (result.success) {
-                alert('Zuordnung erfolgreich hinzugef\u00fcgt!');
-                document.getElementById('addMappingForm').reset();
-                loadMappings();
-                loadStats();
-            } else {
-                alert('Error: ' + (result.error || 'Unknown error'));
-            }
-        })
-        .catch(err => alert('Fehler beim Hinzuf\u00fcgen der Zuordnung: ' + err));
-    }
 
     // Edit mapping
     function editMapping(id, sourceDokob, sourceObjky, targetDokob, targetObjky) {
@@ -1029,6 +999,136 @@
             day: '2-digit',
             hour: '2-digit',
             minute: '2-digit'
+        });
+    }
+
+    // ========================================================================
+    // Linking Functions
+    // ========================================================================
+
+    let linkProgressInterval = null;
+
+    function showLinkProgress() {
+        document.getElementById('linkProgressContainer').style.display = 'block';
+    }
+    function hideLinkProgress() {
+        document.getElementById('linkProgressContainer').style.display = 'none';
+    }
+
+    function startLinkProgressPolling() {
+        if (linkProgressInterval) clearInterval(linkProgressInterval);
+        linkProgressInterval = setInterval(() => {
+            fetch(`/batch/${BATCH_ID}/link-progress`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && linkProgressInterval) {
+                        const pct = data.progress_pct || 0;
+                        showLinkProgress();
+                        const bar = document.getElementById('linkProgressBar');
+                        bar.style.width = pct + '%';
+                        bar.textContent = pct + '%';
+                        document.getElementById('linkProgressStats').textContent =
+                            `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
+                        document.getElementById('linkProgressPhase').textContent =
+                            `Phase: ${data.migration_phase || '—'}`;
+                    }
+                })
+                .catch(() => {});
+        }, 2000);
+    }
+
+    function stopLinkProgressPolling() {
+        if (linkProgressInterval) {
+            clearInterval(linkProgressInterval);
+            linkProgressInterval = null;
+        }
+    }
+
+    function linkAll() {
+        if (!confirm('Objektlinks für alle verlinkbaren Datensätze erstellen?\n\nVoraussetzung: Upload erfolgreich, Objekt-Mapping vorhanden.')) {
+            return;
+        }
+
+        const btn = document.getElementById('linkAllBtn');
+        const cancelBtn = document.getElementById('cancelLinkBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Wird verlinkt...';
+        cancelBtn.style.display = 'inline-flex';
+
+        startLinkProgressPolling();
+
+        fetch('/execute_linking', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ batch_id: BATCH_ID })
+        })
+        .then(response => response.json())
+        .then(data => {
+            stopLinkProgressPolling();
+            hideLinkProgress();
+            cancelBtn.style.display = 'none';
+
+            if (data.success) {
+                let msg = `Verlinkung abgeschlossen!\n\n`;
+                msg += `Gesamt: ${data.total_records}\n`;
+                msg += `Verlinkt: ${data.linked}\n`;
+                msg += `Bereits vorhanden: ${data.already_existed}\n`;
+                msg += `Fehlgeschlagen: ${data.failed}\n`;
+                msg += `Dauer: ${data.duration_formatted}`;
+                if (data.cancel_reason) msg += `\n\nHinweis: ${data.cancel_reason}`;
+                alert(msg);
+                loadStats();
+            } else if (data.login_required) {
+                alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+                window.location.href = '/';
+            } else {
+                alert('Verlinkung fehlgeschlagen: ' + data.error);
+            }
+            btn.disabled = false;
+            btn.textContent = '🔗 Alle verlinken';
+        })
+        .catch(error => {
+            stopLinkProgressPolling();
+            hideLinkProgress();
+            cancelBtn.style.display = 'none';
+            alert('Fehler bei der Verlinkung: ' + error);
+            btn.disabled = false;
+            btn.textContent = '🔗 Alle verlinken';
+        });
+    }
+
+    function linkSelected() {
+        // For now, link-selected not applicable on mapping page (no record selection here)
+        alert('Bitte verwenden Sie "Alle verlinken" auf dieser Seite,\noder wählen Sie einzelne Datensätze in der Batch-Vorschau aus.');
+    }
+
+    function cancelLinking() {
+        if (!confirm('Verlinkung wirklich abbrechen?\n\nBereits verlinkte Datensätze bleiben erhalten.')) {
+            return;
+        }
+
+        const cancelBtn = document.getElementById('cancelLinkBtn');
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '⏳ Abbruch angefordert...';
+
+        fetch(`/batch/${BATCH_ID}/cancel-linking`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                cancelBtn.textContent = '⏳ Abbruch angefordert...';
+            } else {
+                alert('Abbruch fehlgeschlagen: ' + data.error);
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = '⛔ Verlinkung abbrechen';
+            }
+        })
+        .catch(error => {
+            alert('Fehler beim Abbrechen: ' + error);
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = '⛔ Verlinkung abbrechen';
         });
     }
 </script>

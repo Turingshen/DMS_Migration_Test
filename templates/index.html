@@ -1,91 +1,279 @@
 {% extends "base_simple.html" %}
 
-{% block title %}Übersicht{% endblock %}
+{% block title %}Dashboard{% endblock %}
+
+{% block head %}
+<style>
+    .kpi-card { border-radius: 10px; transition: transform 0.2s; }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+    .kpi-label { font-size: 0.8rem; color: #6c757d; }
+
+    .wave-column { min-width: 100%; }
+    .wave-header {
+        font-weight: 700; font-size: 1rem;
+        padding: 8px 12px; border-radius: 6px;
+        margin-bottom: 6px;
+    }
+    .batch-card {
+        border-left: 4px solid #dee2e6;
+        transition: all 0.2s ease; cursor: pointer;
+    }
+    .batch-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); transform: translateY(-1px); }
+    .batch-card.phase-upload { border-left-color: #007bff; }
+    .batch-card.phase-upload_done { border-left-color: #28a745; }
+    .batch-card.phase-linking { border-left-color: #17a2b8; }
+    .batch-card.phase-completed { border-left-color: #28a745; }
+    .batch-card.phase-prepared { border-left-color: #6c757d; }
+    .batch-card.phase-error { border-left-color: #dc3545; }
+
+    .phase-progress { display: flex; gap: 2px; margin-top: 6px; }
+    .phase-bar { height: 6px; border-radius: 3px; flex: 1; transition: background-color 0.3s; }
+    .phase-bar.done { background-color: #28a745; }
+    .phase-bar.active { background-color: #007bff; animation: pulse 1.5s infinite; }
+    .phase-bar.pending { background-color: #dee2e6; }
+    .phase-bar.error { background-color: #dc3545; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+
+    .wave-stats { font-size: 0.8rem; color: #6c757d; }
+    .kanban-container {
+        display: flex; flex-direction: column; gap: 12px;
+    }
+    .unassigned-section { background: #fff3cd; }
+
+    .workflow-info {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 0.85rem; color: #6c757d; flex-wrap: wrap;
+    }
+    .workflow-info .step {
+        background: #e9ecef; border-radius: 12px; padding: 3px 12px; font-weight: 600;
+    }
+    .workflow-info a.step {
+        color: #495057; text-decoration: none; cursor: pointer;
+        transition: background-color 0.2s, color 0.2s;
+    }
+    .workflow-info a.step:hover {
+        background: #007bff; color: #fff; text-decoration: none;
+    }
+    .workflow-info .arrow { color: #adb5bd; }
+
+    /* Gantt Timeline */
+    .gantt-container { overflow-x: auto; }
+    .gantt-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .gantt-table th, .gantt-table td { padding: 4px 8px; border-bottom: 1px solid #e9ecef; white-space: nowrap; }
+    .gantt-table th { background: #f8f9fa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
+    .gantt-row-wave { background: #e2e6ea; font-weight: 700; }
+    .gantt-row-batch { background: #f8faff; font-size: 0.8rem; }
+    .gantt-cell-bar { position: relative; min-width: 30px; }
+    .gantt-month-header { text-align: center; font-size: 0.75rem; border-left: 1px solid #dee2e6; }
+    .gantt-day-cell { border-left: 1px dotted #eee; min-width: 6px; max-width: 6px; padding: 0 !important; }
+    .gantt-today { border-left: 2px solid #dc3545 !important; }
+    /* Bar segments: each cell in the bar range gets a colored div */
+    .gantt-seg { height: 18px; width: 100%; display: block; border-top: 1px solid transparent; border-bottom: 1px solid transparent; }
+    .gantt-seg-first { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-left: 1px solid transparent; }
+    .gantt-seg-last  { border-top-right-radius: 4px; border-bottom-right-radius: 4px; border-right: 1px solid transparent; }
+    /* Wave task bars: Qual = orange tones, Prod = purple tones */
+    .gantt-seg.wave-qual { background: #fde8d0; border-color: #f0ad4e; }
+    .gantt-seg.wave-prod { background: #e8d5f5; border-color: #9b59b6; }
+    .gantt-seg.wave-qual.status-arbeit { background: #fd7e14; border-color: #e8590c; animation: pulse 1.5s infinite; }
+    .gantt-seg.wave-prod.status-arbeit { background: #9b59b6; border-color: #7d3c98; animation: pulse 1.5s infinite; }
+    .gantt-seg.wave-qual.status-fertig { background: #28a745; border-color: #1e7e34; }
+    .gantt-seg.wave-prod.status-fertig { background: #28a745; border-color: #1e7e34; }
+    /* Batch bars: status-based colors */
+    .gantt-seg.batch-prepared  { background: #cce5ff; border-color: #80bdff; }
+    .gantt-seg.batch-executing { background: #ffc107; border-color: #e0a800; animation: pulse 1.5s infinite; }
+    .gantt-seg.batch-linking   { background: #17a2b8; border-color: #117a8b; }
+    .gantt-seg.batch-completed { background: #28a745; border-color: #1e7e34; }
+
+    /* Task List */
+    .task-row { transition: background 0.2s; }
+    .task-row:hover { background: #f0f4ff; }
+    .status-badge { cursor: pointer; font-size: 0.8rem; }
+    .status-badge:hover { opacity: 0.8; }
+    .task-env { font-size: 0.7rem; font-weight: 700; }
+    .task-env.qual { color: #fd7e14; }
+    .task-env.prod { color: #6f42c1; }
+    .date-range { font-size: 0.8rem; color: #6c757d; }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="container-fluid mt-4">
-    <div class="row">
-        <div class="col-12">
-            <h2>Dokument-Migration Übersicht</h2>
-            <p class="text-muted">Migrationsprozess: Batch erstellen → Anreichern & Vorschau → Objekt-Zuordnung → Ausführen</p>
+    <!-- Header -->
+    <div class="row mb-3">
+        <div class="col-12 d-flex justify-content-between align-items-start">
+            <div>
+                <h2><i class="fas fa-tachometer-alt"></i> Dashboard</h2>
+                <div class="workflow-info mt-1">
+                    <a href="/prepare" class="step">1. Batch erstellen</a>
+                    <i class="fas fa-chevron-right arrow"></i>
+                    <span class="step">2. Vorschau und Vorbereitung</span>
+                    <i class="fas fa-chevron-right arrow"></i>
+                    <span class="step">3. Objekt Link</span>
+                    <i class="fas fa-chevron-right arrow"></i>
+                    <span class="step">4. Auswertung</span>
+                </div>
+            </div>
+
         </div>
     </div>
 
-    <div class="row mt-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">Migration-Batches</h5>
-                    <a href="{{ url_for('app.prepare') }}" class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Neuer Batch
-                    </a>
+    <!-- KPI Cards -->
+    <div class="row mb-3" id="kpiRow">
+        <div class="col-md-2">
+            <div class="card kpi-card text-center">
+                <div class="card-body py-2">
+                    <div class="kpi-value" id="kpiWaves">-</div>
+                    <div class="kpi-label">Wellen</div>
                 </div>
-                <div class="card-body">
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover" id="batchesTable">
-                            <thead>
-                                <tr>
-                                    <th>Batch-ID</th>
-                                    <th>Beschreibung</th>
-                                    <th>Erstellt</th>
-                                    <th>Erstellt von</th>
-                                    <th>Quelle</th>
-                                    <th>Gesamt</th>
-                                    <th>Ausgeführt</th>
-                                    <th>Erfolgreich</th>
-                                    <th>Fehler</th>
-                                    <th>Phase</th>
-                                    <th>Verlinkung</th>
-                                    <th>Status</th>
-                                    <th>Aktionen</th>
-                                </tr>
-                            </thead>
-                            <tbody id="batchesBody">
-                                <tr>
-                                    <td colspan="13" class="text-center">
-                                        <div class="spinner-border" role="status">
-                                            <span class="sr-only">Laden...</span>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card kpi-card text-center">
+                <div class="card-body py-2">
+                    <div class="kpi-value" id="kpiBatches">-</div>
+                    <div class="kpi-label">Batches</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card kpi-card text-center">
+                <div class="card-body py-2">
+                    <div class="kpi-value" id="kpiDocs">-</div>
+                    <div class="kpi-label">Dokumente</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card kpi-card text-center border-success">
+                <div class="card-body py-2">
+                    <div class="kpi-value text-success" id="kpiUploaded">-</div>
+                    <div class="kpi-label">Hochgeladen</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card kpi-card text-center border-info">
+                <div class="card-body py-2">
+                    <div class="kpi-value text-info" id="kpiLinked">-</div>
+                    <div class="kpi-label">Verlinkt</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card kpi-card text-center border-danger">
+                <div class="card-body py-2">
+                    <div class="kpi-value text-danger" id="kpiFailed">-</div>
+                    <div class="kpi-label">Fehler</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Wave Filter -->
+    <div class="row mb-2">
+        <div class="col-12">
+            <div class="d-flex align-items-center gap-2">
+                <label class="mb-0 font-weight-bold mr-2"><i class="fas fa-filter"></i> Welle:</label>
+                <select class="form-control form-control-sm" id="waveFilter" style="max-width: 200px;" onchange="applyWaveFilter()">
+                    <option value="">Alle Wellen</option>
+                </select>
+                <span class="text-muted ml-2" id="waveFilterInfo" style="font-size: 0.85rem;"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Two-Column Main Layout -->
+    <div class="row mb-3">
+        <!-- LEFT: Batches (Kanban) + Task List -->
+        <div class="col-lg-3">
+            <!-- Kanban Board (Wave-oriented) -->
+            <div class="card mb-3">
+                <div class="card-header py-2">
+                    <h6 class="mb-0"><i class="fas fa-columns"></i> Batches</h6>
+                </div>
+                <div class="card-body p-2" style="max-height: 420px; overflow-y: auto;">
+                    <div id="kanbanBoard">
+                        <div class="text-center py-4">
+                            <div class="spinner-border spinner-border-sm" role="status"></div>
+                            <span class="text-muted ml-2">Lade...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Task List -->
+            <div class="card">
+                <div class="card-header py-2">
+                    <h6 class="mb-0"><i class="fas fa-tasks"></i> Aufgaben</h6>
+                </div>
+                <div class="card-body p-0" style="max-height: 350px; overflow-y: auto;">
+                    <table class="table table-sm mb-0" id="taskListTable">
+                        <thead class="thead-light">
+                            <tr>
+                                <th style="width:35%">Welle / Aufgabe</th>
+                                <th style="width:30%">Zeitraum</th>
+                                <th style="width:15%">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="taskListBody">
+                            <tr><td colspan="3" class="text-center text-muted py-3">Lade...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: Gantt Timeline -->
+        <div class="col-lg-9">
+            <div class="card" style="height: 100%;">
+                <div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <h6 class="mb-0"><i class="fas fa-project-diagram"></i> Wellen-Zeitplan</h6>
+                    <button class="btn btn-sm btn-outline-primary" onclick="openWavePlanModal()">
+                        <i class="fas fa-plus"></i> Welle planen
+                    </button>
+                </div>
+                <div class="card-body p-2" style="overflow-x: auto;">
+                    <div class="gantt-container" id="ganttContainer">
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-spinner fa-spin"></i> Lade Zeitplan...
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    
-    <!-- Error Overview Panel -->
-    <div class="row mt-4" id="errorOverviewRow" style="display: none;">
+
+    <!-- Batch Detail Table (collapsed by default) -->
+    <div class="row mt-2">
         <div class="col-12">
-            <div class="card border-danger">
-                <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> Fehlerübersicht</h5>
-                    <button class="btn btn-sm btn-light" onclick="toggleErrorPanel()">
-                        <i class="fas fa-chevron-up" id="errorPanelToggle"></i>
-                    </button>
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center" style="cursor: pointer;" onclick="toggleBatchTable()">
+                    <h5 class="mb-0"><i class="fas fa-table"></i> Alle Batches</h5>
+                    <i class="fas fa-chevron-down" id="batchTableToggle"></i>
                 </div>
-                <div class="card-body" id="errorPanelBody">
+                <div class="card-body" id="batchTableBody" style="display: none;">
                     <div class="table-responsive">
-                        <table class="table table-sm table-hover" id="errorTable">
-                            <thead class="thead-dark">
+                        <table class="table table-striped table-hover table-sm" id="batchesTable">
+                            <thead>
                                 <tr>
-                                    <th>Kategorie</th>
+                                    <th>Batch-ID</th>
+                                    <th>Welle</th>
                                     <th>Beschreibung</th>
-                                    <th class="text-center">Anzahl</th>
-                                    <th>Aktion</th>
+                                    <th>Erstellt</th>
+                                    <th>Erstellt von</th>
+                                    <th>Gesamt</th>
+                                    <th>Hochgeladen</th>
+                                    <th>Fehler</th>
+                                    <th>Phase</th>
+                                    <th>Verlinkung</th>
                                     <th>Aktionen</th>
                                 </tr>
                             </thead>
-                            <tbody id="errorTableBody">
+                            <tbody id="batchesBody">
+                                <tr><td colspan="11" class="text-center"><div class="spinner-border" role="status"></div></td></tr>
                             </tbody>
                         </table>
-                    </div>
-                    <div class="mt-2">
-                        <button class="btn btn-warning" onclick="retryAllErrors()" id="retryAllBtn">
-                            <i class="fas fa-redo"></i> Alle Fehler erneut versuchen
-                        </button>
                     </div>
                 </div>
             </div>
@@ -95,144 +283,213 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    loadBatches();
-    loadErrorOverview();
-    
-    // Auto-refresh every 30 seconds
-    setInterval(loadBatches, 30000);
-    setInterval(loadErrorOverview, 30000);
+    loadAll();
+    loadWavePlans();
+    setInterval(loadAll, 30000);
 });
 
-// Error Category Descriptions and Actions (from Python get_error_details)
-const ERROR_DETAILS = {
-    'API_KEY_INVALID': { desc: 'API-Key ungültig', action: 'API im APIM freischalten' },
-    'TOKEN_EXPIRED': { desc: 'OAuth Token abgelaufen', action: 'Neu einloggen' },
-    'TOKEN_INVALID': { desc: 'OAuth Token ungültig', action: 'Neu einloggen' },
-    'CSRF_FAILED': { desc: 'CSRF Token Fehler', action: 'Session erneuern' },
-    'SOURCE_NOT_FOUND': { desc: 'Dokument nicht gefunden', action: 'Quelldaten prüfen' },
-    'SOURCE_EMPTY': { desc: 'Container ohne Dateien', action: 'Erwartet - leer' },
-    'SOURCE_READ_ERROR': { desc: 'Lesefehler im Quellsystem', action: 'R/3 API prüfen' },
-    'TARGET_CREATE_FAILED': { desc: 'Anlage fehlgeschlagen', action: 'SAP Log prüfen' },
-    'TARGET_EXISTS': { desc: 'Dokument existiert bereits', action: 'Zieldaten prüfen' },
-    'TARGET_LOCKED': { desc: 'Dokument gesperrt', action: 'Sperre aufheben' },
-    'UPLOAD_SIZE_EXCEEDED': { desc: 'Datei zu groß', action: 'Datei aufteilen' },
-    'UPLOAD_TIMEOUT': { desc: 'Upload Timeout', action: 'Später erneut versuchen' },
-    'GATEWAY_TIMEOUT': { desc: 'API Gateway Timeout (504)', action: 'Später erneut versuchen' },
-    'RATE_LIMITED': { desc: 'API Rate Limit erreicht', action: 'Warten und erneut versuchen' },
-    'SERVER_ERROR': { desc: 'SAP Serverfehler (5xx)', action: 'SAP Support kontaktieren' },
-    'BAD_REQUEST': { desc: 'Ungültige Anfrage (400)', action: 'Daten validieren' },
-    'UNKNOWN': { desc: 'Unbekannter Fehler', action: 'Log prüfen' }
-};
+let allBatches = [];
+let selectedWave = '';
 
-function getErrorDetails(category) {
-    return ERROR_DETAILS[category] || { desc: category, action: 'Details prüfen' };
+function loadAll() {
+    fetch('/batches')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                allBatches = data.batches || [];
+                populateWaveFilter(allBatches);
+                applyWaveFilter();
+            }
+        })
+        .catch(err => console.error('Fehler:', err));
 }
 
-async function loadErrorOverview() {
-    try {
-        const response = await fetch('/error_overview');
-        const data = await response.json();
-        
-        const row = document.getElementById('errorOverviewRow');
-        const tbody = document.getElementById('errorTableBody');
-        
-        if (data.success && data.errors && data.errors.length > 0) {
-            row.style.display = 'block';
-            
-            tbody.innerHTML = data.errors.map(err => {
-                const details = getErrorDetails(err.category);
-                const categoryClass = getCategoryClass(err.category);
-                return `
-                    <tr>
-                        <td><span class="badge ${categoryClass}">${err.category}</span></td>
-                        <td>${details.desc}</td>
-                        <td class="text-center"><strong>${err.count}</strong></td>
-                        <td><small class="text-info">${details.action}</small></td>
-                        <td>
-                            <button class="btn btn-sm btn-warning" onclick="retryByCategory('${err.category}')" title="Erneut versuchen">
-                                <i class="fas fa-redo"></i>
-                            </button>
-                            <a href="/details?error_category=${err.category}" class="btn btn-sm btn-info" title="Details anzeigen">
-                                <i class="fas fa-list"></i>
-                            </a>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-            
-            document.getElementById('retryAllBtn').innerHTML = 
-                `<i class="fas fa-redo"></i> Alle ${data.total_errors} Fehler erneut versuchen`;
-        } else {
-            row.style.display = 'none';
-        }
-    } catch (error) {
-        console.error('Error loading error overview:', error);
+function populateWaveFilter(batches) {
+    const select = document.getElementById('waveFilter');
+    const prevVal = select.value;
+    const waveNames = new Set();
+    batches.forEach(b => { if (b.wave) waveNames.add(b.wave); });
+    // Also add waves from wave plans
+    wavePlans.forEach(w => waveNames.add(w.wave_name));
+
+    const sorted = [...waveNames].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    select.innerHTML = '<option value="">Alle Wellen</option>';
+    sorted.forEach(w => { select.innerHTML += `<option value="${w}">${w}</option>`; });
+    select.value = prevVal || '';
+}
+
+function applyWaveFilter() {
+    selectedWave = document.getElementById('waveFilter').value;
+    const filtered = selectedWave ? allBatches.filter(b => b.wave === selectedWave) : allBatches;
+    const filteredPlans = selectedWave ? wavePlans.filter(w => w.wave_name === selectedWave) : wavePlans;
+
+    renderKPIs(filtered);
+    renderKanban(filtered);
+    displayBatches(filtered);
+    renderGantt(filteredPlans, filtered);
+    renderTaskList(filteredPlans);
+
+    const info = document.getElementById('waveFilterInfo');
+    if (selectedWave) {
+        info.textContent = `${filtered.length} Batches in ${selectedWave}`;
+    } else {
+        info.textContent = '';
     }
 }
 
-function getCategoryClass(category) {
-    if (category.includes('TOKEN') || category.includes('API_KEY') || category.includes('CSRF')) {
-        return 'badge-danger';
-    } else if (category.includes('SOURCE')) {
-        return 'badge-warning';
-    } else if (category.includes('TARGET')) {
-        return 'badge-info';
-    } else if (category.includes('TIMEOUT') || category.includes('RATE')) {
-        return 'badge-secondary';
-    } else if (category.includes('SERVER')) {
-        return 'badge-dark';
-    }
-    return 'badge-danger';
+// ========================================================================
+// KPI Cards
+// ========================================================================
+function renderKPIs(batches) {
+    let totalDocs = 0, uploaded = 0, linked = 0, failed = 0;
+    const waves = new Set();
+
+    batches.forEach(b => {
+        if (b.wave) waves.add(b.wave);
+        totalDocs += (b.total_records || 0);
+        uploaded += (b.successful_records || 0);
+        linked += (b.link_linked || 0) + (b.link_exists || 0);
+        failed += (b.failed_records || 0) + (b.link_failed || 0);
+    });
+
+    document.getElementById('kpiWaves').textContent = waves.size;
+    document.getElementById('kpiBatches').textContent = batches.length;
+    document.getElementById('kpiDocs').textContent = totalDocs.toLocaleString();
+    document.getElementById('kpiUploaded').textContent = uploaded.toLocaleString();
+    document.getElementById('kpiLinked').textContent = linked.toLocaleString();
+    document.getElementById('kpiFailed').textContent = failed.toLocaleString();
 }
 
-async function retryByCategory(category) {
-    if (!confirm(`Alle "${category}" Fehler erneut versuchen?`)) return;
-    
-    try {
-        const response = await fetch('/retry_by_category', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ category: category })
+// ========================================================================
+// Kanban Board
+// ========================================================================
+function renderKanban(batches) {
+    const waves = {};
+    batches.forEach(b => {
+        const wave = b.wave || 'Nicht zugeordnet';
+        if (!waves[wave]) waves[wave] = [];
+        waves[wave].push(b);
+    });
+
+    const sortedWaves = Object.keys(waves).sort((a, b) => {
+        if (a === 'Nicht zugeordnet') return 1;
+        if (b === 'Nicht zugeordnet') return -1;
+        return a.localeCompare(b, undefined, { numeric: true });
+    });
+
+    const board = document.getElementById('kanbanBoard');
+    if (sortedWaves.length === 0) {
+        board.innerHTML = '<div class="text-center w-100 py-5 text-muted">Keine Batches vorhanden. <a href="/prepare">Ersten Batch erstellen</a></div>';
+        return;
+    }
+
+    board.innerHTML = sortedWaves.map(waveName => {
+        const wb = waves[waveName];
+        const isUnassigned = waveName === 'Nicht zugeordnet';
+        let wTotal = 0, wUploaded = 0, wLinked = 0, wFailed = 0;
+        wb.forEach(b => {
+            wTotal += (b.total_records || 0);
+            wUploaded += (b.successful_records || 0);
+            wLinked += (b.link_linked || 0) + (b.link_exists || 0);
+            wFailed += (b.failed_records || 0);
         });
-        const data = await response.json();
-        
-        if (data.success) {
-            alert(`${data.reset_count} Datensätze zurückgesetzt.\nStarte Migration im Hintergrund...`);
-            loadBatches();
-            loadErrorOverview();
-        } else {
-            alert('Fehler: ' + data.error);
-        }
-    } catch (error) {
-        alert('Fehler: ' + error);
-    }
+        const wPct = wTotal > 0 ? Math.round(wUploaded / wTotal * 100) : 0;
+        const lPct = wTotal > 0 ? Math.round(wLinked / wTotal * 100) : 0;
+
+        return `
+            <div class="wave-column">
+                <div class="wave-header ${isUnassigned ? 'bg-warning text-dark' : 'bg-dark text-white'}">
+                    ${waveName}
+                    <span class="float-right badge badge-light">${wb.length} Batches</span>
+                </div>
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between wave-stats">
+                        <span><i class="fas fa-upload"></i> Upload: ${wPct}%</span>
+                        <span><i class="fas fa-link"></i> Verlinkung: ${lPct}%</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div class="progress-bar bg-success" style="width: ${wPct}%"></div>
+                    </div>
+                    <div class="progress mt-1" style="height: 4px;">
+                        <div class="progress-bar bg-info" style="width: ${lPct}%"></div>
+                    </div>
+                    <div class="wave-stats text-right mt-1">
+                        ${wUploaded}/${wTotal} Docs | ${wLinked} verlinkt
+                        ${wFailed > 0 ? '| <span class="text-danger">' + wFailed + ' Fehler</span>' : ''}
+                    </div>
+                </div>
+                ${wb.map(b => renderBatchCard(b)).join('')}
+            </div>
+        `;
+    }).join('');
 }
 
-async function retryAllErrors() {
-    if (!confirm('Alle fehlgeschlagenen Migrationen erneut versuchen?')) return;
-    
-    try {
-        const response = await fetch('/retry_all_errors', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-        const data = await response.json();
-        
-        if (data.success) {
-            alert(`${data.reset_count} Datensätze zurückgesetzt.\nStarte Migration...`);
-            loadBatches();
-            loadErrorOverview();
-        } else {
-            alert('Fehler: ' + data.error);
-        }
-    } catch (error) {
-        alert('Fehler: ' + error);
-    }
+function renderBatchCard(batch) {
+    const phase = batch.migration_phase || 'prepared';
+    const phaseClass = getPhaseClass(phase);
+    const total = batch.total_records || 0;
+    const success = batch.successful_records || 0;
+    const failed = batch.failed_records || 0;
+    const linkLinked = (batch.link_linked || 0) + (batch.link_exists || 0);
+    const linkTotal = batch.link_total || 0;
+    const linkFailed = batch.link_failed || 0;
+    const uploadPct = total > 0 ? Math.round(success / total * 100) : 0;
+    const linkPct = linkTotal > 0 ? Math.round(linkLinked / linkTotal * 100) : 0;
+    const phaseSteps = getPhaseSteps(phase, batch.status);
+
+    return `
+        <div class="card batch-card ${phaseClass} mb-2" onclick="window.location.href='/preview?batch_id=${batch.batch_id}'">
+            <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <strong style="font-size: 0.85rem;">${batch.description || batch.batch_id}</strong>
+                        <div class="wave-stats">${total} Dokumente</div>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <button class="btn btn-sm btn-link p-0 mr-2 text-muted" onclick="event.stopPropagation(); editBatch('${batch.batch_id}')" title="Batch bearbeiten">
+                            <i class="fas fa-pen fa-xs"></i>
+                        </button>
+                        <span class="badge ${getStatusBadgeClass(batch.status)}" style="font-size: 0.7rem;">
+                            ${getStatusLabel(batch.status)}
+                        </span>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="d-flex justify-content-between wave-stats">
+                        <span><i class="fas fa-upload"></i> ${success}/${total}</span>
+                        <span>${uploadPct}%</span>
+                    </div>
+                    <div class="progress" style="height: 5px;">
+                        <div class="progress-bar bg-success" style="width: ${uploadPct}%"></div>
+                        ${failed > 0 ? '<div class="progress-bar bg-danger" style="width: ' + (total > 0 ? Math.round(failed / total * 100) : 0) + '%"></div>' : ''}
+                    </div>
+                </div>
+                ${linkTotal > 0 ? `
+                <div class="mt-1">
+                    <div class="d-flex justify-content-between wave-stats">
+                        <span><i class="fas fa-link"></i> ${linkLinked}/${linkTotal}</span>
+                        <span>${linkPct}%${linkFailed > 0 ? ' <span class="text-danger">(' + linkFailed + ' err)</span>' : ''}</span>
+                    </div>
+                    <div class="progress" style="height: 4px;">
+                        <div class="progress-bar bg-info" style="width: ${linkPct}%"></div>
+                        ${linkFailed > 0 ? '<div class="progress-bar bg-danger" style="width: ' + (linkTotal > 0 ? Math.round(linkFailed / linkTotal * 100) : 0) + '%"></div>' : ''}
+                    </div>
+                </div>
+                ` : ''}
+                <div class="phase-progress">
+                    ${phaseSteps.map(s => '<div class="phase-bar ' + s + '"></div>').join('')}
+                </div>
+            </div>
+        </div>
+    `;
 }
 
-function toggleErrorPanel() {
-    const body = document.getElementById('errorPanelBody');
-    const icon = document.getElementById('errorPanelToggle');
+// ========================================================================
+// Batch Table
+// ========================================================================
+function toggleBatchTable() {
+    const body = document.getElementById('batchTableBody');
+    const icon = document.getElementById('batchTableToggle');
     if (body.style.display === 'none') {
         body.style.display = 'block';
         icon.className = 'fas fa-chevron-up';
@@ -242,72 +499,34 @@ function toggleErrorPanel() {
     }
 }
 
-function loadBatches() {
-    fetch('/batches')
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                displayBatches(data.batches);
-            } else {
-                showError('Fehler beim Laden der Batches: ' + data.error);
-            }
-        })
-        .catch(error => {
-            showError('Fehler beim Laden der Batches: ' + error);
-        });
-}
-
 function displayBatches(batches) {
     const tbody = document.getElementById('batchesBody');
-    
     if (batches.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="13" class="text-center">Keine Batches vorhanden. Erstelle einen neuen Migration-Batch.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">Keine Batches vorhanden</td></tr>';
         return;
     }
-    
+
     tbody.innerHTML = batches.map(batch => {
-        const statusBadge = getStatusBadge(batch.status);
         const phaseBadge = getPhaseBadge(batch.migration_phase, batch.status);
         const linkInfo = getLinkInfo(batch);
         const actions = getActionButtons(batch);
-        const descriptionDisplay = batch.description 
-            ? `<span title="${escapeHtml(batch.notes || '')}">${escapeHtml(batch.description)}</span>` 
-            : '<span class="text-muted">-</span>';
-        
+
         return `
             <tr data-batch='${JSON.stringify(batch).replace(/'/g, "&#39;")}'>
                 <td><code>${batch.batch_id}</code></td>
-                <td>${descriptionDisplay}</td>
+                <td><span class="badge badge-secondary">${batch.wave || '-'}</span></td>
+                <td>${batch.description ? escapeHtml(batch.description) : '<span class="text-muted">-</span>'}</td>
                 <td>${formatDateTime(batch.created_at)}</td>
                 <td>${batch.created_by || '-'}</td>
-                <td title="${batch.source_file || ''}">${truncate(batch.source_file, 15) || '-'}</td>
                 <td>${batch.total_records || 0}</td>
-                <td>${batch.executed_records || 0}</td>
                 <td class="text-success">${batch.successful_records || 0}</td>
                 <td class="text-danger">${batch.failed_records || 0}</td>
                 <td>${phaseBadge}</td>
                 <td>${linkInfo}</td>
-                <td>${statusBadge}</td>
                 <td>${actions}</td>
             </tr>
         `;
     }).join('');
-}
-
-function getStatusBadge(status) {
-    const badges = {
-        'prepared': '<span class="badge badge-info">Vorbereitet</span>',
-        'executing': '<span class="badge badge-warning"><i class="fas fa-spinner fa-spin"></i> Wird ausgeführt</span>',
-        'completed': '<span class="badge badge-success">Abgeschlossen</span>',
-        'completed_with_errors': '<span class="badge badge-warning">Abgeschlossen (mit Fehlern)</span>',
-        'failed': '<span class="badge badge-danger">Fehlgeschlagen</span>',
-        'linking': '<span class="badge badge-info"><i class="fas fa-spinner fa-spin"></i> Wird verlinkt</span>',
-        'link_completed': '<span class="badge badge-success">Verlinkt</span>',
-        'link_completed_with_errors': '<span class="badge badge-warning">Verlinkt (mit Fehlern)</span>',
-        'link_cancelled': '<span class="badge badge-secondary">Verlinkung abgebrochen</span>',
-        'link_error': '<span class="badge badge-danger">Verlinkungsfehler</span>'
-    };
-    return badges[status] || '<span class="badge badge-secondary">' + status + '</span>';
 }
 
 function getPhaseBadge(phase, status) {
@@ -328,368 +547,89 @@ function getPhaseBadge(phase, status) {
 
 function getLinkInfo(batch) {
     const total = batch.link_total || 0;
-    if (total === 0) {
-        return '<span class="text-muted" title="Kein Objekt-Mapping vorhanden">—</span>';
-    }
-    
+    if (total === 0) return '<span class="text-muted">—</span>';
     const linked = (batch.link_linked || 0) + (batch.link_exists || 0);
     const failed = batch.link_failed || 0;
-    const pending = batch.link_pending || 0;
     const pct = Math.round(linked / total * 100);
-    
     let color = 'bg-secondary';
     if (linked === total) color = 'bg-success';
     else if (linked > 0) color = 'bg-info';
     else if (failed > 0) color = 'bg-danger';
-    
-    return `
-        <div title="Verlinkt: ${linked} | Fehler: ${failed} | Offen: ${pending} / Gesamt: ${total}">
-            <div class="progress" style="height: 16px; min-width: 60px;">
-                <div class="progress-bar ${color}" style="width: ${pct}%">${linked}/${total}</div>
-            </div>
+
+    return `<div title="Verlinkt: ${linked} | Fehler: ${failed} | Gesamt: ${total}">
+        <div class="progress" style="height: 16px; min-width: 60px;">
+            <div class="progress-bar ${color}" style="width: ${pct}%">${linked}/${total}</div>
         </div>
-    `;
+    </div>`;
 }
 
 function getActionButtons(batch) {
     let buttons = [];
-    
-    // 1. Migration - immer verfügbar (zum Batch bearbeiten/ausführen)
-    buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Batch bearbeiten und Migration ausführen">
-        <i class="fas fa-play-circle"></i> Migration
-    </a>`);
-    
-    // 2. Log - nach Ausführung verfügbar
+    buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Vorschau & Vorbereitung"><i class="fas fa-eye"></i> Vorschau</a>`);
+
     if (batch.status === 'completed' || batch.status === 'completed_with_errors' || batch.executed_records > 0) {
-        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="Migration Log anzeigen">
-            <i class="fas fa-list-alt"></i> Log
-        </a>`);
+        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="Auswertung"><i class="fas fa-chart-bar"></i> Auswertung</a>`);
     }
-    
-    // 3. Statistik - nach Ausführung verfügbar
-    if (batch.status === 'completed' || batch.status === 'completed_with_errors' || batch.executed_records > 0) {
-        buttons.push(`<button onclick="viewStatistics('${batch.batch_id}')" class="btn btn-sm btn-warning" title="Statistiken anzeigen">
-            <i class="fas fa-chart-bar"></i> Statistik
-        </button>`);
-    }
-    
-    // Edit button - always available
-    buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="Beschreibung bearbeiten">
-        <i class="fas fa-edit"></i>
-    </button>`);
-    
-    // Delete button - not during execution
+
+    buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="Bearbeiten"><i class="fas fa-edit"></i></button>`);
+
     if (batch.status !== 'executing') {
-        buttons.push(`<button onclick="deleteBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-danger" title="Batch löschen">
-            <i class="fas fa-trash"></i>
-        </button>`);
+        buttons.push(`<button onclick="deleteBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-danger" title="Löschen"><i class="fas fa-trash"></i></button>`);
     }
-    
     return buttons.join(' ');
 }
 
-function executeBatch(batchId) {
-    if (!confirm('Migration für alle freigegebenen Datensätze in diesem Batch ausführen?')) {
-        return;
+// ========================================================================
+// Helpers
+// ========================================================================
+function getPhaseClass(phase) {
+    const map = {
+        'prepared': 'phase-prepared', 'upload': 'phase-upload',
+        'upload_done': 'phase-upload_done', 'linking': 'phase-linking',
+        'completed': 'phase-completed', 'link_cancelled': 'phase-error', 'link_error': 'phase-error'
+    };
+    return map[phase] || 'phase-prepared';
+}
+
+function getPhaseSteps(phase, status) {
+    switch (phase) {
+        case 'completed': return ['done','done','done'];
+        case 'linking': return ['done','done','active'];
+        case 'upload_done': return ['done','done','pending'];
+        case 'upload': return ['done','active','pending'];
+        case 'link_cancelled': case 'link_error': return ['done','done','error'];
+        default:
+            if (status === 'executing') return ['done','active','pending'];
+            if (status === 'completed' || status === 'completed_with_errors') return ['done','done','pending'];
+            return ['done','pending','pending'];
     }
-    
-    const btn = event.target.closest('button');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird ausgeführt...';
-    
-    fetch('/execute', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ batch_id: batchId })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(`Migration abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehler: ${data.failed}\nTeilweise: ${data.partial || 0}`);
-            loadBatches();
-        } else {
-            alert('Migration fehlgeschlagen: ' + data.error);
-        }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play"></i> Ausführen';
-    })
-    .catch(error => {
-        alert('Fehler bei der Migration: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play"></i> Ausführen';
-    });
 }
 
-function viewResults(batchId) {
-    window.location.href = `/details?batch_id=${batchId}`;
+function getStatusBadgeClass(status) {
+    const map = {
+        'prepared': 'badge-secondary', 'executing': 'badge-warning',
+        'completed': 'badge-success', 'completed_with_errors': 'badge-warning',
+        'failed': 'badge-danger', 'linking': 'badge-info',
+        'link_completed': 'badge-success', 'link_completed_with_errors': 'badge-warning',
+        'link_cancelled': 'badge-secondary', 'link_error': 'badge-danger'
+    };
+    return map[status] || 'badge-secondary';
 }
 
-function viewDetails(batchId) {
-    window.location.href = `/preview?batch_id=${batchId}`;
+function getStatusLabel(status) {
+    const map = {
+        'prepared': 'Vorbereitet', 'executing': 'Upload...',
+        'completed': 'Hochgeladen', 'completed_with_errors': 'Upload (Fehler)',
+        'failed': 'Fehlgeschlagen', 'linking': 'Verlinke...',
+        'link_completed': 'Fertig', 'link_completed_with_errors': 'Verlinkt (Fehler)',
+        'link_cancelled': 'Abgebrochen', 'link_error': 'Link-Fehler'
+    };
+    return map[status] || status;
 }
 
 function formatDateTime(dateStr) {
     if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-}
-
-function showError(message) {
-    console.error(message);
-    const tbody = document.getElementById('batchesBody');
-    tbody.innerHTML = `<tr><td colspan="11" class="text-danger">${message}</td></tr>`;
-}
-
-function viewStatistics(batchId) {
-    fetch(`/batch_statistics?batch_id=${batchId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showStatisticsModal(batchId, data.statistics);
-            } else {
-                alert('Fehler beim Laden der Statistiken: ' + data.error);
-            }
-        })
-        .catch(error => {
-            alert('Fehler beim Laden der Statistiken: ' + error);
-        });
-}
-
-function showStatisticsModal(batchId, stats) {
-    // Create modal if it doesn't exist
-    let modal = document.getElementById('statisticsModal');
-    if (!modal) {
-        const modalHtml = `
-        <div class="modal fade" id="statisticsModal" tabindex="-1" role="dialog">
-            <div class="modal-dialog modal-xl" role="document" style="max-width: 95vw;">
-                <div class="modal-content">
-                    <div class="modal-header bg-warning text-dark py-2">
-                        <h5 class="modal-title"><i class="fas fa-chart-bar"></i> Batch-Statistiken - <code>${batchId}</code></h5>
-                        <button type="button" class="close" data-dismiss="modal">
-                            <span>&times;</span>
-                        </button>
-                    </div>
-                    <div class="modal-body p-2" id="statisticsModalBody" style="max-height: 85vh; overflow-y: auto;">
-                    </div>
-                    <div class="modal-footer py-1">
-                        <button type="button" class="btn btn-sm btn-secondary" data-dismiss="modal">Schließen</button>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
-        modal = document.getElementById('statisticsModal');
-    }
-    
-    // Update title with current batch ID
-    modal.querySelector('.modal-title').innerHTML = `<i class="fas fa-chart-bar"></i> Batch-Statistiken - <code>${batchId}</code>`;
-    
-    const body = document.getElementById('statisticsModalBody');
-    body.innerHTML = `
-        <div class="row">
-            <!-- Left Column: Overview Stats -->
-            <div class="col-lg-4">
-                <div class="card mb-2 border-primary">
-                    <div class="card-header bg-primary text-white py-1">
-                        <i class="fas fa-clock"></i> Dauer & Durchsatz
-                    </div>
-                    <div class="card-body p-2 text-center">
-                        <div class="row">
-                            <div class="col-6">
-                                <h3 class="mb-0">${stats.batch_duration_formatted || '-'}</h3>
-                                <small class="text-muted">Dauer</small>
-                            </div>
-                            <div class="col-6">
-                                <h3 class="mb-0 text-success">${stats.throughput_mb_per_minute || 0}</h3>
-                                <small class="text-muted">MB/min</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="card mb-2">
-                    <div class="card-header py-1"><i class="fas fa-file"></i> Zusammenfassung</div>
-                    <div class="card-body p-2">
-                        <table class="table table-sm mb-0">
-                            <tr><td>Dokumente:</td><td class="text-right"><strong>${stats.total_documents || 0}</strong></td></tr>
-                            <tr><td>Dateien:</td><td class="text-right"><strong>${stats.total_files || 0}</strong></td></tr>
-                            <tr><td>Gesamtgröße:</td><td class="text-right"><strong>${stats.total_mb || 0} MB</strong></td></tr>
-                            <tr><td>Ø/Dok:</td><td class="text-right"><strong>${stats.avg_time_per_document_seconds || 0}s</strong></td></tr>
-                            <tr><td>Ø/MB:</td><td class="text-right"><strong>${stats.avg_time_per_mb_seconds || 0}s</strong></td></tr>
-                        </table>
-                    </div>
-                </div>
-                
-                <div class="card mb-2 bg-light">
-                    <div class="card-header py-1"><i class="fas fa-cog"></i> Konfiguration</div>
-                    <div class="card-body p-2">
-                        <table class="table table-sm mb-0">
-                            <tr><td>Workers:</td><td class="text-right"><strong>${stats.workers || '-'}</strong></td></tr>
-                            <tr><td>Pacing:</td><td class="text-right"><strong>${stats.pacing_seconds || '-'}s</strong></td></tr>
-                        </table>
-                    </div>
-                </div>
-                
-                ${stats.file_size_analysis ? `
-                <div class="card mb-2 ${stats.file_size_analysis.size_errors > 0 ? 'border-danger' : 'border-success'}">
-                    <div class="card-header py-1 ${stats.file_size_analysis.size_errors > 0 ? 'bg-danger' : 'bg-success'} text-white">
-                        <i class="fas fa-file-alt"></i> Dateianalyse
-                    </div>
-                    <div class="card-body p-2">
-                        <table class="table table-sm mb-0">
-                            <tr><td>Erfolgreich:</td><td class="text-right text-success"><strong>${stats.file_size_analysis.successful_files || 0}</strong></td></tr>
-                            <tr><td>Fehlgeschlagen:</td><td class="text-right text-danger"><strong>${stats.file_size_analysis.failed_files || 0}</strong></td></tr>
-                            <tr><td>Max. Erfolgsgröße:</td><td class="text-right"><strong>${stats.file_size_analysis.max_successful_size_mb || 0} MB</strong></td></tr>
-                            ${stats.file_size_analysis.estimated_limit_mb ? `<tr><td>Gesch. Limit:</td><td class="text-right text-warning"><strong>~${stats.file_size_analysis.estimated_limit_mb} MB</strong></td></tr>` : ''}
-                        </table>
-                    </div>
-                </div>
-                ` : ''}
-            </div>
-            
-            <!-- Middle Column: Timing Analysis -->
-            <div class="col-lg-4">
-                ${stats.timing_analysis ? `
-                <div class="card mb-2 border-info">
-                    <div class="card-header bg-info text-white py-1">
-                        <i class="fas fa-stopwatch"></i> Zeitanalyse
-                    </div>
-                    <div class="card-body p-2">
-                        <div class="row text-center mb-2">
-                            <div class="col-4">
-                                <h4 class="mb-0">${stats.timing_analysis.avg_seconds_per_mb || '-'}</h4>
-                                <small>s/MB</small>
-                            </div>
-                            <div class="col-4">
-                                <h4 class="mb-0">${stats.timing_analysis.max_actual_time_seconds || '-'}</h4>
-                                <small>Max (s)</small>
-                            </div>
-                            <div class="col-4">
-                                <h4 class="mb-0 text-success">${stats.timing_analysis.recommended_pacing_seconds || '-'}</h4>
-                                <small>Empf. Pacing</small>
-                            </div>
-                        </div>
-                        
-                        ${stats.timing_analysis.file_details && stats.timing_analysis.file_details.length > 0 ? `
-                        <div style="max-height: 280px; overflow-y: auto;">
-                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
-                                <thead class="thead-light">
-                                    <tr><th>Datei</th><th>MB</th><th>Zeit</th><th>s/MB</th></tr>
-                                </thead>
-                                <tbody>
-                                    ${stats.timing_analysis.file_details.map(f => `
-                                        <tr class="${f.status === 'SUCCESS' ? '' : 'table-danger'}">
-                                            <td title="${f.file || ''}">${(f.file || '-').substring(0, 20)}${(f.file || '').length > 20 ? '...' : ''}</td>
-                                            <td>${f.size_mb || '-'}</td>
-                                            <td><strong>${f.actual_time_seconds || '-'}</strong></td>
-                                            <td>${f.size_mb > 0 ? (f.actual_time_seconds / f.size_mb).toFixed(1) : '-'}</td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                        ` : '<p class="text-muted mb-0">Keine Zeitdaten verfügbar</p>'}
-                    </div>
-                </div>
-                ` : `
-                <div class="card mb-2 border-secondary">
-                    <div class="card-header bg-secondary text-white py-1">
-                        <i class="fas fa-stopwatch"></i> Zeitanalyse
-                    </div>
-                    <div class="card-body p-2 text-center text-muted">
-                        <p class="mb-0">Keine Zeitdaten verfügbar</p>
-                        <small>Führe einen neuen Batch aus, um Zeitdaten zu sammeln</small>
-                    </div>
-                </div>
-                `}
-            </div>
-            
-            <!-- Right Column: Error Analysis -->
-            <div class="col-lg-4">
-                ${stats.error_analysis && stats.error_analysis.total_errors > 0 ? `
-                <div class="card mb-2 border-danger">
-                    <div class="card-header bg-danger text-white py-1">
-                        <i class="fas fa-exclamation-circle"></i> Fehler (${stats.error_analysis.total_errors})
-                    </div>
-                    <div class="card-body p-2">
-                        <table class="table table-sm table-bordered mb-2" style="font-size: 0.85rem;">
-                            <thead class="thead-dark">
-                                <tr><th>Kategorie</th><th>Anzahl</th></tr>
-                            </thead>
-                            <tbody>
-                                ${stats.error_analysis.categories.map(cat => `
-                                    <tr>
-                                        <td><code>${cat.category}</code><br><small class="text-muted">${cat.description}</small></td>
-                                        <td class="text-center"><span class="badge badge-danger">${cat.count}</span></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                        
-                        ${stats.error_analysis.details && stats.error_analysis.details.length > 0 ? `
-                        <h6 class="mb-1">Details:</h6>
-                        <div style="max-height: 200px; overflow-y: auto;">
-                            <table class="table table-sm table-bordered table-striped mb-0" style="font-size: 0.75rem;">
-                                <thead class="thead-light">
-                                    <tr><th>ID</th><th>Kategorie</th><th>Nachricht</th></tr>
-                                </thead>
-                                <tbody>
-                                    ${stats.error_analysis.details.slice(0, 20).map(err => `
-                                        <tr>
-                                            <td>${err.staging_id || '-'}</td>
-                                            <td><span class="badge badge-danger">${err.category}</span></td>
-                                            <td title="${err.message || ''}">${err.message ? (err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message) : '-'}</td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                        ` : ''}
-                    </div>
-                </div>
-                ` : `
-                <div class="card mb-2 border-success">
-                    <div class="card-header bg-success text-white py-1">
-                        <i class="fas fa-check-circle"></i> Fehleranalyse
-                    </div>
-                    <div class="card-body p-2 text-center">
-                        <h4 class="text-success mb-1"><i class="fas fa-check"></i></h4>
-                        <p class="mb-0">Keine Fehler erkannt</p>
-                    </div>
-                </div>
-                `}
-                
-                ${stats.file_size_analysis && stats.file_size_analysis.size_error_details && stats.file_size_analysis.size_error_details.length > 0 ? `
-                <div class="card mb-2 border-warning">
-                    <div class="card-header bg-warning text-dark py-1">
-                        <i class="fas fa-exclamation-triangle"></i> Größenfehler
-                    </div>
-                    <div class="card-body p-2">
-                        <div style="max-height: 150px; overflow-y: auto;">
-                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
-                                <thead class="thead-light">
-                                    <tr><th>Datei</th><th>Größe</th></tr>
-                                </thead>
-                                <tbody>
-                                    ${stats.file_size_analysis.size_error_details.map(e => `
-                                        <tr class="table-danger">
-                                            <td title="${e.file || ''}">${(e.file || '-').substring(0, 25)}...</td>
-                                            <td>${e.size_mb || '-'} MB</td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-                ` : ''}
-            </div>
-        </div>
-    `;
-    
-    $(modal).modal('show');
+    return new Date(dateStr).toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
 function truncate(str, len) {
@@ -704,148 +644,717 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ========================================================================
+// Batch Edit / Delete
+// ========================================================================
 function editBatch(batchId) {
-    // Find batch data from table row
     const row = document.querySelector(`tr[data-batch*="${batchId}"]`);
     let batch = {};
-    try {
-        batch = JSON.parse(row.getAttribute('data-batch'));
-    } catch(e) {
-        console.error('Could not parse batch data', e);
-    }
-    
-    // Create modal if it doesn't exist
+    try { batch = JSON.parse(row.getAttribute('data-batch')); } catch(e) {}
+
     let modal = document.getElementById('editBatchModal');
     if (!modal) {
-        const modalHtml = `
-        <div class="modal fade" id="editBatchModal" tabindex="-1" role="dialog">
-            <div class="modal-dialog" role="document">
-                <div class="modal-content">
-                    <div class="modal-header bg-primary text-white py-2">
-                        <h5 class="modal-title"><i class="fas fa-edit"></i> Batch bearbeiten</h5>
-                        <button type="button" class="close text-white" data-dismiss="modal">
-                            <span>&times;</span>
-                        </button>
+        const html = `
+        <div class="modal fade" id="editBatchModal" tabindex="-1">
+            <div class="modal-dialog"><div class="modal-content">
+                <div class="modal-header bg-primary text-white py-2">
+                    <h5 class="modal-title"><i class="fas fa-edit"></i> Batch bearbeiten</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editBatchId">
+                    <div class="form-group">
+                        <label for="editWave">Wave</label>
+                        <select class="form-control" id="editWave">
+                            <option value="">-- Wave w&auml;hlen --</option>
+                        </select>
                     </div>
-                    <div class="modal-body">
-                        <input type="hidden" id="editBatchId">
-                        <div class="form-group">
-                            <label for="editWave">Wave</label>
-                            <select class="form-control" id="editWave">
-                                <option value="">-- Wave wählen --</option>
-                                <option value="Wave 0">Wave 0</option>
-                                <option value="Wave 1">Wave 1</option>
-                                <option value="Wave 2">Wave 2</option>
-                                <option value="Wave 3">Wave 3</option>
-                                <option value="Wave 4">Wave 4</option>
-                                <option value="Wave 5">Wave 5</option>
-                                <option value="Wave 6">Wave 6</option>
-                                <option value="Wave 7">Wave 7</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="editDescription">Beschreibung (max. 40 Zeichen)</label>
-                            <input type="text" class="form-control" id="editDescription" maxlength="40" placeholder="Kurzbeschreibung...">
-                            <small class="form-text text-muted"><span id="descCharCount">0</span>/40 Zeichen</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="editNotes">Notizen</label>
-                            <textarea class="form-control" id="editNotes" rows="3" placeholder="Detaillierte Notizen..."></textarea>
-                        </div>
+                    <div class="form-group">
+                        <label>Beschreibung (max. 40 Zeichen)</label>
+                        <input type="text" class="form-control" id="editDescription" maxlength="40">
+                        <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
-                        <button type="button" class="btn btn-primary" onclick="saveBatch()">
-                            <i class="fas fa-save"></i> Speichern
-                        </button>
+                    <div class="form-group">
+                        <label>Notizen</label>
+                        <textarea class="form-control" id="editNotes" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label><strong>Aufgaben-Zuordnung</strong></label>
+                        <table class="table table-sm table-borderless mb-0">
+                            <thead><tr><th style="width:30px"></th><th>Aufgabe</th><th>Start</th><th style="width:80px">Dauer</th><th style="width:90px">Ende</th></tr></thead>
+                            <tbody>
+                                <tr>
+                                    <td><input type="checkbox" id="editTaskQualLoad" onchange="toggleBatchTaskRow('QualLoad')"></td>
+                                    <td><span class="task-env qual">Q</span> Load</td>
+                                    <td><input type="date" class="form-control form-control-sm bt-start" id="editTaskQualLoadStart" data-task="QualLoad" disabled></td>
+                                    <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm bt-dur" id="editTaskQualLoadDur" data-task="QualLoad" disabled><div class="input-group-append"><span class="input-group-text" style="font-size:0.7rem">T</span></div></div></td>
+                                    <td><span class="text-muted bt-end-label" id="editTaskQualLoadEnd" style="font-size:0.8rem">&ndash;</span></td>
+                                </tr>
+                                <tr>
+                                    <td><input type="checkbox" id="editTaskQualLink" onchange="toggleBatchTaskRow('QualLink')"></td>
+                                    <td><span class="task-env qual">Q</span> Link</td>
+                                    <td><input type="date" class="form-control form-control-sm bt-start" id="editTaskQualLinkStart" data-task="QualLink" disabled></td>
+                                    <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm bt-dur" id="editTaskQualLinkDur" data-task="QualLink" disabled><div class="input-group-append"><span class="input-group-text" style="font-size:0.7rem">T</span></div></div></td>
+                                    <td><span class="text-muted bt-end-label" id="editTaskQualLinkEnd" style="font-size:0.8rem">&ndash;</span></td>
+                                </tr>
+                                <tr>
+                                    <td><input type="checkbox" id="editTaskProdLoad" onchange="toggleBatchTaskRow('ProdLoad')"></td>
+                                    <td><span class="task-env prod">P</span> Load</td>
+                                    <td><input type="date" class="form-control form-control-sm bt-start" id="editTaskProdLoadStart" data-task="ProdLoad" disabled></td>
+                                    <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm bt-dur" id="editTaskProdLoadDur" data-task="ProdLoad" disabled><div class="input-group-append"><span class="input-group-text" style="font-size:0.7rem">T</span></div></div></td>
+                                    <td><span class="text-muted bt-end-label" id="editTaskProdLoadEnd" style="font-size:0.8rem">&ndash;</span></td>
+                                </tr>
+                                <tr>
+                                    <td><input type="checkbox" id="editTaskProdLink" onchange="toggleBatchTaskRow('ProdLink')"></td>
+                                    <td><span class="task-env prod">P</span> Link</td>
+                                    <td><input type="date" class="form-control form-control-sm bt-start" id="editTaskProdLinkStart" data-task="ProdLink" disabled></td>
+                                    <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm bt-dur" id="editTaskProdLinkDur" data-task="ProdLink" disabled><div class="input-group-append"><span class="input-group-text" style="font-size:0.7rem">T</span></div></div></td>
+                                    <td><span class="text-muted bt-end-label" id="editTaskProdLinkEnd" style="font-size:0.8rem">&ndash;</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <small class="text-muted">T = Kalendertage. Checkbox aktiviert die Aufgabe.</small>
                     </div>
                 </div>
-            </div>
+                <div class="modal-footer">
+                    <button class="btn btn-danger mr-auto" onclick="deleteBatchFromModal()"><i class="fas fa-trash"></i> L&ouml;schen</button>
+                    <button class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                    <button class="btn btn-primary" onclick="saveBatch()"><i class="fas fa-save"></i> Speichern</button>
+                </div>
+            </div></div>
         </div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', html);
         modal = document.getElementById('editBatchModal');
-        
-        // Character counter
         document.getElementById('editDescription').addEventListener('input', function() {
             document.getElementById('descCharCount').textContent = this.value.length;
         });
+        // Attach live-update listeners for start + duration → end label
+        modal.querySelectorAll('.bt-start, .bt-dur').forEach(el => {
+            el.addEventListener('input', () => btUpdateEndLabel(el.dataset.task));
+        });
+        // Populate wave dropdown
+        populateWaveDropdowns(wavePlans);
     }
-    
-    // Fill form with current values
+
     document.getElementById('editBatchId').value = batchId;
     document.getElementById('editWave').value = batch.wave || '';
     document.getElementById('editDescription').value = batch.description || '';
     document.getElementById('editNotes').value = batch.notes || '';
     document.getElementById('descCharCount').textContent = (batch.description || '').length;
-    
+
+    // Populate per-task fields
+    const taskKeys = ['QualLoad','QualLink','ProdLoad','ProdLink'];
+    const dbKeys   = ['task_qual_load','task_qual_link','task_prod_load','task_prod_link'];
+    taskKeys.forEach((tk, i) => {
+        const checked = !!batch[dbKeys[i]];
+        document.getElementById('editTask' + tk).checked = checked;
+        document.getElementById('editTask' + tk + 'Start').value = batch[dbKeys[i] + '_start'] || '';
+        document.getElementById('editTask' + tk + 'Dur').value = batch[dbKeys[i] + '_dur'] || '';
+        toggleBatchTaskRow(tk);
+        btUpdateEndLabel(tk);
+    });
+
     $(modal).modal('show');
+}
+
+// Toggle start/duration inputs based on checkbox
+function toggleBatchTaskRow(task) {
+    const checked = document.getElementById('editTask' + task).checked;
+    document.getElementById('editTask' + task + 'Start').disabled = !checked;
+    document.getElementById('editTask' + task + 'Dur').disabled = !checked;
+    if (!checked) {
+        document.getElementById('editTask' + task + 'Start').value = '';
+        document.getElementById('editTask' + task + 'Dur').value = '';
+        document.getElementById('editTask' + task + 'End').textContent = '–';
+    }
+}
+
+// Compute end date label from start + duration
+function btUpdateEndLabel(task) {
+    const startVal = document.getElementById('editTask' + task + 'Start').value;
+    const durVal   = parseInt(document.getElementById('editTask' + task + 'Dur').value);
+    const label    = document.getElementById('editTask' + task + 'End');
+    if (startVal && durVal > 0) {
+        const endStr = addDays(startVal, durVal - 1);
+        const parts = endStr.split('-');
+        label.textContent = parts[2] + '.' + parts[1] + '.' + parts[0];
+    } else {
+        label.textContent = '–';
+    }
 }
 
 function saveBatch() {
     const batchId = document.getElementById('editBatchId').value;
-    const wave = document.getElementById('editWave').value;
-    const description = document.getElementById('editDescription').value;
-    const notes = document.getElementById('editNotes').value;
-    
     fetch(`/batch/${batchId}`, {
         method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ wave, description, notes })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            wave: document.getElementById('editWave').value,
+            description: document.getElementById('editDescription').value,
+            notes: document.getElementById('editNotes').value,
+            estimated_duration_h: null,
+            task_qual_load: document.getElementById('editTaskQualLoad').checked,
+            task_qual_link: document.getElementById('editTaskQualLink').checked,
+            task_prod_load: document.getElementById('editTaskProdLoad').checked,
+            task_prod_link: document.getElementById('editTaskProdLink').checked,
+            task_qual_load_start: document.getElementById('editTaskQualLoadStart').value || null,
+            task_qual_load_dur: document.getElementById('editTaskQualLoadDur').value || null,
+            task_qual_link_start: document.getElementById('editTaskQualLinkStart').value || null,
+            task_qual_link_dur: document.getElementById('editTaskQualLinkDur').value || null,
+            task_prod_load_start: document.getElementById('editTaskProdLoadStart').value || null,
+            task_prod_load_dur: document.getElementById('editTaskProdLoadDur').value || null,
+            task_prod_link_start: document.getElementById('editTaskProdLinkStart').value || null,
+            task_prod_link_dur: document.getElementById('editTaskProdLinkDur').value || null
+        })
     })
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
-        if (data.success) {
-            $('#editBatchModal').modal('hide');
-            loadBatches();
-        } else {
-            alert('Fehler beim Speichern: ' + data.error);
-        }
+        if (data.success) { $('#editBatchModal').modal('hide'); loadAll(); }
+        else alert('Fehler: ' + data.error);
     })
-    .catch(error => {
-        alert('Fehler beim Speichern: ' + error);
-    });
+    .catch(err => alert('Fehler: ' + err));
 }
 
 function deleteBatch(batchId) {
-    if (!confirm(`Batch ${batchId} wirklich löschen?\n\nAlle Staging-Datensätze, Dateidetails, Logs und Mappings werden unwiderruflich gelöscht.\n\nBei großen Batches kann das einige Sekunden dauern.`)) {
-        return;
-    }
-    
-    // Disable delete button and show spinner
+    if (!confirm('Batch ' + batchId + ' wirklich l\u00f6schen?\n\nAlle Staging-Datens\u00e4tze, Dateidetails, Logs und Mappings werden unwiderruflich gel\u00f6scht.')) return;
+
     const btn = event.target.closest('button');
-    const originalHtml = btn.innerHTML;
+    const orig = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    btn.title = 'Wird gelöscht...';
-    
-    // Show row feedback
     const row = btn.closest('tr');
     if (row) row.style.opacity = '0.5';
-    
-    fetch(`/batch/${batchId}`, {
-        method: 'DELETE'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            const d = data.deleted || {};
-            console.log(`Batch ${batchId} gelöscht: ${d.staging_records || 0} Staging, ${d.file_details || 0} Files, ${d.logs || 0} Logs, ${d.object_mappings || 0} Mappings`);
-            loadBatches();
-        } else {
-            alert('Fehler beim Löschen: ' + data.error);
-            btn.disabled = false;
-            btn.innerHTML = originalHtml;
-            if (row) row.style.opacity = '1';
-        }
-    })
-    .catch(error => {
-        alert('Fehler beim Löschen: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = originalHtml;
-        if (row) row.style.opacity = '1';
+
+    fetch('/batch/' + batchId, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) { loadAll(); }
+            else { alert('Fehler: ' + data.error); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; }
+        })
+        .catch(err => { alert('Fehler: ' + err); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; });
+}
+
+function deleteBatchFromModal() {
+    const batchId = document.getElementById('editBatchId').value;
+    if (!batchId) return;
+    if (!confirm('Batch ' + batchId + ' wirklich l\u00f6schen?\n\nAlle Staging-Datens\u00e4tze, Dateidetails, Logs und Mappings werden unwiderruflich gel\u00f6scht.')) return;
+
+    fetch('/batch/' + batchId, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) { $('#editBatchModal').modal('hide'); loadAll(); }
+            else { alert('Fehler: ' + data.error); }
+        })
+        .catch(err => { alert('Fehler: ' + err); });
+}
+
+// ========================================================================
+// Wave Plan - Gantt Timeline + Task List
+// ========================================================================
+let wavePlans = [];
+
+function loadWavePlans() {
+    fetch('/wave-plans')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                wavePlans = data.waves || [];
+                populateWaveDropdowns(wavePlans);
+                populateWaveFilter(allBatches);
+                applyWaveFilter();
+            }
+        })
+        .catch(err => console.error('Wave plans error:', err));
+}
+
+function populateWaveDropdowns(waves) {
+    const dbNames = waves.map(w => w.wave_name);
+    // Always include Wave 0-7, merge with DB waves
+    const defaultWaves = Array.from({length: 8}, (_, i) => `Wave ${i}`);
+    const names = [...new Set([...defaultWaves, ...dbNames])].sort((a, b) => {
+        const na = parseInt(a.replace(/\D/g, '')), nb = parseInt(b.replace(/\D/g, ''));
+        return (isNaN(na) ? 999 : na) - (isNaN(nb) ? 999 : nb);
     });
+
+    // Edit batch modal dropdown
+    const editSelect = document.getElementById('editWave');
+    if (editSelect) {
+        const currentVal = editSelect.value;
+        editSelect.innerHTML = '<option value="">-- Wave wählen --</option>';
+        names.forEach(n => {
+            editSelect.innerHTML += `<option value="${n}">${n}</option>`;
+        });
+        if (currentVal) editSelect.value = currentVal;
+    }
+}
+
+// Helper: parse date string to local midnight (avoids UTC vs local timezone issues)
+function parseLocalDate(str) {
+    if (!str) return null;
+    const parts = str.substring(0, 10).split('-');
+    return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+}
+
+// --- Gantt Chart ---
+function renderGantt(waves, batches) {
+    const container = document.getElementById('ganttContainer');
+    if (waves.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-calendar-alt fa-2x mb-2"></i><br>Noch keine Wellenplanung vorhanden.<br><button class="btn btn-sm btn-outline-primary mt-2" onclick="openWavePlanModal()"><i class="fas fa-plus"></i> Erste Welle planen</button></div>';
+        return;
+    }
+
+    // Find date range across all waves
+    const allDates = [];
+    waves.forEach(w => {
+        ['qual_load_start','qual_load_end','qual_link_start','qual_link_end',
+         'prod_load_start','prod_load_end','prod_link_start','prod_link_end'].forEach(f => {
+            if (w[f]) allDates.push(parseLocalDate(w[f]));
+        });
+    });
+    if (allDates.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted py-3">Keine Zeiträume definiert.</div>';
+        return;
+    }
+
+    let minDate = new Date(Math.min(...allDates));
+    let maxDate = new Date(Math.max(...allDates));
+    // Add padding: start of minDate's month, end of maxDate's month + 1
+    minDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    maxDate = new Date(maxDate.getFullYear(), maxDate.getMonth() + 2, 0);
+    const totalDays = Math.ceil((maxDate - minDate) / 86400000);
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    // Build month headers
+    const months = [];
+    let d = new Date(minDate);
+    while (d <= maxDate) {
+        const monthStart = new Date(d);
+        const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        const daysInView = Math.min(Math.ceil((monthEnd - minDate) / 86400000) + 1, totalDays) - Math.max(0, Math.ceil((monthStart - minDate) / 86400000));
+        months.push({
+            label: monthStart.toLocaleDateString('de-DE', { month: 'short', year: '2-digit' }),
+            days: Math.max(daysInView, 1)
+        });
+        d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+
+    const waveTasks = [
+        { key: 'qual_load', label: 'Qual Load', env: 'qual' },
+        { key: 'qual_link', label: 'Qual Link', env: 'qual' },
+        { key: 'prod_load', label: 'Prod Load', env: 'prod' },
+        { key: 'prod_link', label: 'Prod Link', env: 'prod' },
+    ];
+
+    let html = '<table class="gantt-table"><thead><tr><th style="min-width:160px;">Aufgabe</th>';
+    months.forEach(m => { html += `<th colspan="${m.days}" class="gantt-month-header">${m.label}</th>`; });
+    html += '</tr></thead><tbody>';
+
+    // Helper: render a bar row
+    function renderBarRow(label, startStr, endStr, status, cssClass) {
+        let row = `<tr class="task-row"><td>${label}</td>`;
+        if (startStr && endStr) {
+            const barStart = parseLocalDate(startStr);
+            const barEnd = parseLocalDate(endStr);
+            const offsetDays = Math.max(0, Math.round((barStart - minDate) / 86400000));
+            const barDays = Math.max(1, Math.round((barEnd - barStart) / 86400000) + 1);
+            const titleText = `${formatDateShort(startStr)} - ${formatDateShort(endStr)} (${status})`;
+            for (let i = 0; i < totalDays; i++) {
+                const cellDate = new Date(minDate.getTime() + i * 86400000);
+                const isToday = cellDate.getTime() === today.getTime();
+                const inBar = i >= offsetDays && i < offsetDays + barDays;
+                row += `<td class="gantt-day-cell ${isToday ? 'gantt-today' : ''}">`;
+                if (inBar) {
+                    const isFirst = (i === offsetDays);
+                    const isLast  = (i === offsetDays + barDays - 1);
+                    const segCls  = `gantt-seg ${cssClass}${isFirst ? ' gantt-seg-first' : ''}${isLast ? ' gantt-seg-last' : ''}`;
+                    row += `<div class="${segCls}" title="${titleText}"></div>`;
+                }
+                row += '</td>';
+            }
+        } else {
+            row += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Nicht geplant</td>`;
+        }
+        row += '</tr>';
+        return row;
+    }
+
+    waves.forEach(w => {
+        // Wave header row
+        html += `<tr class="gantt-row-wave"><td colspan="${totalDays + 1}"><strong>${w.wave_name}</strong>`;
+        html += ` <button class="btn btn-sm btn-link p-0 ml-2" onclick="editWavePlan('${w.wave_name}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
+        html += ` <button class="btn btn-sm btn-link text-danger p-0 ml-1" onclick="deleteWavePlan(${w.id}, '${w.wave_name}')" title="Löschen"><i class="fas fa-trash fa-xs"></i></button>`;
+        html += `</td></tr>`;
+
+        const waveBatches = (batches || []).filter(b => b.wave === w.wave_name);
+
+        // Render each wave task row, then its assigned batches directly underneath
+        waveTasks.forEach(t => {
+            const startStr = w[t.key + '_start'];
+            const endStr = w[t.key + '_end'];
+            const status = w[t.key + '_status'] || 'vorbereitung';
+            // Calculate duration in days for the wave task
+            let durationInfo = '';
+            if (startStr && endStr) {
+                const dDays = Math.round((parseLocalDate(endStr) - parseLocalDate(startStr)) / 86400000) + 1;
+                durationInfo = ` <span class="text-muted" style="font-size:0.7rem;">(${dDays} Tage)</span>`;
+            }
+            const label = `<span class="task-env ${t.env}">${t.env.toUpperCase()}</span> ${t.label.split(' ')[1]}${durationInfo}`;
+            html += renderBarRow(label, startStr, endStr, getStatusText(status), 'wave-' + t.env + ' status-' + status);
+
+            // Batches assigned to this task
+            const taskKey = 'task_' + t.key; // e.g. task_qual_load
+            const assigned = waveBatches.filter(b => b[taskKey]);
+            assigned.forEach(b => {
+                const batchLabel = b.description || b.batch_id;
+                // Per-task start and duration from batch
+                const bStart = b[taskKey + '_start'];
+                const bDur   = b[taskKey + '_dur'];
+                const phase = b.migration_phase || 'upload';
+                const bStatus = b.status || 'prepared';
+                let batchCss = 'batch-prepared';
+                if (bStatus === 'completed') batchCss = 'batch-completed';
+                else if (bStatus === 'executing') batchCss = 'batch-executing';
+                else if (phase === 'linking') batchCss = 'batch-linking';
+                const durText = bDur > 0 ? `${bDur} Tage` : '';
+                const statusText = `${b.total_records || 0} Dok.${durText ? ' | ' + durText : ''}`;
+                const rowLabel = `<span style="padding-left:24px;font-size:0.78rem;"><i class="fas fa-box fa-xs text-muted"></i> ${batchLabel}</span>`
+                    + ` <span class="text-muted" style="font-size:0.7rem;">(${statusText})</span>`
+                    + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
+                if (bStart && bDur > 0) {
+                    const barEnd = addDays(bStart, bDur - 1);
+                    html += renderBarRow(rowLabel, bStart, barEnd, statusText, batchCss);
+                } else if (startStr && endStr) {
+                    // Fallback: use wave task range
+                    html += renderBarRow(rowLabel, startStr, endStr, statusText, batchCss);
+                } else {
+                    html += `<tr class="gantt-row-batch"><td>${rowLabel}</td>`;
+                    html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Zeitraum nicht definiert</td></tr>`;
+                }
+            });
+        });
+
+        // Batches without any task assignment
+        const unassigned = waveBatches.filter(b => !b.task_qual_load && !b.task_qual_link && !b.task_prod_load && !b.task_prod_link);
+        unassigned.forEach(b => {
+            const batchLabel = b.description || b.batch_id;
+            const statusText = `${b.total_records || 0} Dok.`;
+            const rowLabel = `<span style="padding-left:24px;font-size:0.78rem;"><i class="fas fa-box fa-xs text-muted"></i> ${batchLabel}</span>`
+                + ` <span class="text-muted" style="font-size:0.7rem;">(${statusText})</span>`
+                + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
+            html += `<tr class="gantt-row-batch"><td>${rowLabel}</td>`;
+            html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Keine Aufgabe zugeordnet</td></tr>`;
+        });
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function addDays(dateStr, days) {
+    const parts = dateStr.substring(0, 10).split('-');
+    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    d.setDate(d.getDate() + days);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+// --- Task List ---
+function renderTaskList(waves) {
+    const tbody = document.getElementById('taskListBody');
+    if (waves.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">Keine Wellenplanung vorhanden</td></tr>';
+        return;
+    }
+
+    const tasks = [
+        { key: 'qual_load', label: 'Load', env: 'Qual', icon: 'fa-upload' },
+        { key: 'qual_link', label: 'Verlinkung', env: 'Qual', icon: 'fa-link' },
+        { key: 'prod_load', label: 'Load', env: 'Prod', icon: 'fa-upload' },
+        { key: 'prod_link', label: 'Verlinkung', env: 'Prod', icon: 'fa-link' },
+    ];
+
+    let html = '';
+    waves.forEach(w => {
+        tasks.forEach(t => {
+            const status = w[t.key + '_status'] || 'vorbereitung';
+            const startStr = w[t.key + '_start'];
+            const endStr = w[t.key + '_end'];
+            const envClass = t.env === 'Qual' ? 'qual' : 'prod';
+            const dateRange = (startStr && endStr)
+                ? `${formatDateShort(startStr)} → ${formatDateShort(endStr)}`
+                : '<span class="text-muted">-</span>';
+
+            html += `
+                <tr class="task-row">
+                    <td>
+                        <strong>${w.wave_name}</strong><br>
+                        <span class="task-env ${envClass}">${t.env}</span>
+                        <i class="fas ${t.icon} fa-xs"></i> ${t.label}
+                    </td>
+                    <td class="date-range">${dateRange}</td>
+                    <td>
+                        <div class="d-flex align-items-center">
+                            <span class="badge ${getStatusClass(status)} status-badge mr-1" 
+                                onclick="cycleTaskStatus(${w.id}, '${t.key}_status', '${getPrevStatus(status)}')" 
+                                title="Klick: ← ${getStatusText(getPrevStatus(status))}">
+                                <i class="fas fa-chevron-left fa-xs"></i></span>
+                            <span class="badge ${getStatusClass(status)} px-2">${getStatusText(status)}</span>
+                            <span class="badge ${getStatusClass(status)} status-badge ml-1" 
+                                onclick="cycleTaskStatus(${w.id}, '${t.key}_status', '${getNextStatus(status)}')" 
+                                title="Klick: → ${getStatusText(getNextStatus(status))}">
+                                <i class="fas fa-chevron-right fa-xs"></i></span>
+                            <button class="btn btn-sm btn-link p-0 ml-2 text-muted" onclick="editWavePlan('${w.wave_name}')" title="Welle bearbeiten">
+                                <i class="fas fa-pen fa-xs"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+    });
+    tbody.innerHTML = html;
+}
+
+function getStatusClass(status) {
+    return { 'vorbereitung': 'badge-secondary', 'arbeit': 'badge-primary', 'fertig': 'badge-success' }[status] || 'badge-secondary';
+}
+
+function getNextStatus(status) {
+    return { 'vorbereitung': 'arbeit', 'arbeit': 'fertig', 'fertig': 'fertig' }[status] || 'vorbereitung';
+}
+
+function getPrevStatus(status) {
+    return { 'vorbereitung': 'vorbereitung', 'arbeit': 'vorbereitung', 'fertig': 'arbeit' }[status] || 'vorbereitung';
+}
+
+function getStatusText(status) {
+    return { 'vorbereitung': 'In Vorbereitung', 'arbeit': 'In Arbeit', 'fertig': 'Fertig' }[status] || status;
+}
+
+function cycleTaskStatus(waveId, taskField, newStatus) {
+    fetch('/wave-plans/task-status', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wave_id: waveId, task_field: taskField, status: newStatus })
+    })
+    .then(r => r.json())
+    .then(data => { if (data.success) loadWavePlans(); else alert('Fehler: ' + data.error); })
+    .catch(err => alert('Fehler: ' + err));
+}
+
+function formatDateShort(dateStr) {
+    if (!dateStr) return '';
+    const parts = dateStr.substring(0, 10).split('-');
+    return `${parts[2]}.${parts[1]}`;
+}
+
+// --- Wave Plan Modal ---
+function openWavePlanModal(waveName) {
+    let modal = document.getElementById('wavePlanModal');
+    if (!modal) {
+        document.body.insertAdjacentHTML('beforeend', `
+        <div class="modal fade" id="wavePlanModal" tabindex="-1">
+            <div class="modal-dialog modal-lg"><div class="modal-content">
+                <div class="modal-header bg-dark text-white py-2">
+                    <h5 class="modal-title"><i class="fas fa-calendar-alt"></i> Welle planen</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label><strong>Wellenname</strong></label>
+                        <select class="form-control" id="wpWaveName">
+                            <option value="">-- Welle w&auml;hlen --</option>
+                            <option value="Wave 0">Wave 0</option>
+                            <option value="Wave 1">Wave 1</option>
+                            <option value="Wave 2">Wave 2</option>
+                            <option value="Wave 3">Wave 3</option>
+                            <option value="Wave 4">Wave 4</option>
+                            <option value="Wave 5">Wave 5</option>
+                            <option value="Wave 6">Wave 6</option>
+                            <option value="Wave 7">Wave 7</option>
+                        </select>
+                    </div>
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Aufgabe</th><th>Start</th><th style="width:90px">Dauer</th><th style="width:110px">Ende</th><th>Status</th></tr></thead>
+                        <tbody>
+                            <tr>
+                                <td><span class="task-env qual">QUAL</span> Load</td>
+                                <td><input type="date" class="form-control form-control-sm wp-start" id="wpQualLoadStart" data-task="QualLoad"></td>
+                                <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpQualLoadDur" data-task="QualLoad"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
+                                <td><span class="text-muted wp-end-label" id="wpQualLoadEndLabel" style="font-size:0.8rem">–</span></td>
+                                <td><select class="form-control form-control-sm" id="wpQualLoadStatus">
+                                    <option value="vorbereitung">Vorbereitung</option>
+                                    <option value="arbeit">In Arbeit</option>
+                                    <option value="fertig">Fertig</option>
+                                </select></td>
+                            </tr>
+                            <tr>
+                                <td><span class="task-env qual">QUAL</span> Verlinkung</td>
+                                <td><input type="date" class="form-control form-control-sm wp-start" id="wpQualLinkStart" data-task="QualLink"></td>
+                                <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpQualLinkDur" data-task="QualLink"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
+                                <td><span class="text-muted wp-end-label" id="wpQualLinkEndLabel" style="font-size:0.8rem">–</span></td>
+                                <td><select class="form-control form-control-sm" id="wpQualLinkStatus">
+                                    <option value="vorbereitung">Vorbereitung</option>
+                                    <option value="arbeit">In Arbeit</option>
+                                    <option value="fertig">Fertig</option>
+                                </select></td>
+                            </tr>
+                            <tr>
+                                <td><span class="task-env prod">PROD</span> Load</td>
+                                <td><input type="date" class="form-control form-control-sm wp-start" id="wpProdLoadStart" data-task="ProdLoad"></td>
+                                <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpProdLoadDur" data-task="ProdLoad"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
+                                <td><span class="text-muted wp-end-label" id="wpProdLoadEndLabel" style="font-size:0.8rem">–</span></td>
+                                <td><select class="form-control form-control-sm" id="wpProdLoadStatus">
+                                    <option value="vorbereitung">Vorbereitung</option>
+                                    <option value="arbeit">In Arbeit</option>
+                                    <option value="fertig">Fertig</option>
+                                </select></td>
+                            </tr>
+                            <tr>
+                                <td><span class="task-env prod">PROD</span> Verlinkung</td>
+                                <td><input type="date" class="form-control form-control-sm wp-start" id="wpProdLinkStart" data-task="ProdLink"></td>
+                                <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpProdLinkDur" data-task="ProdLink"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
+                                <td><span class="text-muted wp-end-label" id="wpProdLinkEndLabel" style="font-size:0.8rem">–</span></td>
+                                <td><select class="form-control form-control-sm" id="wpProdLinkStatus">
+                                    <option value="vorbereitung">Vorbereitung</option>
+                                    <option value="arbeit">In Arbeit</option>
+                                    <option value="fertig">Fertig</option>
+                                </select></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <small class="text-muted">T = Kalendertage. Ende = Start + Dauer − 1.</small>
+                    <div class="form-group">
+                        <label>Notizen</label>
+                        <textarea class="form-control" id="wpNotes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                    <button class="btn btn-primary" onclick="saveWavePlan()"><i class="fas fa-save"></i> Speichern</button>
+                </div>
+            </div></div>
+        </div>`);
+        modal = document.getElementById('wavePlanModal');
+        // Attach live-update listeners for start + duration → end label
+        modal.querySelectorAll('.wp-start, .wp-dur').forEach(el => {
+            el.addEventListener('input', () => {
+                const task = el.dataset.task;
+                wpUpdateEndLabel(task);
+            });
+        });
+    }
+
+    // Helper: compute and display end date from start + duration
+    function wpUpdateEndLabel(task) {
+        const startVal = document.getElementById('wp' + task + 'Start').value;
+        const durVal   = parseInt(document.getElementById('wp' + task + 'Dur').value);
+        const label    = document.getElementById('wp' + task + 'EndLabel');
+        if (startVal && durVal > 0) {
+            const endStr = addDays(startVal, durVal - 1);
+            const parts = endStr.split('-');
+            label.textContent = parts[2] + '.' + parts[1] + '.' + parts[0];
+        } else {
+            label.textContent = '–';
+        }
+    }
+
+    // Helper: calculate duration days from start/end strings
+    function wpCalcDur(startStr, endStr) {
+        if (!startStr || !endStr) return '';
+        return Math.round((parseLocalDate(endStr) - parseLocalDate(startStr)) / 86400000) + 1;
+    }
+
+    // Reset or fill
+    if (waveName) {
+        const w = wavePlans.find(x => x.wave_name === waveName);
+        if (w) {
+            document.getElementById('wpWaveName').value = w.wave_name;
+            document.getElementById('wpQualLoadStart').value = w.qual_load_start || '';
+            document.getElementById('wpQualLoadDur').value = wpCalcDur(w.qual_load_start, w.qual_load_end);
+            document.getElementById('wpQualLoadStatus').value = w.qual_load_status;
+            document.getElementById('wpQualLinkStart').value = w.qual_link_start || '';
+            document.getElementById('wpQualLinkDur').value = wpCalcDur(w.qual_link_start, w.qual_link_end);
+            document.getElementById('wpQualLinkStatus').value = w.qual_link_status;
+            document.getElementById('wpProdLoadStart').value = w.prod_load_start || '';
+            document.getElementById('wpProdLoadDur').value = wpCalcDur(w.prod_load_start, w.prod_load_end);
+            document.getElementById('wpProdLoadStatus').value = w.prod_load_status;
+            document.getElementById('wpProdLinkStart').value = w.prod_link_start || '';
+            document.getElementById('wpProdLinkDur').value = wpCalcDur(w.prod_link_start, w.prod_link_end);
+            document.getElementById('wpProdLinkStatus').value = w.prod_link_status;
+            document.getElementById('wpNotes').value = w.notes || '';
+            // Update end labels
+            ['QualLoad','QualLink','ProdLoad','ProdLink'].forEach(t => wpUpdateEndLabel(t));
+        }
+    } else {
+        document.getElementById('wpWaveName').value = '';
+        ['wpQualLoadStart','wpQualLinkStart','wpProdLoadStart','wpProdLinkStart','wpNotes'].forEach(id => {
+            document.getElementById(id).value = '';
+        });
+        ['wpQualLoadDur','wpQualLinkDur','wpProdLoadDur','wpProdLinkDur'].forEach(id => {
+            document.getElementById(id).value = '';
+        });
+        ['wpQualLoadStatus','wpQualLinkStatus','wpProdLoadStatus','wpProdLinkStatus'].forEach(id => {
+            document.getElementById(id).value = 'vorbereitung';
+        });
+        ['QualLoad','QualLink','ProdLoad','ProdLink'].forEach(t => wpUpdateEndLabel(t));
+    }
+    $(modal).modal('show');
+}
+
+function editWavePlan(waveName) {
+    openWavePlanModal(waveName);
+}
+
+function saveWavePlan() {
+    const waveName = document.getElementById('wpWaveName').value;
+    if (!waveName) { alert('Bitte Welle auswählen'); return; }
+
+    // Helper: compute end date from start + duration (days)
+    function wpEndDate(taskPrefix) {
+        const s = document.getElementById('wp' + taskPrefix + 'Start').value;
+        const d = parseInt(document.getElementById('wp' + taskPrefix + 'Dur').value);
+        if (s && d > 0) return addDays(s, d - 1);
+        return null;
+    }
+
+    fetch('/wave-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            wave_name: waveName,
+            qual_load_start: document.getElementById('wpQualLoadStart').value || null,
+            qual_load_end: wpEndDate('QualLoad'),
+            qual_load_status: document.getElementById('wpQualLoadStatus').value,
+            qual_link_start: document.getElementById('wpQualLinkStart').value || null,
+            qual_link_end: wpEndDate('QualLink'),
+            qual_link_status: document.getElementById('wpQualLinkStatus').value,
+            prod_load_start: document.getElementById('wpProdLoadStart').value || null,
+            prod_load_end: wpEndDate('ProdLoad'),
+            prod_load_status: document.getElementById('wpProdLoadStatus').value,
+            prod_link_start: document.getElementById('wpProdLinkStart').value || null,
+            prod_link_end: wpEndDate('ProdLink'),
+            prod_link_status: document.getElementById('wpProdLinkStatus').value,
+            notes: document.getElementById('wpNotes').value,
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) { $('#wavePlanModal').modal('hide'); loadWavePlans(); }
+        else alert('Fehler: ' + data.error);
+    })
+    .catch(err => alert('Fehler: ' + err));
+}
+
+function deleteWavePlan(waveId, waveName) {
+    if (!confirm('Wellenplanung "' + waveName + '" löschen?')) return;
+    fetch('/wave-plans/' + waveId, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => { if (data.success) loadWavePlans(); else alert('Fehler: ' + data.error); })
+        .catch(err => alert('Fehler: ' + err));
 }
 </script>
 {% endblock %}

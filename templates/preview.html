@@ -1252,6 +1252,9 @@ function showProgressBar() {
                 <small id="progressDetails">Starte...</small>
                 <small id="progressETA">ETA: berechne...</small>
             </div>
+            <div class="text-end mt-1">
+                <small id="progressPulse" class="text-muted"><i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle"></i> Polling aktiv</small>
+            </div>
         `;
         document.getElementById('batchStats').parentNode.appendChild(progressDiv);
     }
@@ -1273,6 +1276,13 @@ function updateProgressDisplay(data) {
     const eta = document.getElementById('progressETA');
     
     if (!bar) return;
+    
+    // Update pulse indicator with timestamp
+    const pulse = document.getElementById('progressPulse');
+    if (pulse) {
+        const now = new Date().toLocaleTimeString('de-DE');
+        pulse.innerHTML = `<i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle;animation:pulse 1s infinite"></i> Zuletzt aktualisiert: ${now}`;
+    }
     
     const pct = data.progress_pct || 0;
     bar.style.width = pct + '%';
@@ -1320,26 +1330,51 @@ function pollProgress() {
                 }
                 
                 // Show waiting message if not yet executing
-                if (data.status !== 'executing' && data.status !== 'completed') {
-                    const details = document.getElementById('progressDetails');
-                    if (details) {
-                        details.textContent = `Warte auf Start... (Status: ${data.status})`;
-                    }
-                }
-                
-                // Stop polling when done
-                if (data.status === 'completed' || data.status === 'failed') {
+                if (data.status === 'executing' || data.is_running) {
+                    // Still running — keep polling
+                } else if (data.status === 'completed' || data.status === 'completed_with_errors' || 
+                           data.status === 'stopped' || data.status === 'failed') {
+                    // Migration finished — clean up UI
                     stopProgressPolling();
-                    // If we reconnected (executeAll is not running in this tab),
-                    // clean up UI and reload records
+                    
                     const btn = document.getElementById('executeBtn');
-                    if (btn && btn.disabled) {
-                        hideProgressBar();
-                        const cancelBtn = document.getElementById('cancelBtn');
-                        if (cancelBtn) cancelBtn.style.display = 'none';
+                    const cancelBtn = document.getElementById('cancelBtn');
+                    
+                    // Show final summary
+                    if (data.status === 'stopped' && data.background_result && data.background_result.stopped) {
+                        const r = data.background_result;
+                        let message = `Migration gestoppt!\n\n`;
+                        message += `Grund: ${r.stop_reason}\n`;
+                        message += `Verarbeitet: ${r.processed}/${r.total}\n`;
+                        message += `Erfolgreich: ${r.successful}\nFehlgeschlagen: ${r.failed}\n`;
+                        message += `Verbleibend: ${r.remaining}`;
+                        if (r.circuit_breaker_tripped) {
+                            message += '\n\n⚠️ Token abgelaufen. Bitte neu einloggen.';
+                        }
+                        alert(message);
+                    } else if (data.status === 'completed' || data.status === 'completed_with_errors') {
+                        alert(`Migration abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehlgeschlagen: ${data.failed}`);
+                    }
+                    
+                    // Reset UI
+                    hideProgressBar();
+                    if (cancelBtn) cancelBtn.style.display = 'none';
+                    if (btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
-                        loadRecords();
+                    }
+                    // Also reset execute-selected button
+                    const selBtn = document.getElementById('executeSelectedBtn');
+                    if (selBtn) {
+                        selBtn.disabled = selectedRecords.size === 0;
+                        selBtn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+                    }
+                    loadRecords();
+                } else {
+                    // Other status (e.g. 'pending', 'linking') — show status text
+                    const details = document.getElementById('progressDetails');
+                    if (details) {
+                        details.textContent = `Status: ${data.status}`;
                     }
                 }
             }
@@ -1376,9 +1411,6 @@ function executeAll() {
     // Show cancel button during execution
     cancelBtn.style.display = 'inline-block';
     
-    // Start progress polling
-    startProgressPolling();
-    
     fetch('/execute', {
         method: 'POST',
         headers: {
@@ -1388,44 +1420,29 @@ function executeAll() {
     })
     .then(response => response.json())
     .then(data => {
-        stopProgressPolling();
-        hideProgressBar();
-        cancelBtn.style.display = 'none';
-        
-        if (data.stopped) {
-            // Migration was stopped (by cancel or circuit breaker)
-            let message = `Migration gestoppt!\n\n`;
-            message += `Grund: ${data.stop_reason}\n\n`;
-            message += `Verarbeitet: ${data.processed}/${data.total}\n`;
-            message += `Erfolgreich: ${data.successful}\n`;
-            message += `Fehlgeschlagen: ${data.failed}\n`;
-            message += `Verbleibend: ${data.remaining}\n\n`;
-            
-            if (data.circuit_breaker_tripped) {
-                message += '⚠️ Token ist möglicherweise abgelaufen. Bitte neu einloggen und erneut versuchen.';
-            } else {
-                message += 'Sie können die Migration später fortsetzen, indem Sie "Alle ausführen" erneut klicken.';
-            }
-            
-            alert(message);
-            loadRecords();
-        } else if (data.success) {
-            alert(`Migration abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehlgeschlagen: ${data.failed}`);
-            loadRecords();
+        if (data.background) {
+            // Background execution started - switch to polling mode
+            console.log('[execute] Background migration started, polling for progress');
+            startProgressPolling();
+            // Frontend will be cleaned up by pollProgress() when batch finishes
         } else if (data.login_required) {
             alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden, bevor die Migration ausgeführt wird.');
             window.location.href = '/';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+            cancelBtn.style.display = 'none';
         } else if (data.already_running) {
             alert('⚠️ Migration läuft bereits!\n\n' + data.error + '\n\nBitte warten Sie, bis die aktuelle Migration abgeschlossen ist.');
+            // Still start polling to show progress of the running migration
+            startProgressPolling();
         } else {
             alert('Migration fehlgeschlagen: ' + data.error);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+            cancelBtn.style.display = 'none';
         }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
     })
     .catch(error => {
-        stopProgressPolling();
-        hideProgressBar();
         cancelBtn.style.display = 'none';
         alert('Fehler bei der Migration: ' + error);
         btn.disabled = false;
@@ -1482,16 +1499,8 @@ function executeSelected() {
     const totalSelected = selectedRecords.size;
     btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Führe ${totalSelected} aus...`;
     
-    // Show simple progress indicator
-    showProgressBar();
-    document.getElementById('progressStats').textContent = `Starte ${totalSelected} Dokumente...`;
-    document.getElementById('progressBar').style.width = '0%';
-    document.getElementById('progressBar').textContent = '0%';
-    document.getElementById('progressDetails').textContent = 'Initialisiere Migration...';
-    document.getElementById('progressETA').textContent = 'ETA: berechne...';
-    
-    // Start polling for progress updates
-    startProgressPolling();
+    const cancelBtn = document.getElementById('cancelBtn');
+    cancelBtn.style.display = 'inline-block';
     
     fetch('/execute_selected', {
         method: 'POST',
@@ -1505,26 +1514,29 @@ function executeSelected() {
     })
     .then(response => response.json())
     .then(data => {
-        stopProgressPolling();
-        hideProgressBar();
-        if (data.success) {
-            alert(`Migration abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehlgeschlagen: ${data.failed}`);
+        if (data.background) {
+            // Background execution started — switch to polling mode
+            console.log('[execute_selected] Background migration started, polling for progress');
+            startProgressPolling();
             selectedRecords.clear();
-            loadRecords();
         } else if (data.login_required) {
             alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
             window.location.href = '/';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+            cancelBtn.style.display = 'none';
         } else if (data.already_running) {
-            alert('⚠️ Migration läuft bereits!\n\n' + data.error + '\n\nBitte warten Sie, bis die aktuelle Migration abgeschlossen ist.');
+            alert('⚠️ Migration läuft bereits!\n\n' + data.error);
+            startProgressPolling();
         } else {
             alert('Migration fehlgeschlagen: ' + data.error);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+            cancelBtn.style.display = 'none';
         }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
     })
     .catch(error => {
-        stopProgressPolling();
-        hideProgressBar();
+        cancelBtn.style.display = 'none';
         alert('Fehler bei der Migration: ' + error);
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';

@@ -13,7 +13,9 @@ from sqlalchemy import text
 from app.prepare import prepare_migration
 from app.execute import (
     execute_migration, request_cancel, is_cancel_requested, is_migration_running,
-    execute_linking, request_link_cancel, is_linking_running, is_link_cancel_requested
+    execute_linking, request_link_cancel, is_linking_running, is_link_cancel_requested,
+    run_migration_background, run_linking_background,
+    get_background_result, clear_background_result
 )
 from app.process import (
     read_sap_system, write_sap_system,
@@ -46,6 +48,28 @@ def _is_authenticated() -> bool:
     if _is_basic_auth_system(source_sys) and _is_basic_auth_system(target_sys):
         return True
     return False
+
+
+def _build_session_snapshot():
+    """Build a session snapshot dict from the current Flask session.
+    
+    This snapshot contains all data needed for background execution,
+    including OAuth refresh tokens for standalone token refresh.
+    """
+    from app.process import MAX_API_WORKERS
+    return {
+        'bearer_token': session.get('bearer_token'),
+        'sap_system': session.get('sap_system'),
+        'x_csrf_token': session.get('x-csrf-token'),
+        'cookies': session.get('cookies'),
+        'csrf_token_time': session.get('csrf_token_time', 0),
+        'max_workers': session.get('max_workers', MAX_API_WORKERS),
+        'pacing_seconds': session.get('pacing_seconds', 0),
+        'source_system': session.get('source_system', DEFAULT_SOURCE_SYSTEM),
+        'target_system': session.get('target_system', DEFAULT_TARGET_SYSTEM),
+        'refresh_token': session.get('refresh_token'),
+        'token_expires_at': session.get('token_expires_at'),
+    }
 
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
@@ -2044,7 +2068,9 @@ def get_batch_progress(batch_id):
             'partial': int(partial),
             'remaining': int(total - executed),
             'progress_pct': round(progress_pct, 1),
-            'is_running': row['status'] == 'executing'
+            'is_running': is_migration_running(batch_id)[0] or row['status'] == 'executing',
+            'is_linking': is_linking_running(batch_id)[0] or row['status'] == 'linking',
+            'background_result': get_background_result(batch_id) if not is_migration_running(batch_id)[0] and row['status'] != 'executing' else None
         })
         
     except Exception as e:
@@ -2366,9 +2392,12 @@ def preview_view():
 
 @migrate_bp.route('/execute', methods=['POST'])
 def execute():
-    """Step 2: Execute migration for approved records."""
+    """Step 2: Execute migration for approved records (background).
+    
+    Starts execution in a background thread and returns immediately.
+    Frontend polls /batch/<id>/progress for live status updates.
+    """
     try:
-        # Check if user is authenticated (OAuth or both systems Basic Auth)
         if not _is_authenticated():
             return jsonify({
                 'success': False, 
@@ -2382,10 +2411,25 @@ def execute():
         if not batch_id:
             return jsonify({'success': False, 'error': 'Batch ID required'}), 400
         
-        # Execute migration
-        result = execute_migration(batch_id)
+        # Check if already running
+        is_running, reason = is_migration_running(batch_id)
+        if is_running:
+            return jsonify({
+                'success': False,
+                'error': f'Migration already in progress: {reason}',
+                'already_running': True
+            })
         
-        return jsonify(result)
+        # Snapshot session and start background thread
+        snapshot = _build_session_snapshot()
+        run_migration_background(batch_id, snapshot)
+        
+        return jsonify({
+            'success': True,
+            'background': True,
+            'batch_id': batch_id,
+            'message': 'Migration gestartet. Fortschritt wird automatisch aktualisiert.'
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2393,9 +2437,8 @@ def execute():
 
 @migrate_bp.route('/execute_selected', methods=['POST'])
 def execute_selected():
-    """Execute migration for selected records only."""
+    """Execute migration for selected records only (background)."""
     try:
-        # Check if user is authenticated (OAuth or both systems Basic Auth)
         if not _is_authenticated():
             return jsonify({
                 'success': False, 
@@ -2413,6 +2456,15 @@ def execute_selected():
         if not record_ids:
             return jsonify({'success': False, 'error': 'No records selected'}), 400
         
+        # Check if already running
+        is_running, reason = is_migration_running(batch_id)
+        if is_running:
+            return jsonify({
+                'success': False,
+                'error': f'Migration already in progress: {reason}',
+                'already_running': True
+            })
+        
         # Reset selected records to pending for execution
         record_ids_str = ','.join(str(id) for id in record_ids)
         with misc_engine.begin() as con:
@@ -2427,10 +2479,16 @@ def execute_selected():
                     AND skip_migration = 0
             """))
         
-        # Execute migration ONLY for the selected record IDs
-        result = execute_migration(batch_id, record_ids=record_ids)
+        # Snapshot session and start background thread
+        snapshot = _build_session_snapshot()
+        run_migration_background(batch_id, snapshot, record_ids=record_ids)
         
-        return jsonify(result)
+        return jsonify({
+            'success': True,
+            'background': True,
+            'batch_id': batch_id,
+            'message': f'Migration für {len(record_ids)} Datensätze gestartet.'
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2466,7 +2524,7 @@ def cancel_migration(batch_id):
 
 @migrate_bp.route('/execute_linking', methods=['POST'])
 def execute_link_all():
-    """Phase 2: Execute object linking for all eligible records in a batch."""
+    """Phase 2: Execute object linking for all eligible records (background)."""
     try:
         if not _is_authenticated():
             return jsonify({
@@ -2481,8 +2539,21 @@ def execute_link_all():
         if not batch_id:
             return jsonify({'success': False, 'error': 'Batch ID erforderlich'}), 400
 
-        result = execute_linking(batch_id)
-        return jsonify(result)
+        # Check if already running
+        running, msg = is_linking_running(batch_id)
+        if running:
+            return jsonify({'success': False, 'error': msg, 'already_running': True})
+
+        # Snapshot session and start background thread
+        snapshot = _build_session_snapshot()
+        run_linking_background(batch_id, snapshot)
+
+        return jsonify({
+            'success': True,
+            'background': True,
+            'batch_id': batch_id,
+            'message': 'Verlinkung gestartet. Fortschritt wird automatisch aktualisiert.'
+        })
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2490,7 +2561,7 @@ def execute_link_all():
 
 @migrate_bp.route('/execute_linking_selected', methods=['POST'])
 def execute_link_selected():
-    """Phase 2: Execute object linking for selected records only."""
+    """Phase 2: Execute object linking for selected records only (background)."""
     try:
         if not _is_authenticated():
             return jsonify({
@@ -2509,6 +2580,11 @@ def execute_link_selected():
         if not record_ids:
             return jsonify({'success': False, 'error': 'Keine Datensätze ausgewählt'}), 400
 
+        # Check if already running
+        running, msg = is_linking_running(batch_id)
+        if running:
+            return jsonify({'success': False, 'error': msg, 'already_running': True})
+
         # Reset link_status for selected records so they can be re-linked
         record_ids_str = ','.join(str(rid) for rid in record_ids)
         with misc_engine.begin() as con:
@@ -2523,8 +2599,16 @@ def execute_link_selected():
                     AND ISNULL(container_created, 0) = 1
             """))
 
-        result = execute_linking(batch_id, record_ids=record_ids)
-        return jsonify(result)
+        # Snapshot session and start background thread
+        snapshot = _build_session_snapshot()
+        run_linking_background(batch_id, snapshot, record_ids=record_ids)
+
+        return jsonify({
+            'success': True,
+            'background': True,
+            'batch_id': batch_id,
+            'message': f'Verlinkung für {len(record_ids)} Datensätze gestartet.'
+        })
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2591,7 +2675,8 @@ def get_link_progress(batch_id):
         completed = linked + link_exists + link_failed
         progress_pct = (completed / link_total * 100) if link_total > 0 else 0
 
-        return jsonify({
+        is_linking = is_linking_running(batch_id)[0]
+        result_data = {
             'success': True,
             'batch_id': batch_id,
             'migration_phase': batch_row.migration_phase,
@@ -2604,8 +2689,16 @@ def get_link_progress(batch_id):
             'link_pending': int(link_pending),
             'completed': int(completed),
             'progress_pct': round(progress_pct, 1),
-            'is_linking': batch_row.migration_phase == 'linking'
-        })
+            'is_linking': is_linking
+        }
+
+        # Include background result when linking is done
+        if not is_linking:
+            bg_result = get_background_result(f"{batch_id}_linking")
+            if bg_result:
+                result_data['background_result'] = bg_result
+
+        return jsonify(result_data)
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

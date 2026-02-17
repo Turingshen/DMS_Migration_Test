@@ -1,6 +1,11 @@
 """
 Step 2: Execute migration based on approved staging records.
 Reads from staging database and performs API calls.
+
+Supports background execution: execute_migration() and execute_linking() can run
+in a background thread without Flask request context. Session data is passed as
+a session_snapshot dict. Token refresh for OAuth systems works standalone via
+_refresh_token_standalone().
 """
 
 import pandas as pd
@@ -15,6 +20,9 @@ from flask import session as http_session
 _migration_lock = threading.Lock()
 _active_migrations = {}  # batch_id -> start_time
 _cancel_requested = {}   # batch_id -> True/False - for graceful cancellation
+
+# Background execution results storage
+_background_results = {}  # batch_id -> result dict (kept until next execution)
 
 # Circuit Breaker settings
 CIRCUIT_BREAKER_THRESHOLD = 3  # Stop after N consecutive auth errors
@@ -197,6 +205,113 @@ VERBOSE_TERMINAL_LOGGING = False
 WARMUP_ENABLED = True
 WARMUP_REQUESTS = 3  # Number of warmup pings
 WARMUP_DELAY = 0.5   # Delay between warmup requests (seconds)
+
+
+# ============================================================================
+# Standalone Token Refresh (works without Flask request context)
+# ============================================================================
+
+def _refresh_token_standalone(session_snapshot):
+    """Refresh OAuth bearer token without Flask session context.
+    
+    Uses refresh_token stored in session_snapshot to get a new bearer token.
+    Updates session_snapshot in-place with the new token.
+    
+    Returns:
+        (success: bool, error_message: str or None)
+    """
+    refresh_tok = session_snapshot.get('refresh_token')
+    if not refresh_tok:
+        return False, "No refresh token in snapshot"
+    
+    try:
+        oauth_config = cfg.config_env.get('auth', {})
+        payload = {
+            'client_id': oauth_config.get('payload', {}).get('client_id', ''),
+            'client_secret': oauth_config.get('payload', {}).get('client_secret', ''),
+            'grant_type': 'refresh_token',
+            'refresh_token': refresh_tok,
+        }
+        auth_url = oauth_config.get('auth_url', '')
+        
+        response = requests.post(f"{auth_url}/token", data=payload, timeout=30)
+        
+        if response.status_code != 200:
+            return False, f"Refresh failed: HTTP {response.status_code}"
+        
+        data = response.json()
+        
+        # Update snapshot with new tokens
+        session_snapshot['bearer_token'] = data['access_token']
+        
+        if 'refresh_token' in data:
+            session_snapshot['refresh_token'] = data['refresh_token']
+        
+        if 'expires_in' in data:
+            expires_in = int(data['expires_in'])
+            session_snapshot['token_expires_at'] = time.time() + expires_in
+            print(f"[TOKEN] Standalone refresh OK, expires in {expires_in}s ({expires_in // 60} min)")
+        
+        return True, None
+        
+    except Exception as e:
+        return False, f"Standalone refresh error: {str(e)}"
+
+
+def _check_and_refresh_token(session_snapshot):
+    """Check token health and refresh if needed. Works in both Flask and background context.
+    
+    For Basic Auth systems, always returns (True, None) since credentials don't expire.
+    For OAuth systems, checks token_expires_at and refreshes if < 10 min remaining.
+    
+    Returns:
+        (is_valid: bool, error_message: str or None)
+    """
+    # Basic Auth systems don't need token refresh
+    source_sys = session_snapshot.get('source_system', read_sap_system)
+    source_auth_type = cfg.config_env.get(source_sys, {}).get('auth_type', 'oauth')
+    if source_auth_type == 'basic':
+        return True, None
+    
+    # Check if token has expiry info in snapshot
+    expires_at = session_snapshot.get('token_expires_at')
+    if expires_at is not None:
+        remaining = max(0, int(expires_at - time.time()))
+        if remaining < 600:  # Less than 10 min remaining
+            print(f"[TOKEN] Token expires in {remaining}s, attempting standalone refresh...")
+            success, error = _refresh_token_standalone(session_snapshot)
+            if not success:
+                return False, f"Token expired and refresh failed: {error}"
+            return True, None
+        return True, None
+    
+    # No expiry info — try Flask session context as fallback (legacy path)
+    if TOKEN_REFRESH_AVAILABLE:
+        try:
+            remaining = get_token_remaining_seconds()
+            if remaining is not None and remaining < 600:
+                print(f"[TOKEN] Token expires in {remaining}s, attempting Flask-context refresh...")
+                is_valid, error = ensure_valid_token()
+                if not is_valid:
+                    return False, f"Token expired and refresh failed: {error}"
+                # Update snapshot from Flask session
+                session_snapshot['bearer_token'] = http_session.get('bearer_token')
+                return True, None
+        except RuntimeError:
+            # No Flask request context — expected in background threads
+            pass
+    
+    return True, None  # Can't check, assume valid
+
+
+def get_background_result(batch_id):
+    """Get the result of a background execution, if available."""
+    return _background_results.get(batch_id)
+
+
+def clear_background_result(batch_id):
+    """Clear stored background result for a batch."""
+    _background_results.pop(batch_id, None)
 
 
 def warmup_api(session_snapshot, first_loio_id=None):
@@ -1756,13 +1871,17 @@ def check_token_validity(session_snapshot):
         return True, None  # Other errors don't mean token is invalid
 
 
-def execute_migration(batch_id, record_ids=None):
+def execute_migration(batch_id, record_ids=None, session_snapshot=None):
     """
-    Main entry point for Step 2: Execute Migration
+    Main entry point for Step 2: Execute Migration.
+    
+    Can run in Flask request context (legacy) or as a background thread.
+    When session_snapshot is provided, runs without Flask session dependency.
     
     Args:
         batch_id: Batch ID to execute
         record_ids: Optional list of specific record IDs to execute. If None, executes all pending.
+        session_snapshot: Optional pre-built session snapshot dict. If None, reads from Flask session.
     
     Returns:
         dict with execution results
@@ -1783,22 +1902,27 @@ def execute_migration(batch_id, record_ids=None):
         # Set the lock
         set_migration_lock(batch_id)
         
-        # Get settings from session (with defaults)
-        max_workers = http_session.get('max_workers', MAX_API_WORKERS)
-        pacing_seconds = http_session.get('pacing_seconds', 0)  # 0 = auto/dynamic mode
+        # Build session snapshot: use provided snapshot or read from Flask session
+        if session_snapshot is None:
+            # Legacy path: running inside Flask request context
+            max_workers = http_session.get('max_workers', MAX_API_WORKERS)
+            pacing_seconds = http_session.get('pacing_seconds', 0)
+            session_snapshot = {
+                'bearer_token': http_session.get('bearer_token'),
+                'sap_system': http_session.get('sap_system'),
+                'x_csrf_token': http_session.get('x-csrf-token'),
+                'cookies': http_session.get('cookies'),
+                'csrf_token_time': http_session.get('csrf_token_time', 0),
+                'max_workers': max_workers,
+                'pacing_seconds': pacing_seconds,
+                'source_system': http_session.get('source_system', read_sap_system),
+                'target_system': http_session.get('target_system', write_sap_system),
+                'refresh_token': http_session.get('refresh_token'),
+                'token_expires_at': http_session.get('token_expires_at'),
+            }
         
-        # Snapshot session values
-        session_snapshot = {
-            'bearer_token': http_session.get('bearer_token'),
-            'sap_system': http_session.get('sap_system'),
-            'x_csrf_token': http_session.get('x-csrf-token'),
-            'cookies': http_session.get('cookies'),
-            'csrf_token_time': http_session.get('csrf_token_time', 0),
-            'max_workers': max_workers,
-            'pacing_seconds': pacing_seconds,  # 0 = dynamic pacing based on file size
-            'source_system': http_session.get('source_system', read_sap_system),
-            'target_system': http_session.get('target_system', write_sap_system)
-        }
+        max_workers = session_snapshot.get('max_workers', MAX_API_WORKERS)
+        pacing_seconds = session_snapshot.get('pacing_seconds', 0)
         
         # Load records - either specific IDs or all pending
         if record_ids:
@@ -1896,22 +2020,14 @@ def execute_migration(batch_id, record_ids=None):
             if circuit_breaker_tripped:
                 break
             
-            # Token health check before each package (automatic refresh if possible)
-            if TOKEN_REFRESH_AVAILABLE:
-                remaining = get_token_remaining_seconds()
-                if remaining is not None and remaining < 600:  # Less than 10 min remaining
-                    print(f"[TOKEN] Token expires in {remaining}s, attempting refresh...")
-                    is_valid, error = ensure_valid_token()
-                    if not is_valid:
-                        circuit_breaker_tripped = True
-                        token_refresh_failed = True
-                        cancel_reason = f"Token expired and refresh failed: {error}"
-                        print(f"[TOKEN] {cancel_reason}")
-                        break
-                    else:
-                        # Update session_snapshot with new token
-                        session_snapshot['bearer_token'] = http_session.get('bearer_token')
-                        print(f"[TOKEN] Token refreshed successfully")
+            # Token health check before each package (works in both Flask and background context)
+            is_valid, error = _check_and_refresh_token(session_snapshot)
+            if not is_valid:
+                circuit_breaker_tripped = True
+                token_refresh_failed = True
+                cancel_reason = error
+                print(f"[TOKEN] {cancel_reason}")
+                break
             
             # Get records for this package
             start_idx = package_num * effective_package_size
@@ -1952,6 +2068,7 @@ def execute_migration(batch_id, record_ids=None):
                             success_count += 1
                         elif probe_result.get('status') == 'failed':
                             failed_count += 1
+                        update_progress()  # Immediate DB update after probe for live progress
                         # Remove first record from package since we already processed it
                         package_records = package_records[1:]
                         
@@ -2050,8 +2167,8 @@ def execute_migration(batch_id, record_ids=None):
                             auth_warning = f" (auth errors: {consecutive_auth_errors})" if consecutive_auth_errors > 0 else ""
                             print(f"[PROGRESS] {completed_count}/{total_records} ({pct:.0f}%) | ✓{success_count} ✗{failed_count} | ETA: {eta_str}{auth_warning}")
                         
-                        # Update DB every 5 records or at end for live progress
-                        if completed_count % 5 == 0 or completed_count == total_records:
+                        # Update DB every 2 records or at end for live progress
+                        if completed_count % 2 == 0 or completed_count == total_records:
                             update_progress()
 
                             
@@ -2690,7 +2807,7 @@ def link_single_record(staging_record, session_snapshot):
         }
 
 
-def execute_linking(batch_id, record_ids=None):
+def execute_linking(batch_id, record_ids=None, session_snapshot=None):
     """Execute Phase 2: Object Link creation for a batch.
     
     Creates Object Links (A_DocumentInfoRecordObjLink) for all eligible records.
@@ -2698,10 +2815,12 @@ def execute_linking(batch_id, record_ids=None):
     
     Uses parallel execution with ThreadPoolExecutor (lightweight API calls).
     Supports cancellation, circuit breaker, and package-based processing.
+    Can run in Flask request context (legacy) or as a background thread.
     
     Args:
         batch_id: The batch ID
         record_ids: Optional list of specific staging record IDs (for selected execution)
+        session_snapshot: Optional pre-built session snapshot dict. If None, reads from Flask session.
     
     Returns:
         dict with success status, statistics, errors
@@ -2716,20 +2835,23 @@ def execute_linking(batch_id, record_ids=None):
     clear_link_cancel_request(batch_id)
     
     try:
-        # Get settings from session
-        max_workers = http_session.get('max_workers', MAX_API_WORKERS)
+        # Build session snapshot: use provided snapshot or read from Flask session
+        if session_snapshot is None:
+            max_workers = http_session.get('max_workers', MAX_API_WORKERS)
+            session_snapshot = {
+                'bearer_token': http_session.get('bearer_token'),
+                'sap_system': http_session.get('sap_system'),
+                'x_csrf_token': http_session.get('x-csrf-token'),
+                'cookies': http_session.get('cookies'),
+                'csrf_token_time': http_session.get('csrf_token_time', 0),
+                'max_workers': max_workers,
+                'source_system': http_session.get('source_system', read_sap_system),
+                'target_system': http_session.get('target_system', write_sap_system),
+                'refresh_token': http_session.get('refresh_token'),
+                'token_expires_at': http_session.get('token_expires_at'),
+            }
         
-        # Snapshot session values
-        session_snapshot = {
-            'bearer_token': http_session.get('bearer_token'),
-            'sap_system': http_session.get('sap_system'),
-            'x_csrf_token': http_session.get('x-csrf-token'),
-            'cookies': http_session.get('cookies'),
-            'csrf_token_time': http_session.get('csrf_token_time', 0),
-            'max_workers': max_workers,
-            'source_system': http_session.get('source_system', read_sap_system),
-            'target_system': http_session.get('target_system', write_sap_system)
-        }
+        max_workers = session_snapshot.get('max_workers', MAX_API_WORKERS)
         
         # Auto-apply object mappings to staging before loading
         # This ensures target_dokob/target_objky are populated even if mappings
@@ -2805,20 +2927,13 @@ def execute_linking(batch_id, record_ids=None):
             if circuit_breaker_tripped:
                 break
             
-            # Token health check
-            if TOKEN_REFRESH_AVAILABLE:
-                remaining = get_token_remaining_seconds()
-                if remaining is not None and remaining < 600:
-                    print(f"[LINK_TOKEN] Token expires in {remaining}s, attempting refresh...")
-                    is_valid, error = ensure_valid_token()
-                    if not is_valid:
-                        circuit_breaker_tripped = True
-                        cancel_reason = f"Token expired and refresh failed: {error}"
-                        print(f"[LINK_TOKEN] {cancel_reason}")
-                        break
-                    else:
-                        session_snapshot['bearer_token'] = http_session.get('bearer_token')
-                        print(f"[LINK_TOKEN] Token refreshed successfully")
+            # Token health check (works in both Flask and background context)
+            is_valid, error = _check_and_refresh_token(session_snapshot)
+            if not is_valid:
+                circuit_breaker_tripped = True
+                cancel_reason = error
+                print(f"[LINK_TOKEN] {cancel_reason}")
+                break
             
             # Get package records
             start_idx = package_num * effective_package_size
@@ -2949,3 +3064,71 @@ def execute_linking(batch_id, record_ids=None):
             'success': False,
             'error': str(e)
         }
+
+
+# ============================================================================
+# Background Execution Wrappers
+# ============================================================================
+
+def run_migration_background(batch_id, session_snapshot, record_ids=None):
+    """Run execute_migration in a background thread.
+    
+    Starts a daemon thread that runs execute_migration() with the provided
+    session_snapshot. The result is stored in _background_results for later
+    retrieval via get_background_result().
+    
+    Args:
+        batch_id: Batch ID to execute
+        session_snapshot: Pre-built session snapshot dict (must include all auth data)
+        record_ids: Optional list of specific record IDs
+    
+    Returns:
+        threading.Thread object (already started)
+    """
+    def _worker():
+        try:
+            result = execute_migration(batch_id, record_ids=record_ids, session_snapshot=session_snapshot)
+            _background_results[batch_id] = result
+            print(f"[BG] Migration {batch_id} finished: success={result.get('success')}")
+        except Exception as e:
+            print(f"[BG_ERROR] Migration {batch_id} crashed: {e}")
+            import traceback
+            traceback.print_exc()
+            _background_results[batch_id] = {'success': False, 'error': str(e)}
+    
+    thread = threading.Thread(target=_worker, name=f"migration-{batch_id}", daemon=True)
+    thread.start()
+    print(f"[BG] Migration {batch_id} started in background thread")
+    return thread
+
+
+def run_linking_background(batch_id, session_snapshot, record_ids=None):
+    """Run execute_linking in a background thread.
+    
+    Starts a daemon thread that runs execute_linking() with the provided
+    session_snapshot. The result is stored in _background_results for later
+    retrieval via get_background_result().
+    
+    Args:
+        batch_id: Batch ID to execute
+        session_snapshot: Pre-built session snapshot dict
+        record_ids: Optional list of specific record IDs
+    
+    Returns:
+        threading.Thread object (already started)
+    """
+    def _worker():
+        try:
+            result = execute_linking(batch_id, record_ids=record_ids, session_snapshot=session_snapshot)
+            _background_results[f"{batch_id}_linking"] = result
+            print(f"[BG] Linking {batch_id} finished: success={result.get('success')}")
+        except Exception as e:
+            print(f"[BG_ERROR] Linking {batch_id} crashed: {e}")
+            import traceback
+            traceback.print_exc()
+            _background_results[f"{batch_id}_linking"] = {'success': False, 'error': str(e)}
+    
+    thread = threading.Thread(target=_worker, name=f"linking-{batch_id}", daemon=True)
+    thread.start()
+    print(f"[BG] Linking {batch_id} started in background thread")
+    return thread

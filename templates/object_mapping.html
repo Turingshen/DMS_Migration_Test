@@ -749,6 +749,7 @@
         loadStats();
         setupTabs();
         setupDragDrop();
+        checkAndReconnectLinking();
         // Load all datasets, then render strategy cards (default tab)
         Promise.all([
             fetch(`/batch/${BATCH_ID}/object-mapping/list`).then(r => r.json()).then(data => {
@@ -767,6 +768,22 @@
             renderStrategyCards();
         }).catch(err => console.error('Init load error:', err));
     });
+
+    function checkAndReconnectLinking() {
+        fetch(`/batch/${BATCH_ID}/link-progress`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.is_linking) {
+                    // Linking is still running — reconnect UI
+                    const btn = document.getElementById('linkAllBtn');
+                    const cancelBtn = document.getElementById('cancelLinkBtn');
+                    if (btn) { btn.disabled = true; btn.textContent = '⏳ Wird verlinkt...'; }
+                    if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+                    startLinkProgressPolling();
+                }
+            })
+            .catch(() => {});
+    }
 
     // Load batch info
     function loadBatchInfo() {
@@ -1205,20 +1222,49 @@
 
     function startLinkProgressPolling() {
         if (linkProgressInterval) clearInterval(linkProgressInterval);
+        const btn = document.getElementById('linkAllBtn');
+        const selBtn = document.getElementById('linkSelectedBtn');
+        const cancelBtn = document.getElementById('cancelLinkBtn');
+
         linkProgressInterval = setInterval(() => {
             fetch(`/batch/${BATCH_ID}/link-progress`)
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success && linkProgressInterval) {
-                        const pct = data.progress_pct || 0;
-                        showLinkProgress();
-                        const bar = document.getElementById('linkProgressBar');
-                        bar.style.width = pct + '%';
-                        bar.textContent = pct + '%';
-                        document.getElementById('linkProgressStats').textContent =
-                            `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
-                        document.getElementById('linkProgressPhase').textContent =
-                            `Phase: ${data.migration_phase || '—'}`;
+                    if (!data.success || !linkProgressInterval) return;
+
+                    const pct = data.progress_pct || 0;
+                    showLinkProgress();
+                    const bar = document.getElementById('linkProgressBar');
+                    bar.style.width = pct + '%';
+                    bar.textContent = pct + '%';
+                    document.getElementById('linkProgressStats').textContent =
+                        `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
+                    document.getElementById('linkProgressPhase').textContent =
+                        `Phase: ${data.migration_phase || '—'}`;
+
+                    // Background linking finished?
+                    if (!data.is_linking && data.background_result) {
+                        stopLinkProgressPolling();
+                        hideLinkProgress();
+                        if (cancelBtn) cancelBtn.style.display = 'none';
+
+                        const r = data.background_result;
+                        if (r.success) {
+                            let msg = `Verlinkung abgeschlossen!\n\n`;
+                            msg += `Gesamt: ${r.total_records}\n`;
+                            msg += `Verlinkt: ${r.linked}\n`;
+                            msg += `Bereits vorhanden: ${r.already_existed}\n`;
+                            msg += `Fehlgeschlagen: ${r.failed}\n`;
+                            msg += `Dauer: ${r.duration_formatted}`;
+                            if (r.cancel_reason) msg += `\n\nHinweis: ${r.cancel_reason}`;
+                            alert(msg);
+                        } else if (r.error) {
+                            alert('Verlinkung fehlgeschlagen: ' + r.error);
+                        }
+                        // Reset UI
+                        if (btn) { btn.disabled = false; btn.textContent = '🔗 Alle verlinken'; }
+                        if (selBtn) { selBtn.disabled = false; }
+                        loadStats();
                     }
                 })
                 .catch(() => {});
@@ -1243,8 +1289,6 @@
         btn.textContent = '⏳ Wird verlinkt...';
         cancelBtn.style.display = 'inline-flex';
 
-        startLinkProgressPolling();
-
         fetch('/execute_linking', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1252,36 +1296,24 @@
         })
         .then(response => response.json())
         .then(data => {
-            stopLinkProgressPolling();
-            hideLinkProgress();
-            cancelBtn.style.display = 'none';
-
-            if (data.success) {
-                let msg = `Verlinkung abgeschlossen!\n\n`;
-                msg += `Gesamt: ${data.total_records}\n`;
-                msg += `Verlinkt: ${data.linked}\n`;
-                msg += `Bereits vorhanden: ${data.already_existed}\n`;
-                msg += `Fehlgeschlagen: ${data.failed}\n`;
-                msg += `Dauer: ${data.duration_formatted}`;
-                if (data.cancel_reason) msg += `\n\nHinweis: ${data.cancel_reason}`;
-                alert(msg);
-                loadStats();
+            if (data.background) {
+                // Background linking started successfully — poll for completion
+                startLinkProgressPolling();
             } else if (data.login_required) {
                 alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
                 window.location.href = '/';
             } else {
-                alert('Verlinkung fehlgeschlagen: ' + data.error);
+                alert('Verlinkung konnte nicht gestartet werden: ' + (data.error || 'Unbekannter Fehler'));
+                btn.disabled = false;
+                btn.textContent = '🔗 Alle verlinken';
+                cancelBtn.style.display = 'none';
             }
-            btn.disabled = false;
-            btn.textContent = '🔗 Alle verlinken';
         })
         .catch(error => {
-            stopLinkProgressPolling();
-            hideLinkProgress();
-            cancelBtn.style.display = 'none';
-            alert('Fehler bei der Verlinkung: ' + error);
+            alert('Fehler beim Starten der Verlinkung: ' + error);
             btn.disabled = false;
             btn.textContent = '🔗 Alle verlinken';
+            cancelBtn.style.display = 'none';
         });
     }
 

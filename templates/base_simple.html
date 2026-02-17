@@ -172,8 +172,11 @@
     // ── Session keep-alive & sleep-mode recovery ──────────────────────
     (function() {
         const KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+        const FAST_POLL_INTERVAL  = 3000;           // 3 seconds when migration running
         let lastPing = Date.now();
         let keepAliveTimer = null;
+        let fastPollTimer  = null;
+        let migrationRunning = false;
 
         function ping() {
             lastPing = Date.now();
@@ -182,11 +185,33 @@
                 .then(data => {
                     if (data.success && data.executing_batch) {
                         showRunningBatchBanner(data.executing_batch);
+                        if (!migrationRunning) {
+                            // Switch to fast polling
+                            migrationRunning = true;
+                            startFastPoll();
+                        }
                     } else {
                         hideRunningBatchBanner();
+                        if (migrationRunning) {
+                            // Migration finished — back to slow keep-alive
+                            migrationRunning = false;
+                            stopFastPoll();
+                        }
                     }
                 })
                 .catch(() => { /* ignore network errors */ });
+        }
+
+        function startFastPoll() {
+            stopFastPoll();
+            fastPollTimer = setInterval(ping, FAST_POLL_INTERVAL);
+        }
+
+        function stopFastPoll() {
+            if (fastPollTimer) {
+                clearInterval(fastPollTimer);
+                fastPollTimer = null;
+            }
         }
 
         function showRunningBatchBanner(batch) {
@@ -204,6 +229,7 @@
                 document.body.appendChild(banner);
             }
             const pct = batch.total > 0 ? (batch.executed / batch.total * 100).toFixed(1) : 0;
+            const now = new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
             banner.innerHTML = `
                 <button type="button" class="close" onclick="this.parentElement.remove()">&times;</button>
                 <strong><i class="fas fa-sync fa-spin"></i> Migration läuft</strong><br>
@@ -212,6 +238,7 @@
                     <div class="progress-bar bg-success" style="width:${pct}%"></div>
                 </div>
                 <small>${batch.executed}/${batch.total} (${pct}%) — ✓${batch.successful} ✗${batch.failed}</small><br>
+                <small class="text-muted">Aktualisiert: ${now}</small><br>
                 <a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-outline-primary mt-1">
                     <i class="fas fa-external-link-alt"></i> Zum Batch
                 </a>

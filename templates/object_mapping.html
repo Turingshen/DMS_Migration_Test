@@ -267,6 +267,32 @@
     }
     .badge-success { background: #e8f5e9; color: #4CAF50; }
     .badge-warning { background: #fff3e0; color: #ff9800; }
+    .dokob-badge {
+        display: inline-block; padding: 4px 12px; border-radius: 14px;
+        font-size: 12px; font-weight: 600; cursor: pointer;
+        background: #e8eaf6; color: #3949ab; border: 1px solid #c5cae9;
+        transition: all .15s;
+    }
+    .dokob-badge:hover { background: #c5cae9; }
+    .dokob-badge.active { background: #3949ab; color: #fff; border-color: #3949ab; }
+    .strategy-card {
+        border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 10px;
+        display: flex; justify-content: space-between; align-items: center; transition: all .2s;
+    }
+    .strategy-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+    .strategy-card.has-unmapped { border-left: 4px solid #ff9800; }
+    .strategy-card.all-mapped { border-left: 4px solid #4CAF50; background: #fafff8; }
+    .strategy-card-info { flex: 1; }
+    .strategy-card-info h4 { margin: 0 0 2px 0; font-size: 15px; }
+    .strategy-card-info .sublabel { color: #666; font-size: 13px; }
+    .strategy-card-badges { display: flex; gap: 6px; align-items: center; margin: 0 18px; }
+    .strategy-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 4px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: all .15s; }
+    .btn-sm:hover { opacity: .85; }
+    .method-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .method-tag.excel { background: #e8f5e9; color: #388E3C; }
+    .method-tag.dil { background: #e3f2fd; color: #1565C0; }
+    .method-tag.api { background: #fff3e0; color: #E65100; }
     .badge-info { background: #e3f2fd; color: #2196F3; }
     
     .action-btn {
@@ -476,12 +502,14 @@
 
     <!-- Tabs -->
     <div class="tabs">
-        <div class="tab active" data-tab="unmapped">Nicht zugeordnet</div>
+        <div class="tab active" data-tab="strategy">📋 DOKOB Strategie</div>
+        <div class="tab" data-tab="unmapped">Nicht zugeordnet</div>
         <div class="tab" data-tab="mappings">Zuordnungen</div>
+        <div class="tab" data-tab="funcloc">🔍 Techn. Platz Lookup</div>
     </div>
 
     <!-- Tab: Unmapped Objects -->
-    <div id="tab-unmapped" class="tab-content active">
+    <div id="tab-unmapped" class="tab-content">
         <div class="card">
             <div class="card-header">
                 <h3>Nicht zugeordnete Objekte in diesem Batch</h3>
@@ -490,6 +518,9 @@
             <div class="card-body">
                 <div class="alert alert-info">
                     Dies sind DOKOB/OBJKY-Kombinationen in diesem Batch, für die keine Zuordnung definiert ist.
+                </div>
+                <div id="dokobFilterBar" style="display:none; margin-bottom:12px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+                    <span style="font-weight:600; font-size:13px; margin-right:4px;">DOKOB:</span>
                 </div>
                 <div class="table-container">
                     <table>
@@ -547,6 +578,97 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: DOKOB Strategie -->
+    <div id="tab-strategy" class="tab-content active">
+        <div class="card">
+            <div class="card-header">
+                <h3>📋 DOKOB Mapping Strategie</h3>
+                <button class="btn btn-primary" onclick="renderStrategyCards()" style="font-size:13px;">🔄 Aktualisieren</button>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info" style="font-size:13px;line-height:1.7;">
+                    Jede DOKOB-Strategie besteht aus <strong>Source</strong> + <strong>Target</strong> + <strong>Mapping</strong>:<br>
+                    <span style="color:#1565C0;"><strong>🗄️ Source = DIL</strong></span> — Schlüssel aus Quell-DB (HANA/R3) verifizieren<br>
+                    <span style="color:#E65100;"><strong>🔍 Target = API</strong></span> — Schlüssel im Ziel-System (S4) suchen &ensp;│&ensp;
+                    <strong>📥 Target = Excel</strong> — Target-Keys aus Excel-Upload &ensp;│&ensp;
+                    <strong>🔄 Target = 1:1</strong> — Source-Key = Target-Key (kein Mapping nötig)<br>
+                    <em>Mapping:</em> Bei API/Excel wird per Excel-Datei gemappt. Bei 1:1 wird automatisch zugeordnet.
+                </div>
+                <div id="dokobStrategyCards">Lade...</div>
+            </div>
+        </div>
+        <!-- Lookup Results -->
+        <div id="lookupResultsPanel" class="card" style="display:none; margin-top:15px;">
+            <div class="card-header">
+                <h3 id="lookupResultsTitle">Lookup Ergebnisse</h3>
+                <button class="btn btn-secondary" onclick="closeLookupPanel()" style="font-size:13px;">✕ Schließen</button>
+            </div>
+            <div class="card-body">
+                <div id="lookupStatus" style="margin-bottom:10px;"></div>
+                <div class="table-container">
+                    <table id="lookupTable" style="display:none;">
+                        <thead><tr id="lookupThead"></tr></thead>
+                        <tbody id="lookupTbody"></tbody>
+                    </table>
+                </div>
+                <div id="lookupActions" style="margin-top:12px; display:none;">
+                    <button class="btn btn-primary" id="applyLookupBtn" onclick="applyLookupMappings()">✅ Zuordnungen übernehmen</button>
+                    <span id="applyLookupInfo" style="margin-left:12px; font-size:13px; color:#666;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: FunctionalLocation Lookup -->
+    <div id="tab-funcloc" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <h3>🔍 FunctionalLocation API Lookup</h3>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <strong>LabelName</strong> eingeben → <strong>FunctionalLocation</strong> (techn. Platz-ID) zurückbekommen.
+                </div>
+                <div class="form-row" style="margin-bottom: 15px;">
+                    <div class="form-group">
+                        <label>SAP-System</label>
+                        <select class="form-control" id="flSapSystem">
+                            <option value="zbq">ZBQ (Testsystem BM)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>LabelName (Eingabe)</label>
+                        <input type="text" class="form-control" id="flFilterValue" placeholder="z.B. BM-LU-1000 oder Teil davon">
+                    </div>
+                    <div class="form-group" style="display:flex; align-items:flex-end; gap:8px;">
+                        <button class="btn btn-primary" onclick="funclocSearch()">🔍 Suchen</button>
+                        <button class="btn btn-warning" onclick="funclocServiceDoc()">📄 Service Doc</button>
+                        <button class="btn btn-info" onclick="funclocMetadata()">📋 $metadata</button>
+                    </div>
+                </div>
+                <div id="flStatus" style="margin-bottom: 10px;"></div>
+                <div class="table-container">
+                    <table id="flResultsTable" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th style="background:#d4edda; font-weight:700;">FunctionalLocation ✅</th>
+                                <th>LabelName (Eingabe)</th>
+                                <th>Name</th>
+                                <th>Description</th>
+                                <th>CompanyCode</th>
+                                <th>PlanningPlant</th>
+                                <th>MaintenancePlant</th>
+                            </tr>
+                        </thead>
+                        <tbody id="flResultsBody"></tbody>
+                    </table>
+                </div>
+                <pre id="flMetadataOutput" style="display:none; max-height:500px; overflow:auto; background:#f5f5f5; padding:15px; border-radius:6px; font-size:12px;"></pre>
+                <pre id="flRawUrl" style="display:none; background:#eef; padding:8px; border-radius:4px; font-size:11px; margin-top:10px;"></pre>
             </div>
         </div>
     </div>
@@ -624,11 +746,26 @@
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
         loadBatchInfo();
-        loadMappings();
         loadStats();
-        loadUnmapped();
         setupTabs();
         setupDragDrop();
+        // Load all datasets, then render strategy cards (default tab)
+        Promise.all([
+            fetch(`/batch/${BATCH_ID}/object-mapping/list`).then(r => r.json()).then(data => {
+                allMappings = data.mappings || [];
+                renderMappings(allMappings);
+                document.getElementById('mappingCount').textContent = allMappings.length + ' Zuordnungen';
+            }),
+            fetch(`/batch/${BATCH_ID}/object-mapping/unmapped`).then(r => r.json()).then(data => {
+                allUnmapped = data.unmapped || [];
+                buildDokobBadges(allUnmapped);
+                activeDokobFilter = null;
+                renderUnmapped(allUnmapped);
+            }),
+            loadDokobStrategies()
+        ]).then(() => {
+            renderStrategyCards();
+        }).catch(err => console.error('Init load error:', err));
     });
 
     // Load batch info
@@ -659,6 +796,9 @@
                 
                 if (tabId === 'unmapped') {
                     loadUnmapped();
+                }
+                if (tabId === 'strategy') {
+                    loadDokobStrategies().then(() => renderStrategyCards());
                 }
             });
         });
@@ -741,6 +881,9 @@
     }
 
     // Load unmapped objects
+    let allUnmapped = [];
+    let activeDokobFilter = null;
+
     function loadUnmapped() {
         const tbody = document.getElementById('unmappedBody');
         tbody.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div> Lade...</td></tr>';
@@ -748,39 +891,84 @@
         fetch(`/batch/${BATCH_ID}/object-mapping/unmapped`)
             .then(r => r.json())
             .then(data => {
-                const unmapped = data.unmapped || [];
-                
-                if (unmapped.length === 0) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="4">
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">✅</div>
-                                    <div>Alle Objekte in diesem Batch sind zugeordnet!</div>
-                                </div>
-                            </td>
-                        </tr>
-                    `;
-                    return;
-                }
-
-                tbody.innerHTML = unmapped.map(u => `
-                    <tr>
-                        <td><code>${escapeHtml(u.dokob)}</code></td>
-                        <td><code>${escapeHtml(u.objky)}</code></td>
-                        <td><span class="badge badge-warning">${u.count}</span></td>
-                        <td>
-                            <button class="action-btn edit" onclick="quickAddMapping('${escapeJs(u.dokob)}', '${escapeJs(u.objky)}')">
-                                Zuordnung hinzufügen
-                            </button>
-                        </td>
-                    </tr>
-                `).join('');
+                allUnmapped = data.unmapped || [];
+                buildDokobBadges(allUnmapped);
+                activeDokobFilter = null;
+                renderUnmapped(allUnmapped);
             })
             .catch(err => {
                 console.error('Error loading unmapped:', err);
                 tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Fehler beim Laden der nicht zugeordneten Objekte</td></tr>';
             });
+    }
+
+    function buildDokobBadges(unmapped) {
+        const bar = document.getElementById('dokobFilterBar');
+        // Count per DOKOB
+        const counts = {};
+        unmapped.forEach(u => { counts[u.dokob] = (counts[u.dokob] || 0) + 1; });
+        const keys = Object.keys(counts).sort();
+        if (keys.length <= 1) { bar.style.display = 'none'; return; }
+        bar.style.display = 'flex';
+        bar.innerHTML = '<span style="font-weight:600;font-size:13px;margin-right:4px;">DOKOB:</span>';
+        // "Alle" badge
+        const allBadge = document.createElement('span');
+        allBadge.className = 'dokob-badge active';
+        allBadge.textContent = `Alle (${unmapped.length})`;
+        allBadge.onclick = () => filterByDokob(null);
+        bar.appendChild(allBadge);
+        // Per-DOKOB badges
+        keys.forEach(k => {
+            const b = document.createElement('span');
+            b.className = 'dokob-badge';
+            b.dataset.dokob = k;
+            b.textContent = `${k} (${counts[k]})`;
+            b.onclick = () => filterByDokob(k);
+            bar.appendChild(b);
+        });
+    }
+
+    function filterByDokob(dokob) {
+        activeDokobFilter = dokob;
+        // Update badge active state
+        document.querySelectorAll('.dokob-badge').forEach(b => {
+            if (dokob === null) {
+                b.classList.toggle('active', !b.dataset.dokob);
+            } else {
+                b.classList.toggle('active', b.dataset.dokob === dokob);
+            }
+        });
+        const filtered = dokob ? allUnmapped.filter(u => u.dokob === dokob) : allUnmapped;
+        renderUnmapped(filtered);
+    }
+
+    function renderUnmapped(unmapped) {
+        const tbody = document.getElementById('unmappedBody');
+        if (unmapped.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✅</div>
+                            <div>Alle Objekte in diesem Batch sind zugeordnet!</div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        tbody.innerHTML = unmapped.map(u => `
+            <tr>
+                <td><code>${escapeHtml(u.dokob)}</code></td>
+                <td><code>${escapeHtml(u.objky)}</code></td>
+                <td><span class="badge badge-warning">${u.count}</span></td>
+                <td>
+                    <button class="action-btn edit" onclick="quickAddMapping('${escapeJs(u.dokob)}', '${escapeJs(u.objky)}')">
+                        Zuordnung hinzufügen
+                    </button>
+                </td>
+            </tr>
+        `).join('');
     }
 
     function refreshUnmapped() {
@@ -1129,6 +1317,468 @@
             alert('Fehler beim Abbrechen: ' + error);
             cancelBtn.disabled = false;
             cancelBtn.textContent = '⛔ Verlinkung abbrechen';
+        });
+    }
+
+    // ========================================================================
+    // DOKOB Strategy
+    // ========================================================================
+
+    const DOKOB_CONFIG = {
+        'EQUI':     { label: 'Equipment',              source: ['dil'],  target: ['api'], other: ['excel'],      dilTable: 'EQUI',  apiEntity: 'Equipment',          apiField: 'Equipment',          dilKeyCol: 'EQUNR' },
+        'IFLOT':    { label: 'Techn. Platz',            source: ['dil'],  target: ['api'], other: ['excel'],      dilTable: 'IFLOT', apiEntity: 'FunctionalLocation', apiField: 'FunctionalLocation', dilKeyCol: 'TPLNR' },
+        'MPLA':     { label: 'Wartungsplan',            source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'MPLA',  dilKeyCol: 'WARPL' },
+        'IMPTT':    { label: 'Wartungsposition',        source: [],       target: [],      other: ['excel','1:1'], dilTable: null },
+        'PMPLKO':   { label: 'Arbeitsplan (Tasklist)',  source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'PLKO',  dilKeyCol: 'PLNTY+PLNNR+PLNAL' },
+        'PMAUFK':   { label: 'Instandhaltungsauftrag',  source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'AUFK',  dilKeyCol: 'AUFNR' },
+        'PMAFVC':   { label: 'Auftragsvorgang',         source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'AFVC',  dilKeyCol: 'AUFPL+APLZL' },
+        'PMQMEL':   { label: 'Meldung (Notification)',  source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'QMIH',  dilKeyCol: 'QMNUM' },
+        'STKO_DOC': { label: 'Stückliste Kopf (BOM)',   source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'STKO',  dilKeyCol: 'GUIDX' },
+        'STPO_DOC': { label: 'Stückliste Position',     source: ['dil'],  target: [],      other: ['excel','1:1'], dilTable: 'STPO',  dilKeyCol: 'GUIDX' }
+    };
+
+    const METHOD_LABELS = {
+        'excel': { icon: '📥', label: 'Excel', css: 'excel' },
+        'dil':   { icon: '🗄️', label: 'DIL (Source)',  css: 'dil'   },
+        'api':   { icon: '🔍', label: 'API (Target)', css: 'api'   },
+        '1:1':   { icon: '🔄', label: '1:1',   css: 'excel' }
+    };
+
+    let lookupResults = [];  // current lookup data for apply
+    let lookupDokob = null;
+    let savedStrategies = {};  // loaded from DB: { DOKOB: { source_method, target_method } }
+
+    function loadDokobStrategies() {
+        return fetch(`/batch/${BATCH_ID}/object-mapping/dokob-strategy`)
+            .then(r => r.json())
+            .then(data => { if (data.success) savedStrategies = data.strategies || {}; })
+            .catch(() => {});
+    }
+
+    function saveDokobStrategy(dokob, source_method, target_method, strno_prefix_old, strno_prefix_new) {
+        const cur = savedStrategies[dokob] || {};
+        const payload = {
+            dokob, source_method, target_method,
+            strno_prefix_old: strno_prefix_old !== undefined ? strno_prefix_old : (cur.strno_prefix_old || ''),
+            strno_prefix_new: strno_prefix_new !== undefined ? strno_prefix_new : (cur.strno_prefix_new || '')
+        };
+        fetch(`/batch/${BATCH_ID}/object-mapping/dokob-strategy`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                savedStrategies[dokob] = {
+                    source_method: data.source_method,
+                    target_method: data.target_method,
+                    strno_prefix_old: data.strno_prefix_old || '',
+                    strno_prefix_new: data.strno_prefix_new || ''
+                };
+                renderStrategyCards();
+            } else {
+                alert('Fehler: ' + (data.error || 'unbekannt'));
+            }
+        })
+        .catch(err => alert('Fehler: ' + err));
+    }
+
+    function onSourceChange(dokob, val) {
+        const cur = savedStrategies[dokob] || {};
+        saveDokobStrategy(dokob, val, cur.target_method || 'none');
+    }
+    function onTargetChange(dokob, val) {
+        const cur = savedStrategies[dokob] || {};
+        saveDokobStrategy(dokob, cur.source_method || 'none', val);
+    }
+    function saveStrnoPrefix(dokob) {
+        const oldVal = document.getElementById('strno_old_' + dokob)?.value || '';
+        const newVal = document.getElementById('strno_new_' + dokob)?.value || '';
+        const cur = savedStrategies[dokob] || {};
+        saveDokobStrategy(dokob, cur.source_method || 'none', cur.target_method || 'none', oldVal, newVal);
+    }
+
+    function renderStrategyCards() {
+        const container = document.getElementById('dokobStrategyCards');
+        const unmappedCounts = {};
+        allUnmapped.forEach(u => { unmappedCounts[u.dokob] = (unmappedCounts[u.dokob] || 0) + 1; });
+        const mappedCounts = {};
+        allMappings.forEach(m => { mappedCounts[m.source_dokob] = (mappedCounts[m.source_dokob] || 0) + 1; });
+
+        let html = `<table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:#f8f9fa;">
+                <th style="padding:10px 12px;text-align:left;">DOKOB</th>
+                <th style="padding:10px 12px;text-align:center;">Status</th>
+                <th style="padding:10px 12px;text-align:center;color:#1565C0;">Source</th>
+                <th style="padding:10px 12px;text-align:center;color:#E65100;">Target</th>
+                <th style="padding:10px 12px;text-align:center;">Mapping</th>
+                <th style="padding:10px 12px;text-align:center;">Aktionen</th>
+            </tr></thead><tbody>`;
+
+        for (const [dokob, cfg] of Object.entries(DOKOB_CONFIG)) {
+            const uc = unmappedCounts[dokob] || 0;
+            const mc = mappedCounts[dokob] || 0;
+            const borderLeft = uc > 0 ? 'border-left:4px solid #ff9800;' : (mc > 0 ? 'border-left:4px solid #4CAF50;' : '');
+
+            // Status badges
+            let statusHtml = '';
+            if (mc > 0) statusHtml += `<span class="badge badge-success">${mc} mapped</span> `;
+            if (uc > 0) statusHtml += `<span class="badge badge-warning">${uc} offen</span>`;
+            if (mc === 0 && uc === 0) statusHtml = '<span style="color:#999;font-size:12px;">\u2014</span>';
+
+            const cur = savedStrategies[dokob] || {};
+            const curSrc = cur.source_method || 'none';
+            const curTgt = cur.target_method || 'none';
+
+            // Source dropdown (always DIL or none)
+            const srcSet = curSrc !== 'none';
+            const srcBg = srcSet ? '#e3f2fd' : '#fff';
+            let srcHtml = `<select onchange="onSourceChange('${dokob}', this.value)"
+                style="padding:5px 8px;border-radius:4px;border:1px solid #ddd;font-size:13px;background:${srcBg};cursor:pointer;">
+                <option value="none"${curSrc === 'none' ? ' selected' : ''}>\u2014</option>`;
+            if (cfg.dilTable) {
+                srcHtml += `<option value="dil"${curSrc === 'dil' ? ' selected' : ''}>\ud83d\uddc4\ufe0f DIL.${cfg.dilTable}</option>`;
+            }
+            srcHtml += '</select>';
+
+            // Target dropdown (api, excel, 1:1)
+            const tgtSet = curTgt !== 'none';
+            const tgtBg = tgtSet ? (curTgt === 'api' ? '#fff3e0' : curTgt === '1:1' ? '#f3e5f5' : '#e8f5e9') : '#fff';
+            let tgtHtml = `<select onchange="onTargetChange('${dokob}', this.value)"
+                style="padding:5px 8px;border-radius:4px;border:1px solid #ddd;font-size:13px;background:${tgtBg};cursor:pointer;">
+                <option value="none"${curTgt === 'none' ? ' selected' : ''}>\u2014</option>`;
+            if (cfg.target.includes('api') && cfg.apiEntity) {
+                tgtHtml += `<option value="api"${curTgt === 'api' ? ' selected' : ''}>\ud83d\udd0d API (${cfg.apiEntity})</option>`;
+            }
+            tgtHtml += `<option value="excel"${curTgt === 'excel' ? ' selected' : ''}>\ud83d\udce5 Excel</option>`;
+            tgtHtml += `<option value="1:1"${curTgt === '1:1' ? ' selected' : ''}>\ud83d\udd04 1:1</option>`;
+            tgtHtml += '</select>';
+
+            // Mapping indicator
+            let mapHtml = '<span style="color:#999;">\u2014</span>';
+            if (curSrc !== 'none' && curTgt !== 'none') {
+                if (curTgt === '1:1') {
+                    mapHtml = '<span class="badge badge-success">Auto</span>';
+                } else {
+                    mapHtml = '<span class="badge badge-warning">\ud83d\udce5 Excel</span>';
+                }
+            }
+
+            // Action buttons based on strategy
+            let actHtml = '';
+            if (curSrc === 'dil' && cfg.dilTable) {
+                actHtml += `<button class="btn-sm" style="background:#e3f2fd;color:#1565C0;" onclick="runDilLookup('${dokob}')" title="DIL Lookup starten">\ud83d\uddc4\ufe0f Lookup</button> `;
+            }
+            if (curTgt === 'api' && cfg.apiEntity) {
+                actHtml += `<button class="btn-sm" style="background:#fff3e0;color:#E65100;" onclick="runApiLookup('${dokob}')" title="API Lookup starten">\ud83d\udd0d API</button> `;
+            }
+            if (curTgt === '1:1' && curSrc === 'dil') {
+                actHtml += `<button class="btn-sm" style="background:#f3e5f5;color:#7B1FA2;" onclick="runAutoMap('${dokob}')" title="1:1 Auto-Map">\ud83d\udd04 1:1 Map</button> `;
+            }
+            if (curTgt === 'excel' || (curTgt === 'api')) {
+                actHtml += `<button class="btn-sm" style="background:#e8f5e9;color:#388E3C;" onclick="downloadTemplate()" title="Excel-Vorlage">\ud83d\udce5 Excel</button>`;
+            }
+            if (!actHtml) actHtml = '<span style="color:#ccc;">\u2014</span>';
+
+            html += `<tr style="${borderLeft}border-bottom:1px solid #eee;">
+                <td style="padding:10px 12px;"><code style="font-weight:700;">${dokob}</code><br><span style="color:#666;font-size:12px;">${cfg.label}</span></td>
+                <td style="padding:10px 12px;text-align:center;">${statusHtml}</td>
+                <td style="padding:10px 12px;text-align:center;">${srcHtml}</td>
+                <td style="padding:10px 12px;text-align:center;">${tgtHtml}</td>
+                <td style="padding:10px 12px;text-align:center;">${mapHtml}</td>
+                <td style="padding:10px 12px;text-align:center;">${actHtml}</td>
+            </tr>`;
+
+            // IFLOT: extra row for STRNO prefix replacement config
+            if (dokob === 'IFLOT' && curTgt === 'api') {
+                const prefOld = cur.strno_prefix_old || '';
+                const prefNew = cur.strno_prefix_new || '';
+                const prefSaved = prefOld && prefNew;
+                const prefBadge = prefSaved
+                    ? `<span class="badge badge-success">${prefOld} → ${prefNew}</span>`
+                    : '<span class="badge badge-warning">nicht gesetzt</span>';
+                html += `<tr style="background:#fafafa;border-bottom:1px solid #eee;">
+                    <td style="padding:6px 12px 6px 30px;" colspan="2">
+                        <span style="font-size:12px;color:#555;">↳ STRNO Prefix-Ersetzung</span>
+                        ${prefBadge}
+                    </td>
+                    <td colspan="3" style="padding:6px 12px;text-align:center;">
+                        <input id="strno_old_IFLOT" type="text" maxlength="10" value="${prefOld}"
+                            placeholder="Alt (z.B. UTMC)" style="width:100px;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:12px;font-family:monospace;">
+                        <span style="margin:0 6px;color:#888;">→</span>
+                        <input id="strno_new_IFLOT" type="text" maxlength="10" value="${prefNew}"
+                            placeholder="Neu (z.B. US1M)" style="width:100px;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:12px;font-family:monospace;">
+                        <button class="btn-sm" style="margin-left:8px;background:#e3f2fd;color:#1565C0;"
+                            onclick="saveStrnoPrefix('IFLOT')" title="Prefix speichern">💾 Speichern</button>
+                    </td>
+                    <td></td>
+                </tr>`;
+            }
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    // ── DIL Lookup ──────────────────────────────────────────────
+    function runDilLookup(dokob) {
+        lookupDokob = dokob;
+        const panel = document.getElementById('lookupResultsPanel');
+        const status = document.getElementById('lookupStatus');
+        const title = document.getElementById('lookupResultsTitle');
+        const table = document.getElementById('lookupTable');
+        const actions = document.getElementById('lookupActions');
+        title.textContent = `🗄️ DIL Lookup — ${dokob}`;
+        status.innerHTML = '<div class="spinner" style="display:inline-block;width:16px;height:16px;margin-right:8px;"></div> Lade Quelldaten aus DIL...';
+        table.style.display = 'none';
+        actions.style.display = 'none';
+        panel.style.display = 'block';
+        panel.scrollIntoView({ behavior: 'smooth' });
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/dil-lookup?dokob=${dokob}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    status.innerHTML = `<span style="color:#c00;">❌ ${data.error}</span>`;
+                    return;
+                }
+                lookupResults = data.results || [];
+                status.innerHTML = `<span style="color:green;">✅ ${lookupResults.length} Einträge gefunden</span>`;
+                if (lookupResults.length === 0) { table.style.display = 'none'; return; }
+
+                // Build table
+                const keys = Object.keys(lookupResults[0]);
+                document.getElementById('lookupThead').innerHTML = keys.map(k => `<th>${k}</th>`).join('');
+                document.getElementById('lookupTbody').innerHTML = lookupResults.map(r =>
+                    '<tr>' + keys.map(k => `<td><code>${escapeHtml(String(r[k] ?? ''))}</code></td>`).join('') + '</tr>'
+                ).join('');
+                table.style.display = 'table';
+                actions.style.display = 'block';
+                document.getElementById('applyLookupInfo').textContent = `${lookupResults.length} Zuordnungen als 1:1 übernehmen (source_dokob=${dokob}, source_objky=objky → gleicher target)`;
+            })
+            .catch(err => { status.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`; });
+    }
+
+    // ── API Lookup ──────────────────────────────────────────────
+    function runApiLookup(dokob) {
+        lookupDokob = dokob;
+        const cfgD = DOKOB_CONFIG[dokob];
+        if (!cfgD || !cfgD.apiEntity) { alert('Kein API-Entity für ' + dokob); return; }
+        const panel = document.getElementById('lookupResultsPanel');
+        const status = document.getElementById('lookupStatus');
+        const title = document.getElementById('lookupResultsTitle');
+        const table = document.getElementById('lookupTable');
+        const actions = document.getElementById('lookupActions');
+        title.textContent = `🔍 API Lookup — ${dokob} (${cfgD.apiEntity})`;
+        status.innerHTML = '<div class="spinner" style="display:inline-block;width:16px;height:16px;margin-right:8px;"></div> Lade Daten via SAP API...';
+        table.style.display = 'none';
+        actions.style.display = 'none';
+        panel.style.display = 'block';
+        panel.scrollIntoView({ behavior: 'smooth' });
+
+        // Use the existing funcloc/equipment search - or the generic api-lookup endpoint
+        fetch(`/batch/${BATCH_ID}/object-mapping/api-lookup?dokob=${dokob}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    status.innerHTML = `<span style="color:#c00;">❌ ${data.error}</span>`;
+                    if (data.detail) status.innerHTML += `<pre style="font-size:11px;max-height:200px;overflow:auto;">${data.detail}</pre>`;
+                    return;
+                }
+                lookupResults = data.results || [];
+                status.innerHTML = `<span style="color:green;">✅ ${lookupResults.length} Ergebnisse</span>` +
+                    (data.url ? `<pre style="font-size:11px;background:#eef;padding:4px 8px;border-radius:4px;margin-top:4px;">URL: ${data.url}</pre>` : '');
+                if (lookupResults.length === 0) { table.style.display = 'none'; return; }
+
+                const keys = Object.keys(lookupResults[0]).filter(k => !k.startsWith('__'));
+                document.getElementById('lookupThead').innerHTML = keys.map(k => `<th>${k}</th>`).join('');
+                document.getElementById('lookupTbody').innerHTML = lookupResults.map(r =>
+                    '<tr>' + keys.map(k => `<td><code>${escapeHtml(String(r[k] ?? ''))}</code></td>`).join('') + '</tr>'
+                ).join('');
+                table.style.display = 'table';
+                // No auto-apply for API lookup — user can copy values
+            })
+            .catch(err => { status.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`; });
+    }
+
+    // ── 1:1 Auto-Map ────────────────────────────────────────────
+    function runAutoMap(dokob) {
+        const unmappedForDokob = allUnmapped.filter(u => u.dokob === dokob);
+        if (unmappedForDokob.length === 0) {
+            alert(`Keine nicht-zugeordneten Einträge für ${dokob}.`);
+            return;
+        }
+        if (!confirm(`1:1 Auto-Map für ${dokob}:\n${unmappedForDokob.length} Zuordnungen erstellen (source = target)?`)) return;
+
+        const mappings = unmappedForDokob.map(u => ({
+            source_dokob: u.dokob,
+            source_objky: u.objky,
+            target_dokob: u.dokob,
+            target_objky: u.objky
+        }));
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/bulk-add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mappings })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert(`✅ ${data.added} Zuordnungen erstellt für ${dokob}` + (data.skipped > 0 ? ` (${data.skipped} übersprungen)` : ''));
+                loadMappings();
+                loadStats();
+                loadUnmapped();
+                renderStrategyCards();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(err => alert('Fehler: ' + err));
+    }
+
+    // ── Apply Lookup Mappings ──────────────────────────────────
+    function applyLookupMappings() {
+        if (!lookupResults.length || !lookupDokob) return;
+        // Build mappings from lookup results — each unique objky maps 1:1
+        const objkyField = lookupResults[0].hasOwnProperty('objky') ? 'objky' : 'OBJKY';
+        const unique = [...new Set(lookupResults.map(r => r[objkyField]))];
+        const mappings = unique.map(key => ({
+            source_dokob: lookupDokob,
+            source_objky: key,
+            target_dokob: lookupDokob,
+            target_objky: key
+        }));
+
+        if (!confirm(`${mappings.length} Zuordnungen für ${lookupDokob} erstellen (1:1 source=target)?`)) return;
+
+        fetch(`/batch/${BATCH_ID}/object-mapping/bulk-add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mappings })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert(`✅ ${data.added} Zuordnungen erstellt` + (data.skipped > 0 ? ` (${data.skipped} übersprungen)` : ''));
+                closeLookupPanel();
+                loadMappings();
+                loadStats();
+                loadUnmapped();
+                renderStrategyCards();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        })
+        .catch(err => alert('Fehler: ' + err));
+    }
+
+    function closeLookupPanel() {
+        document.getElementById('lookupResultsPanel').style.display = 'none';
+        lookupResults = [];
+        lookupDokob = null;
+    }
+
+    // ── FunctionalLocation Lookup ──────────────────────────────
+    function funclocSearch() {
+        const sys = document.getElementById('flSapSystem').value;
+        const val = document.getElementById('flFilterValue').value.trim();
+        const statusEl = document.getElementById('flStatus');
+        const tbl = document.getElementById('flResultsTable');
+        const body = document.getElementById('flResultsBody');
+        const thead = tbl.querySelector('thead tr');
+        const metaPre = document.getElementById('flMetadataOutput');
+        const urlPre = document.getElementById('flRawUrl');
+        metaPre.style.display = 'none';
+        statusEl.innerHTML = '<div class="spinner" style="display:inline-block;width:16px;height:16px;margin-right:8px;"></div> Lade...';
+
+        let filter = '';
+        if (val) {
+            // Try multiple filter variants — LabelName contains
+            filter = `FunctionalLocationLabelName eq '${val}'`;
+        }
+
+        fetch(`/api/funcloc/search?system=${sys}&top=50&filter=${encodeURIComponent(filter)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                statusEl.innerHTML = `<span style="color:#c00;">❌ Fehler: ${data.error}</span>`;
+                if (data.detail) statusEl.innerHTML += `<pre style="font-size:11px;max-height:300px;overflow:auto;">${data.detail}</pre>`;
+                if (data.url) { urlPre.style.display = 'block'; urlPre.textContent = 'URL: ' + data.url; }
+                tbl.style.display = 'none';
+                return;
+            }
+            statusEl.innerHTML = `<span style="color:green;">✅ ${data.count} Ergebnisse</span>`;
+            urlPre.style.display = 'block';
+            urlPre.textContent = 'URL: ' + data.url;
+            body.innerHTML = '';
+            // Dynamic columns from first result
+            if (data.results.length > 0) {
+                const keys = Object.keys(data.results[0]).filter(k => !k.startsWith('__'));
+                thead.innerHTML = keys.map(k => {
+                    const isFL = k === 'FunctionalLocation';
+                    return `<th${isFL ? ' style="background:#d4edda;font-weight:700;"':''}'>${k}${isFL?' ✅':''}</th>`;
+                }).join('');
+                data.results.forEach(r => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = keys.map(k => {
+                        const v = r[k] ?? '';
+                        return k === 'FunctionalLocation' ? `<td><strong>${v}</strong></td>` : `<td>${v}</td>`;
+                    }).join('');
+                    body.appendChild(tr);
+                });
+            } else {
+                thead.innerHTML = '<th>Keine Ergebnisse</th>';
+                body.innerHTML = '<tr><td style="text-align:center;color:#999;">Keine Daten</td></tr>';
+            }
+            tbl.style.display = 'table';
+        })
+        .catch(err => {
+            statusEl.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`;
+        });
+    }
+
+    function funclocServiceDoc() {
+        const sys = document.getElementById('flSapSystem').value;
+        const statusEl = document.getElementById('flStatus');
+        const metaPre = document.getElementById('flMetadataOutput');
+        const tbl = document.getElementById('flResultsTable');
+        const urlPre = document.getElementById('flRawUrl');
+        tbl.style.display = 'none';
+        urlPre.style.display = 'none';
+        statusEl.innerHTML = '<div class="spinner" style="display:inline-block;width:16px;height:16px;margin-right:8px;"></div> Lade Service Document...';
+
+        fetch(`/api/funcloc/service-doc?system=${sys}`)
+        .then(r => r.text())
+        .then(txt => {
+            statusEl.innerHTML = '<span style="color:green;">✅ Service Document geladen — Entity Sets:</span>';
+            metaPre.textContent = txt;
+            metaPre.style.display = 'block';
+        })
+        .catch(err => {
+            statusEl.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`;
+        });
+    }
+
+    function funclocMetadata() {
+        const sys = document.getElementById('flSapSystem').value;
+        const statusEl = document.getElementById('flStatus');
+        const metaPre = document.getElementById('flMetadataOutput');
+        const tbl = document.getElementById('flResultsTable');
+        const urlPre = document.getElementById('flRawUrl');
+        tbl.style.display = 'none';
+        urlPre.style.display = 'none';
+        statusEl.innerHTML = '<div class="spinner" style="display:inline-block;width:16px;height:16px;margin-right:8px;"></div> Lade $metadata...';
+
+        fetch(`/api/funcloc/metadata?system=${sys}`)
+        .then(r => r.text())
+        .then(xml => {
+            statusEl.innerHTML = '<span style="color:green;">✅ $metadata geladen</span>';
+            metaPre.textContent = xml;
+            metaPre.style.display = 'block';
+        })
+        .catch(err => {
+            statusEl.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`;
         });
     }
 </script>

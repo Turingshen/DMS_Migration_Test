@@ -148,6 +148,33 @@
         border-bottom: 1px solid #eee;
         margin-bottom: 6px;
     }
+    /* Clickable DOKOB stat badges */
+    .dokob-stat-badge.dokob-selectable {
+        cursor: pointer;
+        transition: all 0.15s ease;
+        border-width: 2px;
+        user-select: none;
+    }
+    .dokob-stat-badge.dokob-selectable:hover {
+        transform: scale(1.05);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    .dokob-stat-badge.dokob-selectable.dokob-selected {
+        border-color: #28a745 !important;
+        background: #d4edda !important;
+    }
+    .dokob-stat-badge.dokob-selectable.dokob-deselected {
+        border-color: #ccc !important;
+        background: #f0f0f0 !important;
+        opacity: 0.55;
+    }
+    .dokob-stat-badge.dokob-selectable.dokob-deselected:hover {
+        opacity: 0.85;
+    }
+    .dokob-stat-badge.dokob-selectable .dokob-check {
+        margin-right: 4px;
+        font-size: 0.75rem;
+    }
 </style>
 {% endblock %}
 
@@ -270,16 +297,17 @@
                     </div>
                 </div>
                 
-                <!-- DOKOB Filter (Objekttyp) -->
+                <!-- DOKOB Filter (Objekttyp) - selected via stat badges on page -->
                 <div class="form-group">
                     <label><i class="fas fa-filter"></i> Objekttyp-Filter (DOKOB)</label>
-                    <div class="alert alert-light border mb-0" style="max-height: 120px; overflow-y: auto;">
-                        <div id="dokobFilterContainer" class="d-flex flex-wrap gap-2">
-                            <span class="text-muted">Lade Objekttypen...</span>
+                    <div class="alert alert-light border mb-0">
+                        <div id="modalDokobSummary" class="d-flex flex-wrap" style="gap:6px;">
+                            <span class="text-muted">Noch keine Daten geladen</span>
                         </div>
                     </div>
                     <small class="form-text text-muted">
                         <span id="selectedDokobInfo">Alle Objekttypen ausgewählt</span>
+                        — Klicke auf die DOKOB-Badges oben auf der Seite um zu filtern.
                         <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)">Alle</button> |
                         <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)">Keine</button>
                     </small>
@@ -612,89 +640,63 @@ function showMigrationBatchModal() {
         $('#migrationWerkeList').html('<small class="text-muted">Keine Werke ausgewählt (alle Daten aus lokaler DB)</small>');
     }
     
-    $('#migrationObjectCount').text(count.toLocaleString());
+    // Set object count based on DOKOB filter
+    updateFilteredCount();
     $('#migrationWave').val('');
     $('#migrationDescription').val('');
     $('#migrationNotes').val('');
     $('#descCharCount').text('0');
     
-    // Load DOKOB statistics
-    loadDokobStats();
+    // Sync modal summary with current DOKOB selection
+    updateModalDokobSummary();
     
     $('#migrationBatchModal').modal('show');
 }
 
-// Load DOKOB statistics for filter
-function loadDokobStats() {
-    fetch('/api/dms/dokob-stats')
-        .then(r => r.json())
-        .then(data => {
-            if (data.success && data.dokobs && data.dokobs.length > 0) {
-                selectedDokobs = data.dokobs.map(d => d.dokob);  // Select all by default
-                renderDokobFilter(data.dokobs);
-                updateDokobInfo();
-            } else {
-                $('#dokobFilterContainer').html('<span class="text-muted">Keine Objekttypen gefunden</span>');
-            }
-        })
-        .catch(err => {
-            $('#dokobFilterContainer').html('<span class="text-danger">Fehler beim Laden</span>');
-        });
-}
+// DOKOB selection is driven by clicking the stat badges on the page.
+// selectedDokobs is kept in sync, and the modal shows a summary.
+let dokobCounts = {};  // {DOKOB: count} from stat badges
 
-function renderDokobFilter(dokobs) {
-    const container = $('#dokobFilterContainer');
-    container.empty();
-    
-    dokobs.forEach(item => {
-        const checked = selectedDokobs.includes(item.dokob) ? 'checked' : '';
-        const badge = $(`
-            <label class="badge badge-${checked ? 'success' : 'secondary'} mr-1 mb-1" style="cursor: pointer; padding: 6px 10px;">
-                <input type="checkbox" class="dokob-checkbox mr-1" value="${item.dokob}" ${checked} style="display: none;">
-                ${item.dokob} <small>(${item.count.toLocaleString()})</small>
-            </label>
-        `);
-        
-        badge.on('click', function(e) {
-            const checkbox = $(this).find('input');
-            const dokob = checkbox.val();
-            
-            if (selectedDokobs.includes(dokob)) {
-                selectedDokobs = selectedDokobs.filter(d => d !== dokob);
-                $(this).removeClass('badge-success').addClass('badge-secondary');
-            } else {
-                selectedDokobs.push(dokob);
-                $(this).removeClass('badge-secondary').addClass('badge-success');
-            }
-            updateDokobInfo();
-        });
-        
-        container.append(badge);
-    });
+function toggleDokobStat(dokob) {
+    const el = document.querySelector(`.dokob-selectable[data-dokob="${dokob}"]`);
+    if (!el) return;
+    if (selectedDokobs.includes(dokob)) {
+        selectedDokobs = selectedDokobs.filter(d => d !== dokob);
+        el.classList.remove('dokob-selected');
+        el.classList.add('dokob-deselected');
+        el.querySelector('.dokob-check').textContent = '☐';
+    } else {
+        selectedDokobs.push(dokob);
+        el.classList.remove('dokob-deselected');
+        el.classList.add('dokob-selected');
+        el.querySelector('.dokob-check').textContent = '☑';
+    }
+    updateDokobInfo();
+    updateModalDokobSummary();
 }
 
 function selectAllDokob(selectAll) {
-    if (selectAll) {
-        // Select all
-        $('.dokob-checkbox').each(function() {
-            const dokob = $(this).val();
-            if (!selectedDokobs.includes(dokob)) {
-                selectedDokobs.push(dokob);
-            }
-            $(this).closest('label').removeClass('badge-secondary').addClass('badge-success');
-        });
-    } else {
-        // Deselect all
-        selectedDokobs = [];
-        $('.dokob-checkbox').each(function() {
-            $(this).closest('label').removeClass('badge-success').addClass('badge-secondary');
-        });
-    }
+    const badges = document.querySelectorAll('.dokob-selectable');
+    selectedDokobs = [];
+    badges.forEach(el => {
+        const dokob = el.getAttribute('data-dokob');
+        if (selectAll) {
+            selectedDokobs.push(dokob);
+            el.classList.remove('dokob-deselected');
+            el.classList.add('dokob-selected');
+            el.querySelector('.dokob-check').textContent = '☑';
+        } else {
+            el.classList.remove('dokob-selected');
+            el.classList.add('dokob-deselected');
+            el.querySelector('.dokob-check').textContent = '☐';
+        }
+    });
     updateDokobInfo();
+    updateModalDokobSummary();
 }
 
 function updateDokobInfo() {
-    const total = $('.dokob-checkbox').length;
+    const total = document.querySelectorAll('.dokob-selectable').length;
     const selected = selectedDokobs.length;
     
     if (selected === 0) {
@@ -705,29 +707,36 @@ function updateDokobInfo() {
         $('#selectedDokobInfo').text(`${selected} von ${total} Objekttypen ausgewählt`);
     }
     
-    // Update count based on filter
     updateFilteredCount();
 }
 
 function updateFilteredCount() {
-    // Fetch count with filter applied
     if (selectedDokobs.length === 0) {
         $('#migrationObjectCount').text('0');
         return;
     }
-    
-    // Quick estimate based on DOKOB badges
     let total = 0;
-    $('.dokob-checkbox').each(function() {
-        const dokob = $(this).val();
-        if (selectedDokobs.includes(dokob)) {
-            const countText = $(this).closest('label').text().match(/\(([\d,.]+)\)/);
-            if (countText) {
-                total += parseInt(countText[1].replace(/[,.]/g, '')) || 0;
-            }
-        }
-    });
+    selectedDokobs.forEach(d => { total += (dokobCounts[d] || 0); });
     $('#migrationObjectCount').text(total.toLocaleString());
+}
+
+function updateModalDokobSummary() {
+    const container = document.getElementById('modalDokobSummary');
+    if (!container) return;
+    if (Object.keys(dokobCounts).length === 0) {
+        container.innerHTML = '<span class="text-muted">Noch keine Daten geladen — bitte zuerst Daten laden.</span>';
+        return;
+    }
+    let html = '';
+    const allDokobs = Object.keys(dokobCounts).sort((a,b) => (dokobCounts[b]||0) - (dokobCounts[a]||0));
+    allDokobs.forEach(dokob => {
+        const count = dokobCounts[dokob] || 0;
+        const isSel = selectedDokobs.includes(dokob);
+        const cls = isSel ? 'badge-success' : 'badge-secondary';
+        const icon = isSel ? '☑' : '☐';
+        html += `<span class="badge ${cls}" style="padding:5px 8px;font-size:12px;cursor:pointer;user-select:none;" onclick="toggleDokobStat('${dokob}')">${icon} ${dokob} (${count.toLocaleString()})</span>`;
+    });
+    container.innerHTML = html;
 }
 
 // Character counter for description
@@ -952,19 +961,32 @@ function updateStatsPartial(stats, statsExcluded = {}, statsNoFile = {}) {
         `);
     }
     
-    // Per-DOKOB badges
+    // Per-DOKOB badges — clickable for batch DOKOB filter
     const entries = Object.entries(stats)
         .filter(([key, value]) => typeof value === 'number')
         .map(([dokob, count]) => [dokob, count, statsExcluded[dokob] || 0, statsNoFile[dokob] || 0])
         .filter(([dokob, count, excl, nf]) => count > 0 || excl > 0)
         .sort((a, b) => (b[1] + b[2]) - (a[1] + a[2]));
     
+    // Rebuild selectedDokobs and dokobCounts from fresh data
+    dokobCounts = {};
+    const knownDokobs = entries.map(e => e[0]);
+    // On first load, select all; on subsequent calls, keep existing selection
+    if (selectedDokobs.length === 0 || !selectedDokobs.some(d => knownDokobs.includes(d))) {
+        selectedDokobs = knownDokobs.slice();  // select all
+    }
+    
     entries.forEach(([dokob, count, excluded, dbCount]) => {
+        dokobCounts[dokob] = count;
+        const isSel = selectedDokobs.includes(dokob);
+        const selClass = isSel ? 'dokob-selected' : 'dokob-deselected';
+        const checkIcon = isSel ? '☑' : '☐';
         const excludedHtml = excluded > 0 ? `<span class="dokob-excluded" title="${excluded.toLocaleString()} Status-ausgeschlossen">⊘${excluded.toLocaleString()}</span>` : '';
-        const kproCount = count - dbCount;
         const dbHtml = dbCount > 0 ? `<span class="dokob-no-file" title="${dbCount.toLocaleString()} DB (DRAO)"><i class="fas fa-database"></i>${dbCount.toLocaleString()}</span>` : '';
         container.append(`
-            <div class="dokob-stat-badge">
+            <div class="dokob-stat-badge dokob-selectable ${selClass}" data-dokob="${dokob}" 
+                 onclick="toggleDokobStat('${dokob}')" title="Klicken zum An-/Abwählen für Batch">
+                <span class="dokob-check">${checkIcon}</span>
                 <span class="dokob-name">${dokob}</span>
                 <span class="dokob-count">${count.toLocaleString()}</span>
                 ${dbHtml}

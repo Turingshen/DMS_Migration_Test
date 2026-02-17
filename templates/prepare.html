@@ -82,6 +82,34 @@
     .dokob-num.status { color: #dc3545; font-size: 0.82rem; }
     .dokob-num i { font-size: 0.7rem; }
 
+    /* --- Clickable DOKOB cards --- */
+    .dokob-card.dokob-selectable {
+        cursor: pointer;
+        transition: all 0.15s ease;
+        user-select: none;
+        border-width: 2px;
+    }
+    .dokob-card.dokob-selectable:hover {
+        transform: scale(1.03);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+    .dokob-card.dokob-selected {
+        border-color: #28a745 !important;
+        background: #d4edda !important;
+    }
+    .dokob-card.dokob-deselected {
+        border-color: #ccc !important;
+        background: #f0f0f0 !important;
+        opacity: 0.5;
+    }
+    .dokob-card.dokob-deselected:hover {
+        opacity: 0.8;
+    }
+    .dokob-card .dokob-check {
+        font-size: 0.9rem;
+        margin-right: 4px;
+    }
+
     /* --- DB status excluded info --- */
     .badge-no-file {
         background: #fff3cd; color: #856404; border: 1px solid #ffc107;
@@ -387,12 +415,13 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                 <div class="form-group">
                     <label><i class="fas fa-filter"></i> Objekttyp-Filter (DOKOB)</label>
                     <div class="alert alert-light border" style="max-height:180px; overflow-y:auto;">
-                        <div id="dokobFilterContainer" class="d-flex flex-wrap gap-2">
-                            <span class="text-muted">Lade Objekttypen...</span>
+                        <div id="modalDokobSummary" class="d-flex flex-wrap" style="gap:6px;">
+                            <span class="text-muted">Noch keine Daten geladen</span>
                         </div>
                     </div>
                     <small class="form-text text-muted">
                         <span id="selectedDokobInfo">Alle Objekttypen ausgewählt</span>
+                        — Klicke auf die DOKOB-Karten oben um zu filtern.
                         <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)">Alle</button> |
                         <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)">Keine</button>
                     </small>
@@ -422,6 +451,7 @@ let loadedData = [];
 let werkeData = {};
 let countryToRegion = {};
 let selectedDokobs = [];
+let dokobCounts = {};
 let queryEdited = false;
 let programmaticChange = false;
 
@@ -506,8 +536,9 @@ function createDMSBatch() {
         alert('Keine DMS-Objekte in der lokalen Datenbank. Bitte zuerst Daten laden!');
         return;
     }
-    $('#dmsObjectCount').text(count.toLocaleString());
-    loadDokobStats();
+    // Sync modal summary
+    updateModalDokobSummary();
+    updateFilteredCount();
     $('#dokobFilterModal').modal('show');
 }
 
@@ -840,20 +871,32 @@ function renderDokobBadges(stats, excluded, noFile) {
     summaryHtml += '</div>';
     container.append(summaryHtml);
 
-    // --- Per-DOKOB cards ---
+    // Per-DOKOB cards — clickable for batch DOKOB filter
     const entries = Object.entries(stats)
         .filter(([k, v]) => k !== 'total' && typeof v === 'number')
         .map(([dokob, count]) => [dokob, count, excluded[dokob] || 0, noFile[dokob] || 0])
         .filter(([d, c, e, n]) => c > 0 || e > 0 || n > 0)
         .sort((a, b) => (b[1]+b[2]+b[3]) - (a[1]+a[2]+a[3]));
+
+    // Rebuild dokobCounts and init selectedDokobs
+    dokobCounts = {};
+    const knownDokobs = entries.map(e => e[0]);
+    if (selectedDokobs.length === 0 || !selectedDokobs.some(d => knownDokobs.includes(d))) {
+        selectedDokobs = knownDokobs.slice();
+    }
+
     if (entries.length > 0) {
         let rowHtml = '<div class="stats-dokob-row">';
         entries.forEach(([dokob, count, excl, nf]) => {
+            dokobCounts[dokob] = count;
+            const isSel = selectedDokobs.includes(dokob);
+            const selClass = isSel ? 'dokob-selected' : 'dokob-deselected';
+            const checkIcon = isSel ? '\u2611' : '\u2610';
             let nums = `<span class="dokob-num batch">${count.toLocaleString()}</span>`;
             if (nf > 0) nums += `<span class="dokob-num nofile" title="${nf.toLocaleString()} ohne Datei"><i class="fas fa-file-excel"></i> ${nf.toLocaleString()}</span>`;
             if (excl > 0) nums += `<span class="dokob-num status" title="${excl.toLocaleString()} Status-ausgeschlossen"><i class="fas fa-ban"></i> ${excl.toLocaleString()}</span>`;
-            rowHtml += `<div class="dokob-card">
-                <div class="dokob-card-name">${dokob}</div>
+            rowHtml += `<div class="dokob-card dokob-selectable ${selClass}" data-dokob="${dokob}" onclick="toggleDokobCard('${dokob}')" title="Klicken zum An-/Abw\u00e4hlen f\u00fcr Batch">
+                <div class="dokob-card-name"><span class="dokob-check">${checkIcon}</span>${dokob}</div>
                 <div class="dokob-card-numbers">${nums}</div>
             </div>`;
         });
@@ -897,51 +940,79 @@ function exportData() {
     a.href = URL.createObjectURL(blob); a.download = `dms_objects_${new Date().toISOString().slice(0,10)}.csv`; a.click();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 //  DOKOB FILTER (for DMS batch creation)
-// ═══════════════════════════════════════════════════════════════
-function loadDokobStats() {
-    fetch('/api/dms/dokob-stats').then(r => r.json()).then(data => {
-        if (data.success && data.dokobs && data.dokobs.length > 0) {
-            selectedDokobs = data.dokobs.map(d => d.dokob);
-            renderDokobFilter(data.dokobs); updateDokobInfo();
-        } else { $('#dokobFilterContainer').html('<span class="text-muted">Keine Objekttypen gefunden</span>'); }
-    });
-}
-
-function renderDokobFilter(dokobs) {
-    const container = $('#dokobFilterContainer'); container.empty();
-    dokobs.forEach(item => {
-        const checked = selectedDokobs.includes(item.dokob);
-        const badge = $(`<label class="badge badge-${checked?'success':'secondary'} mr-1 mb-1" style="cursor:pointer;padding:6px 10px;">
-            <input type="checkbox" class="dokob-checkbox mr-1" value="${item.dokob}" ${checked?'checked':''} style="display:none;">
-            ${item.dokob} <small>(${item.count.toLocaleString()})</small></label>`);
-        badge.on('click', function() {
-            const dokob = $(this).find('input').val();
-            if (selectedDokobs.includes(dokob)) { selectedDokobs = selectedDokobs.filter(d => d !== dokob); $(this).removeClass('badge-success').addClass('badge-secondary'); }
-            else { selectedDokobs.push(dokob); $(this).removeClass('badge-secondary').addClass('badge-success'); }
-            updateDokobInfo();
-        });
-        container.append(badge);
-    });
-}
-
-function selectAllDokob(all) {
-    if (all) { $('.dokob-checkbox').each(function() { const d=$(this).val(); if(!selectedDokobs.includes(d)) selectedDokobs.push(d); $(this).closest('label').removeClass('badge-secondary').addClass('badge-success'); }); }
-    else { selectedDokobs = []; $('.dokob-checkbox').each(function() { $(this).closest('label').removeClass('badge-success').addClass('badge-secondary'); }); }
+// ═══════════════════════════════════════════════════════════════════
+function toggleDokobCard(dokob) {
+    const el = document.querySelector(`.dokob-selectable[data-dokob="${dokob}"]`);
+    if (!el) return;
+    if (selectedDokobs.includes(dokob)) {
+        selectedDokobs = selectedDokobs.filter(d => d !== dokob);
+        el.classList.remove('dokob-selected');
+        el.classList.add('dokob-deselected');
+        el.querySelector('.dokob-check').textContent = '\u2610';
+    } else {
+        selectedDokobs.push(dokob);
+        el.classList.remove('dokob-deselected');
+        el.classList.add('dokob-selected');
+        el.querySelector('.dokob-check').textContent = '\u2611';
+    }
     updateDokobInfo();
+    updateModalDokobSummary();
+}
+
+function selectAllDokob(selectAll) {
+    const cards = document.querySelectorAll('.dokob-selectable');
+    selectedDokobs = [];
+    cards.forEach(el => {
+        const dokob = el.getAttribute('data-dokob');
+        if (selectAll) {
+            selectedDokobs.push(dokob);
+            el.classList.remove('dokob-deselected');
+            el.classList.add('dokob-selected');
+            el.querySelector('.dokob-check').textContent = '\u2611';
+        } else {
+            el.classList.remove('dokob-selected');
+            el.classList.add('dokob-deselected');
+            el.querySelector('.dokob-check').textContent = '\u2610';
+        }
+    });
+    updateDokobInfo();
+    updateModalDokobSummary();
 }
 
 function updateDokobInfo() {
-    const total = $('.dokob-checkbox').length, sel = selectedDokobs.length;
-    if (sel === 0) $('#selectedDokobInfo').html('<span class="text-danger">⚠️ Keine Objekttypen!</span>');
+    const total = document.querySelectorAll('.dokob-selectable').length;
+    const sel = selectedDokobs.length;
+    if (sel === 0) $('#selectedDokobInfo').html('<span class="text-danger">\u26a0\ufe0f Keine Objekttypen!</span>');
     else if (sel === total) $('#selectedDokobInfo').text('Alle Objekttypen ausgewählt');
     else $('#selectedDokobInfo').text(`${sel} von ${total} Objekttypen`);
+    updateFilteredCount();
+}
+
+function updateFilteredCount() {
     let c = 0;
-    $('.dokob-checkbox').each(function() {
-        if (selectedDokobs.includes($(this).val())) { const m = $(this).closest('label').text().match(/\(([\d,.]+)\)/); if (m) c += parseInt(m[1].replace(/[,.]/g, '')) || 0; }
-    });
+    selectedDokobs.forEach(d => { c += (dokobCounts[d] || 0); });
     $('#dmsObjectCount').text(c.toLocaleString());
+}
+
+function updateModalDokobSummary() {
+    const container = document.getElementById('modalDokobSummary');
+    if (!container) return;
+    if (Object.keys(dokobCounts).length === 0) {
+        container.innerHTML = '<span class="text-muted">Noch keine Daten geladen — bitte zuerst Daten laden.</span>';
+        return;
+    }
+    let html = '';
+    const allDokobs = Object.keys(dokobCounts).sort((a,b) => (dokobCounts[b]||0) - (dokobCounts[a]||0));
+    allDokobs.forEach(dokob => {
+        const count = dokobCounts[dokob] || 0;
+        const isSel = selectedDokobs.includes(dokob);
+        const cls = isSel ? 'badge-success' : 'badge-secondary';
+        const icon = isSel ? '\u2611' : '\u2610';
+        html += `<span class="badge ${cls}" style="padding:5px 8px;font-size:12px;cursor:pointer;user-select:none;" onclick="toggleDokobCard('${dokob}')">${icon} ${dokob} (${count.toLocaleString()})</span>`;
+    });
+    container.innerHTML = html;
 }
 </script>
 {% endblock %}

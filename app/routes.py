@@ -1487,13 +1487,14 @@ def refresh_batch_data_stream(batch_id):
                 "' AND DOKTL='" + df['doktl_padded'] + "')"
             ).tolist()
             
-            df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
+            # Keep doknr_escaped/dokar_escaped for reuse in DRAW/DRAT phases (dropped after DRAT)
             
-            # Query LOIO_IDs in chunks
-            chunk_size = 200
+            # Query LOIO_IDs in chunks (1000 per query for fewer round-trips)
+            chunk_size = 1000
             all_loios = []
+            total_conditions = len(conditions)
             
-            for i in range(0, len(conditions), chunk_size):
+            for i in range(0, total_conditions, chunk_size):
                 chunk = conditions[i:i + chunk_size]
                 where_clause = " OR ".join(chunk)
                 loio_query = f"""
@@ -1506,9 +1507,9 @@ def refresh_batch_data_stream(batch_id):
                     chunk_df = pd.read_sql(loio_query, con)
                 all_loios.append(chunk_df)
                 
-                if i % 500 == 0:
-                    pct = 5 + int((i / len(conditions)) * 15)  # 5-20%
-                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'percent': pct, 'message': f'LOIO lookup: {i}/{len(conditions)}'})}\n\n"
+                if i % 2000 == 0:
+                    pct = 5 + int((i / total_conditions) * 15)  # 5-20%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'loio', 'percent': pct, 'message': f'LOIO lookup: {i}/{total_conditions}'})}\n\n"
             
             loio_df = pd.DataFrame()
             if all_loios and not all(len(c) == 0 for c in all_loios):
@@ -1526,9 +1527,10 @@ def refresh_batch_data_stream(batch_id):
                 yield f"data: {json.dumps({'type': 'status', 'phase': 'size', 'message': f'Phase 2/4: Looking up file sizes for {len(loio_ids)} LOIOs...'})}\n\n"
                 
                 all_sizes = []
-                chunk_size = 500
+                chunk_size = 2000
+                total_loios = len(loio_ids)
                 
-                for i in range(0, len(loio_ids), chunk_size):
+                for i in range(0, total_loios, chunk_size):
                     chunk = loio_ids[i:i + chunk_size]
                     placeholders = ",".join([f"'{lid}'" for lid in chunk])
                     size_query = f"""
@@ -1540,9 +1542,9 @@ def refresh_batch_data_stream(batch_id):
                         chunk_df = pd.read_sql(size_query, con)
                     all_sizes.append(chunk_df)
                     
-                    if i % 1000 == 0:
-                        pct = 20 + int((i / len(loio_ids)) * 15)  # 20-35%
-                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'size', 'percent': pct, 'message': f'File sizes: {i}/{len(loio_ids)}'})}\n\n"
+                    if i % 4000 == 0:
+                        pct = 20 + int((i / total_loios) * 15)  # 20-35%
+                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'size', 'percent': pct, 'message': f'File sizes: {i}/{total_loios}'})}\n\n"
                 
                 total_size_records = sum(len(c) for c in all_sizes)
                 if total_size_records > 0:
@@ -1555,25 +1557,21 @@ def refresh_batch_data_stream(batch_id):
             # ========== PHASE 3: Filename Lookup from DRAW ==========
             yield f"data: {json.dumps({'type': 'status', 'phase': 'draw', 'message': 'Phase 3/4: Looking up filenames from DIL.DRAW...'})}\n\n"
             
-            # Build document keys for DRAW lookup
-            doc_keys = []
-            for _, row in df.iterrows():
-                doknr = str(row['source_documentnumber'])
-                dokar = str(row['source_documenttype'])
-                dokvr = str(row['source_documentversion']).zfill(2)
-                doktl = str(row['source_documentpart']).zfill(3)
-                doc_keys.append((doknr.replace("'", "''"), dokar.replace("'", "''"), dokvr, doktl))
+            # Build document keys for DRAW lookup - VECTORIZED (no iterrows!)
+            draw_conditions = (
+                "(doknr = '" + df['doknr_escaped'] +
+                "' AND dokar = '" + df['dokar_escaped'] +
+                "' AND dokvr = '" + df['dokvr_padded'] +
+                "' AND doktl = '" + df['doktl_padded'] + "')"
+            ).tolist()
             
             all_filenames = []
-            chunk_size = 300
+            chunk_size = 1000
+            total_draw = len(draw_conditions)
             
-            for i in range(0, len(doc_keys), chunk_size):
-                chunk = doc_keys[i:i + chunk_size]
-                conditions_draw = [
-                    f"(doknr = '{k[0]}' AND dokar = '{k[1]}' AND dokvr = '{k[2]}' AND doktl = '{k[3]}')"
-                    for k in chunk
-                ]
-                where_clause = " OR ".join(conditions_draw)
+            for i in range(0, total_draw, chunk_size):
+                chunk = draw_conditions[i:i + chunk_size]
+                where_clause = " OR ".join(chunk)
                 
                 draw_query = f"""
                     SELECT doknr, dokar, dokvr, doktl, filep, dokst
@@ -1584,9 +1582,9 @@ def refresh_batch_data_stream(batch_id):
                     chunk_df = pd.read_sql(draw_query, con)
                 all_filenames.append(chunk_df)
                 
-                if i % 600 == 0:
-                    pct = 35 + int((i / len(doc_keys)) * 15)  # 35-50%
-                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': pct, 'message': f'DRAW lookup: {i}/{len(doc_keys)}'})}\n\n"
+                if i % 3000 == 0:
+                    pct = 35 + int((i / total_draw) * 15)  # 35-50%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'draw', 'percent': pct, 'message': f'DRAW lookup: {i}/{total_draw}'})}\n\n"
             
             filename_df = pd.DataFrame()
             filenames_found = 0
@@ -1602,14 +1600,15 @@ def refresh_batch_data_stream(batch_id):
             # ========== PHASE 3b: Description Lookup from DRAT ==========
             yield f"data: {json.dumps({'type': 'status', 'phase': 'drat', 'message': 'Phase 3b/4: Looking up descriptions from DIL.DRAT...'})}\n\n"
             
+            # Reuse vectorized conditions from DRAW (same keys)
             all_descriptions = []
-            for i in range(0, len(doc_keys), chunk_size):
-                chunk = doc_keys[i:i + chunk_size]
-                conditions_drat = [
-                    f"(DOKNR = '{k[0]}' AND DOKAR = '{k[1]}' AND DOKVR = '{k[2]}' AND DOKTL = '{k[3]}')"
-                    for k in chunk
-                ]
-                where_clause = " OR ".join(conditions_drat)
+            drat_chunk_size = 1000
+            total_drat = len(draw_conditions)
+            
+            for i in range(0, total_drat, drat_chunk_size):
+                chunk = draw_conditions[i:i + drat_chunk_size]
+                # Uppercase column names for DRAT (SAP convention)
+                where_clause = " OR ".join(c.replace('doknr', 'DOKNR').replace('dokar', 'DOKAR').replace('dokvr', 'DOKVR').replace('doktl', 'DOKTL') for c in chunk)
                 drat_query = f"""
                     SELECT DOKNR, DOKAR, DOKVR, DOKTL, LANGU, DKTXT
                     FROM DIL.DRAT
@@ -1619,32 +1618,25 @@ def refresh_batch_data_stream(batch_id):
                     chunk_df = pd.read_sql(drat_query, con)
                 all_descriptions.append(chunk_df)
                 
-                if i % 600 == 0:
-                    pct = 50 + int((i / len(doc_keys)) * 5)  # 50-55%
-                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': pct, 'message': f'DRAT lookup: {i}/{len(doc_keys)}'})}\n\n"
+                if i % 3000 == 0:
+                    pct = 50 + int((i / total_drat) * 5)  # 50-55%
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': pct, 'message': f'DRAT lookup: {i}/{total_drat}'})}\n\n"
             
             drat_df = pd.DataFrame()
             descriptions_found = 0
             if all_descriptions:
                 drat_df = pd.concat(all_descriptions, ignore_index=True)
                 drat_df.columns = [c.lower() for c in drat_df.columns]
-                # Prefer English, deduplicate
-                drat_en = drat_df[drat_df['langu'] == 'E'].drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
-                drat_any = drat_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')
-                # Merge: English first, fill gaps
-                if len(drat_en) > 0:
-                    drat_final = drat_en[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']].copy()
-                    # Add rows from drat_any that are not in drat_en
-                    missing_keys = drat_any.merge(drat_en[['doknr', 'dokar', 'dokvr', 'doktl']], 
-                                                   on=['doknr', 'dokar', 'dokvr', 'doktl'], 
-                                                   how='left', indicator=True)
-                    missing = missing_keys[missing_keys['_merge'] == 'left_only'][['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']]
-                    drat_final = pd.concat([drat_final, missing], ignore_index=True)
-                else:
-                    drat_final = drat_any[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']].copy()
+                # Language priority: E (English) > D (German) > any
+                drat_df['_lang_prio'] = drat_df['langu'].map({'E': 0, 'D': 1}).fillna(2).astype(int)
+                drat_df = drat_df.sort_values('_lang_prio')
+                drat_final = drat_df.drop_duplicates(subset=['doknr', 'dokar', 'dokvr', 'doktl'], keep='first')[['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt']].copy()
                 descriptions_found = int(drat_final['dktxt'].notna().sum())
             else:
                 drat_final = pd.DataFrame(columns=['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt'])
+            
+            # Clean up temp escaped columns (no longer needed)
+            df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': 55, 'message': f'Found {descriptions_found} descriptions from DRAT'})}\n\n"
             
@@ -1689,53 +1681,53 @@ def refresh_batch_data_stream(batch_id):
             full_df = _apply_translations(full_df, rules)
             
             # Recompute target_documentnumber based on (possibly changed) target_documenttype
+            # VECTORIZED approach: apply sanitize_doknr to all rows at once instead of iterrows
             from app.process import sanitize_doknr as _sanitize_doknr
             INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
             
-            def _is_purely_numeric(val):
-                return bool(val) and str(val).strip().isdigit()
+            if 'target_documentnumber_sanitized' not in full_df.columns:
+                full_df['target_documentnumber_sanitized'] = None
             
-            for idx, row in full_df.iterrows():
-                target_type = str(row.get('target_documenttype', '') or '').strip().upper()
+            # Precompute masks
+            target_type_str = full_df['target_documenttype'].fillna('').astype(str).str.strip().str.upper()
+            is_internal = target_type_str.isin(INTERNAL_NUMBERING_TYPES)
+            
+            source_nr_str = full_df['source_documentnumber'].fillna('').astype(str).str.strip()
+            has_source_nr = source_nr_str != ''
+            is_numeric = source_nr_str.str.isdigit() & has_source_nr
+            is_alphanumeric = has_source_nr & ~is_numeric
+            
+            tgt_nr_str = full_df['target_documentnumber'].fillna('').astype(str).str.strip()
+            has_tgt_nr = tgt_nr_str != ''
+            
+            # Apply sanitize_doknr vectorized via .apply (function has branching logic, not purely vectorizable)
+            def _compute_doknr_row(row):
+                target_type = str(row.get('target_documenttype') or '').strip().upper()
                 current_tgt_nr = row.get('target_documentnumber')
+                source_nr = str(row.get('source_documentnumber') or '').strip()
                 
                 if target_type in INTERNAL_NUMBERING_TYPES:
-                    # Internal numbering: check if source DOKNR is numeric or alphanumeric
-                    source_nr = row.get('source_documentnumber')
-                    if pd.notna(source_nr) and str(source_nr).strip() and not _is_purely_numeric(str(source_nr).strip()):
-                        # Pre-check: would sanitization leave anything useful?
-                        sanitized, _ = _sanitize_doknr(str(source_nr).strip())
+                    if source_nr and not source_nr.isdigit():
+                        sanitized, _ = _sanitize_doknr(source_nr)
                         if sanitized and sanitized.strip():
-                            tgt_nr = str(source_nr).strip()[:25]
-                            full_df.at[idx, 'target_documentnumber'] = tgt_nr
-                            full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized[:25]
-                        else:
-                            # Sanitization empties this value → treat as auto-generate
-                            full_df.at[idx, 'target_documentnumber'] = None
-                            full_df.at[idx, 'target_documentnumber_sanitized'] = None
-                    else:
-                        # Purely numeric or empty → S4 auto-generates
-                        full_df.at[idx, 'target_documentnumber'] = None
-                        full_df.at[idx, 'target_documentnumber_sanitized'] = None
+                            return source_nr[:25], sanitized[:25]
+                    return None, None
                 elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
-                    source_nr = row.get('source_documentnumber')
-                    if pd.notna(source_nr) and str(source_nr).strip():
-                        tgt_nr = str(source_nr).strip()[:25]
+                    if source_nr:
+                        tgt_nr = source_nr[:25]
                         sanitized, _ = _sanitize_doknr(tgt_nr)
                         if sanitized and sanitized.strip():
-                            full_df.at[idx, 'target_documentnumber'] = tgt_nr
-                            full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized
-                        else:
-                            full_df.at[idx, 'target_documentnumber'] = None
-                            full_df.at[idx, 'target_documentnumber_sanitized'] = None
+                            return tgt_nr, sanitized
+                    return None, None
                 else:
-                    # Recompute sanitized for existing value
                     sanitized, _ = _sanitize_doknr(str(current_tgt_nr))
                     if sanitized and sanitized.strip():
-                        full_df.at[idx, 'target_documentnumber_sanitized'] = sanitized
-                    else:
-                        full_df.at[idx, 'target_documentnumber'] = None
-                        full_df.at[idx, 'target_documentnumber_sanitized'] = None
+                        return current_tgt_nr, sanitized
+                    return None, None
+            
+            doknr_results = full_df.apply(_compute_doknr_row, axis=1, result_type='expand')
+            full_df['target_documentnumber'] = doknr_results[0]
+            full_df['target_documentnumber_sanitized'] = doknr_results[1]
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
             
@@ -1906,24 +1898,32 @@ def refresh_batch_data_stream(batch_id):
                 
                 con.execute(text("DROP TABLE #refresh_update"))
                 
-                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': f'Updated {updated_count} metadata records'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 85, 'message': f'Updated {updated_count} metadata records'})}\n\n"
                 
-                # Update rule results
+                # Update rule results via BULK temp table (not row-by-row!)
+                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 86, 'message': 'Bulk updating rule results...'})}\n\n"
+                
+                con.execute(text("""
+                    IF OBJECT_ID('tempdb..#rules_update') IS NOT NULL DROP TABLE #rules_update;
+                    CREATE TABLE #rules_update (
+                        staging_id INT PRIMARY KEY,
+                        target_documenttype NVARCHAR(10),
+                        target_documentnumber NVARCHAR(50),
+                        target_documentnumber_sanitized NVARCHAR(50),
+                        target_documentversion NVARCHAR(10),
+                        target_documentpart NVARCHAR(10),
+                        authorization_group NVARCHAR(10),
+                        target_dokob NVARCHAR(20),
+                        target_objky NVARCHAR(100),
+                        target_document_status NVARCHAR(10)
+                    );
+                """))
+                
+                # Build DataFrame from rule_updates dict
+                rules_rows = []
                 for staging_id, vals in rule_updates.items():
-                    con.execute(text("""
-                        UPDATE dbo.migration_staging
-                        SET target_documenttype = :target_documenttype,
-                            target_documentnumber = :target_documentnumber,
-                            target_documentnumber_sanitized = :target_documentnumber_sanitized,
-                            target_documentversion = :target_documentversion,
-                            target_documentpart = :target_documentpart,
-                            authorization_group = :authorization_group,
-                            target_dokob = :target_dokob,
-                            target_objky = :target_objky,
-                            target_document_status = :target_document_status
-                        WHERE id = :id
-                    """), {
-                        'id': staging_id,
+                    rules_rows.append({
+                        'staging_id': staging_id,
                         'target_documenttype': vals.get('target_documenttype'),
                         'target_documentnumber': vals.get('target_documentnumber'),
                         'target_documentnumber_sanitized': vals.get('target_documentnumber_sanitized'),
@@ -1934,6 +1934,40 @@ def refresh_batch_data_stream(batch_id):
                         'target_objky': vals.get('target_objky'),
                         'target_document_status': vals.get('target_document_status')
                     })
+                
+                rules_df = pd.DataFrame(rules_rows)
+                # Replace NaN with None for SQL compatibility
+                rules_df = rules_df.where(pd.notnull(rules_df), None)
+                
+                # Bulk insert into temp table
+                rules_chunk_size = 900
+                for i in range(0, len(rules_df), rules_chunk_size):
+                    chunk = rules_df.iloc[i:i + rules_chunk_size]
+                    chunk.to_sql('#rules_update', con, if_exists='append', index=False, method='multi')
+                    
+                    if i % 5000 == 0 and i > 0:
+                        pct = 86 + int((i / len(rules_df)) * 4)  # 86-90%
+                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': pct, 'message': f'Rules temp table: {i}/{len(rules_df)}'})}\n\n"
+                
+                # Single UPDATE JOIN — replaces 100k individual UPDATEs!
+                con.execute(text("""
+                    UPDATE s
+                    SET s.target_documenttype = t.target_documenttype,
+                        s.target_documentnumber = t.target_documentnumber,
+                        s.target_documentnumber_sanitized = t.target_documentnumber_sanitized,
+                        s.target_documentversion = t.target_documentversion,
+                        s.target_documentpart = t.target_documentpart,
+                        s.authorization_group = t.authorization_group,
+                        s.target_dokob = t.target_dokob,
+                        s.target_objky = t.target_objky,
+                        s.target_document_status = t.target_document_status
+                    FROM dbo.migration_staging s
+                    INNER JOIN #rules_update t ON s.id = t.staging_id
+                """))
+                
+                con.execute(text("DROP TABLE #rules_update"))
+                
+                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Rule updates complete'})}\n\n"
             
             # Calculate statistics
             total_bytes = size_df['file_size'].dropna().sum() if len(size_df) > 0 else 0
@@ -2650,6 +2684,144 @@ def debug_document(docnr):
         return _json.dumps(data, indent=2, ensure_ascii=False), resp.status_code, {'Content-Type': 'application/json'}
     except Exception:
         return resp.text, resp.status_code
+
+
+@migrate_bp.route('/api/funcloc/search', methods=['GET'])
+def funcloc_search():
+    """Proxy: query S4 FunctionalLocation API via session bearer token."""
+    import requests as _req
+    sap_system = request.args.get('system', 'zbq')
+    query_filter = request.args.get('filter', '')
+    top = request.args.get('top', '20')
+    entity_set = request.args.get('entity', 'FunctionalLocation')  # from OpenAPI spec
+
+    sys_cfg = cfg.config_env.get(sap_system, {})
+    auth_type = sys_cfg.get('auth_type', 'oauth')
+
+    if auth_type == 'basic':
+        from app.credentials import get_credentials
+        creds = get_credentials(sap_system)
+        if not creds:
+            return jsonify(success=False, error=f'No credentials for {sap_system}'), 401
+        auth_tuple = (creds['username'], creds['password'])
+        verify_ssl = sys_cfg.get('verify_ssl', True)
+        headers = {'Accept': 'application/json'}
+        auth_kw = dict(auth=auth_tuple, verify=verify_ssl)
+    else:
+        token = session.get('bearer_token')
+        if not token:
+            return jsonify(success=False, error='Not logged in'), 401
+        api_key = cfg.get(sap_system, 'X-API-Key')
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'X-API-Key': api_key,
+            'Accept': 'application/json'
+        }
+        auth_kw = {}
+
+    funcloc_cfg = cfg.get(sap_system, 'api_list', 'funcloc')
+    if not funcloc_cfg:
+        return jsonify(success=False, error=f'No funcloc API configured for {sap_system}'), 400
+    base_url = funcloc_cfg['base_url']
+
+    # Build OData URL
+    params = f"$top={top}&$select=FunctionalLocation,FunctionalLocationLabelName,MaintenancePlant,FunctionalLocationName"
+    if query_filter:
+        params += f"&$filter={query_filter}"
+    url = f"{base_url}/{entity_set}?{params}"
+
+    try:
+        resp = _req.get(url, headers=headers, timeout=30, **auth_kw)
+        if resp.status_code != 200:
+            return jsonify(success=False, error=f'API returned {resp.status_code}', detail=resp.text[:1000], url=url), resp.status_code
+        data = resp.json()
+        results = data.get('d', {}).get('results', [])
+        return jsonify(success=True, results=results, count=len(results), url=url)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/api/funcloc/service-doc', methods=['GET'])
+def funcloc_service_doc():
+    """Proxy: fetch OData service document to discover entity sets."""
+    import requests as _req
+    sap_system = request.args.get('system', 'zbq')
+    sys_cfg = cfg.config_env.get(sap_system, {})
+    auth_type = sys_cfg.get('auth_type', 'oauth')
+
+    if auth_type == 'basic':
+        from app.credentials import get_credentials
+        creds = get_credentials(sap_system)
+        if not creds:
+            return jsonify(success=False, error=f'No credentials for {sap_system}'), 401
+        auth_tuple = (creds['username'], creds['password'])
+        verify_ssl = sys_cfg.get('verify_ssl', True)
+        headers = {'Accept': 'application/json'}
+        auth_kw = dict(auth=auth_tuple, verify=verify_ssl)
+    else:
+        token = session.get('bearer_token')
+        if not token:
+            return jsonify(success=False, error='Not logged in'), 401
+        api_key = cfg.get(sap_system, 'X-API-Key')
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'X-API-Key': api_key,
+            'Accept': 'application/json'
+        }
+        auth_kw = {}
+
+    funcloc_cfg = cfg.get(sap_system, 'api_list', 'funcloc')
+    if not funcloc_cfg:
+        return jsonify(success=False, error=f'No funcloc API configured for {sap_system}'), 400
+    base_url = funcloc_cfg['base_url']
+
+    try:
+        resp = _req.get(base_url, headers=headers, timeout=30, **auth_kw)
+        return resp.text, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'application/json')}
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/api/funcloc/metadata', methods=['GET'])
+def funcloc_metadata():
+    """Proxy: fetch $metadata from FunctionalLocation API to inspect fields."""
+    import requests as _req
+    sap_system = request.args.get('system', 'zbq')
+    sys_cfg = cfg.config_env.get(sap_system, {})
+    auth_type = sys_cfg.get('auth_type', 'oauth')
+
+    if auth_type == 'basic':
+        from app.credentials import get_credentials
+        creds = get_credentials(sap_system)
+        if not creds:
+            return jsonify(success=False, error=f'No credentials for {sap_system}'), 401
+        auth_tuple = (creds['username'], creds['password'])
+        verify_ssl = sys_cfg.get('verify_ssl', True)
+        headers = {'Accept': 'application/xml'}
+        auth_kw = dict(auth=auth_tuple, verify=verify_ssl)
+    else:
+        token = session.get('bearer_token')
+        if not token:
+            return jsonify(success=False, error='Not logged in'), 401
+        api_key = cfg.get(sap_system, 'X-API-Key')
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'X-API-Key': api_key,
+            'Accept': 'application/xml'
+        }
+        auth_kw = {}
+
+    funcloc_cfg = cfg.get(sap_system, 'api_list', 'funcloc')
+    if not funcloc_cfg:
+        return jsonify(success=False, error=f'No funcloc API configured for {sap_system}'), 400
+    base_url = funcloc_cfg['base_url']
+    url = f"{base_url}/$metadata"
+
+    try:
+        resp = _req.get(url, headers=headers, timeout=30, **auth_kw)
+        return resp.text, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'text/xml')}
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
 
 
 @migrate_bp.route('/keep-alive', methods=['GET'])
@@ -4252,6 +4424,333 @@ def apply_batch_object_mappings(batch_id):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==============================================================================
+# OBJECT MAPPING – Bulk Add, DIL Lookup, API Lookup
+# ==============================================================================
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/bulk-add', methods=['POST'])
+def bulk_add_object_mappings(batch_id):
+    """Bulk-add multiple mappings in one request (for 1:1, DIL-lookup, etc.)."""
+    try:
+        data = request.get_json()
+        mappings = data.get('mappings', [])
+        if not mappings:
+            return jsonify(success=False, error='No mappings provided'), 400
+
+        current_user = session.get('fullName', 'system')
+        added = 0
+        skipped = 0
+
+        with misc_engine.begin() as con:
+            for m in mappings:
+                sd = str(m.get('source_dokob', '')).strip().upper()
+                so = str(m.get('source_objky', '')).strip()
+                td = str(m.get('target_dokob', '')).strip().upper()
+                to_ = str(m.get('target_objky', '')).strip()
+                desc = str(m.get('description', '')).strip()
+                if not sd or not so or not td or not to_:
+                    skipped += 1
+                    continue
+                existing = con.execute(text("""
+                    SELECT id FROM dbo.migration_object_mapping
+                    WHERE batch_id = :batch_id AND source_dokob = :sd AND source_objky = :so AND active = 1
+                """), {'batch_id': batch_id, 'sd': sd, 'so': so}).fetchone()
+                if existing:
+                    skipped += 1
+                    continue
+                con.execute(text("""
+                    INSERT INTO dbo.migration_object_mapping
+                    (batch_id, source_dokob, source_objky, target_dokob, target_objky, description, created_by, active)
+                    VALUES (:batch_id, :sd, :so, :td, :to_, :desc, :user, 1)
+                """), {'batch_id': batch_id, 'sd': sd, 'so': so, 'td': td, 'to_': to_, 'desc': desc, 'user': current_user})
+                added += 1
+
+        return jsonify(success=True, added=added, skipped=skipped)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+# ==============================================================================
+# OBJECT MAPPING – DOKOB Strategy Settings
+# ==============================================================================
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/dokob-strategy', methods=['GET'])
+def get_dokob_strategy(batch_id):
+    """Get saved strategy per DOKOB for this batch."""
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT dokob, source_method, target_method, updated_at, updated_by,
+                       strno_prefix_old, strno_prefix_new
+                FROM dbo.migration_dokob_strategy
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+        strategies = {}
+        for r in rows:
+            strategies[r[0]] = {
+                'source_method': r[1],
+                'target_method': r[2],
+                'updated_at': r[3].isoformat() if r[3] else None,
+                'updated_by': r[4],
+                'strno_prefix_old': r[5] or '',
+                'strno_prefix_new': r[6] or ''
+            }
+        return jsonify(success=True, strategies=strategies)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/dokob-strategy', methods=['PUT'])
+def set_dokob_strategy(batch_id):
+    """Save strategy for one DOKOB type. Body: {dokob, source_method, target_method}."""
+    try:
+        data = request.get_json()
+        dokob = str(data.get('dokob', '')).strip().upper()
+        source_method = str(data.get('source_method', 'none')).strip().lower()
+        target_method = str(data.get('target_method', 'none')).strip().lower()
+        if not dokob:
+            return jsonify(success=False, error='dokob required'), 400
+        valid_source = ('none', 'dil')
+        valid_target = ('none', 'api', 'excel', '1:1')
+        if source_method not in valid_source:
+            return jsonify(success=False, error=f'source_method must be one of {valid_source}'), 400
+        if target_method not in valid_target:
+            return jsonify(success=False, error=f'target_method must be one of {valid_target}'), 400
+
+        # STRNO prefix fields (optional, relevant for IFLOT)
+        strno_prefix_old = str(data.get('strno_prefix_old', '') or '').strip()[:10]
+        strno_prefix_new = str(data.get('strno_prefix_new', '') or '').strip()[:10]
+
+        current_user = session.get('fullName', 'system')
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                MERGE dbo.migration_dokob_strategy AS t
+                USING (SELECT :batch_id AS batch_id, :dokob AS dokob) AS s
+                    ON t.batch_id = s.batch_id AND t.dokob = s.dokob
+                WHEN MATCHED THEN
+                    UPDATE SET source_method = :src, target_method = :tgt,
+                               strno_prefix_old = :pold, strno_prefix_new = :pnew,
+                               updated_at = GETUTCDATE(), updated_by = :user
+                WHEN NOT MATCHED THEN
+                    INSERT (batch_id, dokob, source_method, target_method, strno_prefix_old, strno_prefix_new, updated_by)
+                    VALUES (:batch_id, :dokob, :src, :tgt, :pold, :pnew, :user);
+            """), {'batch_id': batch_id, 'dokob': dokob, 'src': source_method,
+                   'tgt': target_method, 'pold': strno_prefix_old or None,
+                   'pnew': strno_prefix_new or None, 'user': current_user})
+
+        return jsonify(success=True, dokob=dokob, source_method=source_method, target_method=target_method,
+                       strno_prefix_old=strno_prefix_old, strno_prefix_new=strno_prefix_new)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/dil-lookup', methods=['GET'])
+def dil_lookup_for_mapping(batch_id):
+    """
+    Query DIL (HANA) to find all unique OBJKY values for a given DOKOB
+    that appear in the batch's staging table.
+    Returns source keys from DIL.DRAD that can be used for 1:1 mapping.
+    """
+    dokob = request.args.get('dokob', '').strip().upper()
+    if not dokob:
+        return jsonify(success=False, error='dokob parameter required'), 400
+
+    try:
+        # First get the unmapped objkeys for this dokob from staging
+        with misc_engine.begin() as con:
+            unmapped_q = """
+                SELECT DISTINCT s.source_dokob as dokob, s.source_objky as objky
+                FROM dbo.migration_staging s
+                LEFT JOIN dbo.migration_object_mapping m
+                    ON m.batch_id = s.batch_id
+                    AND s.source_dokob = m.source_dokob
+                    AND s.source_objky = m.source_objky
+                    AND m.active = 1
+                WHERE s.batch_id = :batch_id
+                AND s.source_dokob = :dokob
+                AND s.source_dokob IS NOT NULL
+                AND m.id IS NULL
+            """
+            df_unmapped = pd.read_sql(text(unmapped_q), con, params={'batch_id': batch_id, 'dokob': dokob})
+
+        if df_unmapped.empty:
+            return jsonify(success=True, results=[], message=f'No unmapped entries for {dokob}')
+
+        unmapped_keys = df_unmapped['objky'].tolist()
+
+        # Now verify these keys exist in DIL
+        from app_config import DilEngine
+        dil_db = DilEngine.load()
+        dil_engine = dil_db.engine
+
+        # Build a DOKOB-specific query
+        dil_queries = {
+            'EQUI': "SELECT DISTINCT drad.OBJKY as objky, equz.IWERK as werk FROM DIL.DRAD drad JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231' WHERE drad.DOKOB = 'EQUI' AND drad.OBJKY IN ({placeholders})",
+            'IFLOT': "SELECT DISTINCT drad.OBJKY as objky, iflot.IWERK as werk FROM DIL.DRAD drad JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR WHERE drad.DOKOB = 'IFLOT' AND drad.OBJKY IN ({placeholders})",
+            'MPLA': "SELECT DISTINCT drad.OBJKY as objky FROM DIL.DRAD drad JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL WHERE drad.DOKOB = 'MPLA' AND drad.OBJKY IN ({placeholders})",
+            'PMPLKO': "SELECT DISTINCT drad.OBJKY as objky, plko.WERKS as werk FROM DIL.DRAD drad JOIN DIL.PLKO plko ON LEFT(drad.OBJKY,1) = plko.PLNTY AND SUBSTRING(drad.OBJKY,2,8) = plko.PLNNR AND RIGHT(drad.OBJKY,2) = plko.PLNAL WHERE drad.DOKOB = 'PMPLKO' AND drad.OBJKY IN ({placeholders})",
+            'PMAUFK': "SELECT DISTINCT drad.OBJKY as objky, aufk.WERKS as werk FROM DIL.DRAD drad JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR WHERE drad.DOKOB = 'PMAUFK' AND drad.OBJKY IN ({placeholders})",
+            'PMAFVC': "SELECT DISTINCT drad.OBJKY as objky, afvc.WERKS as werk FROM DIL.DRAD drad JOIN DIL.AFVC afvc ON SUBSTRING(drad.OBJKY,3,10) = afvc.AUFPL AND SUBSTRING(drad.OBJKY,13,8) = afvc.APLZL WHERE drad.DOKOB = 'PMAFVC' AND drad.OBJKY IN ({placeholders})",
+            'PMQMEL': "SELECT DISTINCT drad.OBJKY as objky, qmih.IWERK as werk FROM DIL.DRAD drad JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM WHERE drad.DOKOB = 'PMQMEL' AND drad.OBJKY IN ({placeholders})",
+            'STKO_DOC': "SELECT DISTINCT drad.OBJKY as objky, stko.WRKAN as werk FROM DIL.DRAD drad JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX) WHERE drad.DOKOB = 'STKO_DOC' AND drad.OBJKY IN ({placeholders})",
+            'STPO_DOC': "SELECT DISTINCT drad.OBJKY as objky FROM DIL.DRAD drad JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX) WHERE drad.DOKOB = 'STPO_DOC' AND drad.OBJKY IN ({placeholders})",
+        }
+
+        template = dil_queries.get(dokob)
+        if not template:
+            # Fallback: simple DRAD-only query
+            template = "SELECT DISTINCT OBJKY as objky FROM DIL.DRAD WHERE DOKOB = :dokob_param AND OBJKY IN ({placeholders})"
+
+        # Build parameterised IN-list (HANA uses positional params)
+        params = {}
+        ph_parts = []
+        for i, key in enumerate(unmapped_keys):
+            pname = f'k{i}'
+            ph_parts.append(f':{pname}')
+            params[pname] = key
+        placeholders_str = ', '.join(ph_parts)
+        sql = template.replace('{placeholders}', placeholders_str)
+        if ':dokob_param' in sql:
+            params['dokob_param'] = dokob
+
+        with dil_engine.begin() as con:
+            df_dil = pd.read_sql(text(sql), con, params=params)
+
+            # IFLOT: enrich with STRNO from IFLOS (active records only)
+            if dokob == 'IFLOT' and not df_dil.empty:
+                found_keys = df_dil['objky'].tolist()
+                ph2 = {}
+                ph2_parts = []
+                for i, k in enumerate(found_keys):
+                    pn = f's{i}'
+                    ph2_parts.append(f':{pn}')
+                    ph2[pn] = k
+                iflos_sql = f"SELECT TPLNR as tplnr, STRNO as strno FROM DIL.IFLOS WHERE ACTVS = 'X' AND TPLNR IN ({', '.join(ph2_parts)})"
+                df_iflos = pd.read_sql(text(iflos_sql), con, params=ph2)
+                df_iflos.columns = [c.lower() for c in df_iflos.columns]
+                strno_map = dict(zip(df_iflos['tplnr'], df_iflos['strno']))
+                df_dil['strno'] = df_dil['objky'].map(strno_map).fillna('')
+
+        results = df_dil.to_dict(orient='records')
+        return jsonify(success=True, results=results, total=len(results), dokob=dokob)
+
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/object-mapping/api-lookup', methods=['GET'])
+def api_lookup_for_mapping(batch_id):
+    """
+    Query SAP OData API for objects matching a DOKOB type.
+    Currently supports: EQUI (Equipment API), IFLOT (FunctionalLocation API).
+    """
+    import requests as _req
+    dokob = request.args.get('dokob', '').strip().upper()
+    if not dokob:
+        return jsonify(success=False, error='dokob parameter required'), 400
+
+    # Map DOKOB to API config key and entity set
+    api_map = {
+        'EQUI':  {'config_key': 'equipment', 'entity': 'Equipment',          'key_field': 'Equipment'},
+        'IFLOT': {'config_key': 'funcloc',   'entity': 'FunctionalLocation', 'key_field': 'FunctionalLocation'},
+    }
+    if dokob not in api_map:
+        return jsonify(success=False, error=f'API lookup not supported for {dokob}. Use DIL or Excel instead.'), 400
+
+    amap = api_map[dokob]
+    # Determine SAP system — prefer zbq (S4)
+    sap_system = 'zbq'
+    sys_cfg = cfg.config_env.get(sap_system, {})
+    auth_type = sys_cfg.get('auth_type', 'oauth')
+
+    if auth_type == 'basic':
+        from app.credentials import get_credentials
+        creds = get_credentials(sap_system)
+        if not creds:
+            return jsonify(success=False, error=f'No credentials for {sap_system}'), 401
+        headers = {'Accept': 'application/json'}
+        auth_kw = dict(auth=(creds['username'], creds['password']), verify=sys_cfg.get('verify_ssl', True))
+    else:
+        token = session.get('bearer_token')
+        if not token:
+            return jsonify(success=False, error='Not logged in — Bearer Token fehlt'), 401
+        api_key = cfg.get(sap_system, 'X-API-Key')
+        headers = {'Authorization': f'Bearer {token}', 'X-API-Key': api_key, 'Accept': 'application/json'}
+        auth_kw = {}
+
+    api_cfg = cfg.get(sap_system, 'api_list', amap['config_key'])
+    if not api_cfg:
+        return jsonify(success=False, error=f'No {amap["config_key"]} API configured for {sap_system}'), 400
+    base_url = api_cfg['base_url']
+
+    # Get unmapped keys to filter
+    try:
+        with misc_engine.begin() as con:
+            unmapped_q = """
+                SELECT DISTINCT s.source_objky as objky
+                FROM dbo.migration_staging s
+                LEFT JOIN dbo.migration_object_mapping m
+                    ON m.batch_id = s.batch_id AND s.source_dokob = m.source_dokob
+                    AND s.source_objky = m.source_objky AND m.active = 1
+                WHERE s.batch_id = :batch_id AND s.source_dokob = :dokob
+                AND s.source_dokob IS NOT NULL AND m.id IS NULL
+            """
+            df = pd.read_sql(text(unmapped_q), con, params={'batch_id': batch_id, 'dokob': dokob})
+
+        if df.empty:
+            return jsonify(success=True, results=[], message=f'No unmapped entries for {dokob}')
+
+        # Query API for first 50 unmapped keys
+        keys = df['objky'].tolist()[:50]
+        all_results = []
+        key_field = amap['key_field']
+
+        # IFLOT: load STRNO prefix replacement config
+        strno_prefix_old = ''
+        strno_prefix_new = ''
+        if dokob == 'IFLOT':
+            with misc_engine.begin() as con2:
+                prow = con2.execute(text("""
+                    SELECT strno_prefix_old, strno_prefix_new
+                    FROM dbo.migration_dokob_strategy
+                    WHERE batch_id = :batch_id AND dokob = 'IFLOT'
+                """), {'batch_id': batch_id}).fetchone()
+                if prow and prow[0] and prow[1]:
+                    strno_prefix_old = prow[0]
+                    strno_prefix_new = prow[1]
+
+        # Batch API calls — OData filters with 'or'
+        for key in keys:
+            search_key = key
+            # IFLOT: replace STRNO prefix (first N chars)
+            if strno_prefix_old and strno_prefix_new and key.startswith(strno_prefix_old):
+                search_key = strno_prefix_new + key[len(strno_prefix_old):]
+
+            odata_filter = f"{key_field} eq '{search_key}'"
+            url = f"{base_url}/{amap['entity']}?$top=1&$filter={odata_filter}"
+            try:
+                resp = _req.get(url, headers=headers, timeout=15, **auth_kw)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get('d', {}).get('results', [])
+                    # Tag results with original source key for mapping
+                    for r in results:
+                        r['_source_objky'] = key
+                        if search_key != key:
+                            r['_transformed_key'] = search_key
+                    all_results.extend(results)
+            except Exception:
+                pass  # skip individual failures
+
+        return jsonify(success=True, results=all_results, count=len(all_results),
+                       url=f'{base_url}/{amap["entity"]}', total_queried=len(keys),
+                       strno_prefix_old=strno_prefix_old, strno_prefix_new=strno_prefix_new)
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
 
 
 # ==============================================================================

@@ -23,13 +23,20 @@ userdata/
 /check_*.py
 /analyze_*.py
 /step*.py
+/_*.py
+/_*.xml
+/_*.html
+
+# Response/debug artifacts
+*.html
+!templates/*.html
 
 # Data files
 *.xlsx
 *.xls
 *.csv
 
-# Archive folder (old scripts)
+# Archive folder (old scripts, API tests, debug)
 archive/
 
 # IDE

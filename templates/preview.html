@@ -192,6 +192,7 @@
                                     <th data-column="description">Description</th>
                                     <th data-column="filename">Filename</th>
                                     <th data-column="file_size">File Size</th>
+                                    <th data-column="file_count">Files (S/T)</th>
                                     <th data-column="ablage">Ablage</th>
                                     <th data-column="auth_group">Auth Group</th>
                                     <th data-column="execution">Execution</th>
@@ -316,6 +317,10 @@
                     <label class="form-check-label" for="col_file_size">Dateigröße</label>
                 </div>
                 <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_file_count" value="file_count" checked>
+                    <label class="form-check-label" for="col_file_count">Dateianzahl (S/T)</label>
+                </div>
+                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_ablage" value="ablage" checked>
                     <label class="form-check-label" for="col_ablage">Ablage (KPRO/DB)</label>
                 </div>
@@ -399,6 +404,7 @@ let visibleColumns = {
     'description': true,
     'filename': true,
     'file_size': true,
+    'file_count': true,
     'ablage': true,
     'auth_group': true,
     'execution': true,
@@ -499,7 +505,7 @@ const defaultVisibleColumns = {
     'dokob': true, 'target_dokob': true,
     'objky': true, 'target_objky': true,
     'doc_status': true, 'description': true,
-    'filename': true, 'file_size': true, 'ablage': true,
+    'filename': true, 'file_size': true, 'file_count': true, 'ablage': true,
     'auth_group': true, 'execution': true,
     'link_status': true, 'error_category': true,
     'source_loioid': false, 'mime_type': false, 'batch_id': false,
@@ -1042,6 +1048,7 @@ function displayRecords(records) {
                 <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
                 <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
                 <td data-column="file_size"><small>${fileSize}</small></td>
+                <td data-column="file_count"><small>${formatFileCount(record)}</small></td>
                 <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
@@ -1153,6 +1160,20 @@ function formatFileSizeWithColor(bytes) {
         // Green: safe size (≤10MB)
         return `<span class="text-success" title="Sichere Größe: ≤10MB">${sizeText}</span>`;
     }
+}
+
+function formatFileCount(record) {
+    const src = record.source_file_count;
+    const tgt = record.target_file_count;
+    if (src === null && tgt === null) return '-';
+    const srcStr = (src !== null && src !== undefined) ? src : '-';
+    const tgtStr = (tgt !== null && tgt !== undefined) ? tgt : '-';
+    if (src !== null && tgt !== null && src === tgt) {
+        return `<span class="text-success" title="Quelldateien: ${src}, Zieldateien: ${tgt}">${srcStr} / ${tgtStr} ✓</span>`;
+    } else if (src !== null && tgt !== null && src !== tgt) {
+        return `<span class="text-danger font-weight-bold" title="Quelldateien: ${src}, Zieldateien: ${tgt} — Mismatch!">${srcStr} / ${tgtStr} ✗</span>`;
+    }
+    return `${srcStr} / ${tgtStr}`;
 }
 
 function formatDateTime(dateStr) {
@@ -1588,6 +1609,7 @@ function displayRecordDetail(record) {
     html += `<tr><th>Gestartet</th><td>${record.execution_started_at ? new Date(record.execution_started_at).toLocaleString() : '-'}</td></tr>`;
     html += `<tr><th>Abgeschlossen</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
     html += `<tr><th>Datei</th><td>${record.filename || '-'}</td></tr>`;
+    html += `<tr><th>Dateien (Quelle/Ziel)</th><td>${formatFileCount(record)}</td></tr>`;
     html += `<tr><th>MIME-Typ</th><td>${record.mime_type || '-'}</td></tr>`;
     html += `</table></div>`;
     

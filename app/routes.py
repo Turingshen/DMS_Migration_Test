@@ -2024,7 +2024,8 @@ def get_batch_progress(batch_id):
                 executed_records,
                 successful_records,
                 failed_records,
-                created_at
+                created_at,
+                last_execution_started_at
             FROM dbo.migration_batch
             WHERE batch_id = '{batch_id}'
         """
@@ -2042,13 +2043,25 @@ def get_batch_progress(batch_id):
         failed = row['failed_records'] or 0
         
         # Get partial count from staging table (container created but upload incomplete)
+        # Scope to current execution run to avoid stale counts from previous runs
         partial = 0
         try:
+            exec_start = row.get('last_execution_started_at')
             with misc_engine.begin() as con:
-                partial_result = con.execute(text(f"""
-                    SELECT COUNT(*) FROM dbo.migration_staging
-                    WHERE batch_id = '{batch_id}' AND execution_status = 'partial'
-                """)).fetchone()
+                if exec_start and row['status'] == 'executing':
+                    # During execution: only count partials from THIS run
+                    partial_result = con.execute(text(f"""
+                        SELECT COUNT(*) FROM dbo.migration_staging
+                        WHERE batch_id = '{batch_id}' 
+                            AND execution_status = 'partial'
+                            AND execution_started_at >= :exec_start
+                    """), {'exec_start': exec_start}).fetchone()
+                else:
+                    # Not executing: show all partials (batch overview)
+                    partial_result = con.execute(text(f"""
+                        SELECT COUNT(*) FROM dbo.migration_staging
+                        WHERE batch_id = '{batch_id}' AND execution_status = 'partial'
+                    """)).fetchone()
                 partial = partial_result[0] if partial_result else 0
         except:
             pass
@@ -2275,7 +2288,9 @@ def get_batch_records(batch_id):
                     ms.source_document_status,
                     ms.target_document_status,
                     ms.ablage,
-                    ms.source_object_links
+                    ms.source_object_links,
+                    ms.source_file_count,
+                    ms.target_file_count
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -2318,7 +2333,9 @@ def get_batch_records(batch_id):
                     ms.source_document_status,
                     ms.target_document_status,
                     ms.ablage,
-                    ms.source_object_links
+                    ms.source_object_links,
+                    ms.source_file_count,
+                    ms.target_file_count
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -2477,6 +2494,21 @@ def execute_selected():
                 WHERE batch_id = '{batch_id}'
                     AND id IN ({record_ids_str})
                     AND skip_migration = 0
+            """))
+            
+            # Also immediately reset the batch counters so the frontend
+            # sees correct values from the very first poll (no race condition
+            # with the background thread which resets them later again).
+            con.execute(text(f"""
+                UPDATE dbo.migration_batch
+                SET status = 'executing',
+                    migration_phase = 'upload',
+                    total_records = {len(record_ids)},
+                    executed_records = 0,
+                    successful_records = 0,
+                    failed_records = 0,
+                    last_execution_started_at = GETUTCDATE()
+                WHERE batch_id = '{batch_id}'
             """))
         
         # Snapshot session and start background thread

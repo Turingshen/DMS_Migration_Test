@@ -504,6 +504,16 @@ def init_staging_tables(engine):
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add migration_phase column: {e}")
 
+        # Execution start timestamp for scoping partial counts in progress endpoint
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'last_execution_started_at') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD last_execution_started_at DATETIME2 NULL;
+            """))
+            print("[DB_INIT] Ensured migration_batch has last_execution_started_at column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add last_execution_started_at column: {e}")
+
         # Storage type column: KPRO (file-based) or DB (DRAO/database-stored)
         try:
             con.execute(text("""
@@ -533,6 +543,20 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has source_object_links column")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add source_object_links column: {e}")
+
+        # File count columns (source vs target comparison)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'source_file_count') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD source_file_count INT NULL;
+            """))
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'target_file_count') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_file_count INT NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has source_file_count / target_file_count columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add file count columns: {e}")
 
         # Check and create sap_credentials table (encrypted Basic Auth storage)
         check_credentials = text("""

@@ -12,6 +12,7 @@ import pandas as pd
 import time
 import requests
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy import text
 from flask import session as http_session
@@ -68,6 +69,38 @@ try:
 except Exception:
     DIL_AVAILABLE = False
     dil_engine = None
+
+
+def _sanitize_slug(filename):
+    """Sanitize a filename for use in the HTTP Slug header.
+    
+    The ``requests`` library encodes HTTP header values as latin-1.  Characters
+    outside that range (e.g. combining accents like \\u0300, Cyrillic, CJK, …)
+    cause ``UnicodeEncodeError: 'latin-1' codec can't encode character``.
+    
+    Strategy:
+        1. NFC-normalize (compose precomposed accents: à instead of a + \\u0300)
+        2. Replace any remaining non-latin-1 chars with '_'
+        3. Preserve the file extension
+    """
+    if not filename:
+        return 'unnamed'
+    try:
+        # Step 1: Normalize composable sequences (e.g. a + \\u0300 → à)
+        normalized = unicodedata.normalize('NFC', filename)
+        
+        # Step 2: Replace characters that can't be encoded as latin-1
+        safe_chars = []
+        for ch in normalized:
+            try:
+                ch.encode('latin-1')
+                safe_chars.append(ch)
+            except UnicodeEncodeError:
+                safe_chars.append('_')
+        return ''.join(safe_chars) or 'unnamed'
+    except Exception:
+        # Absolute fallback: ASCII-only
+        return filename.encode('ascii', 'replace').decode('ascii') or 'unnamed'
 
 
 def get_filename_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> str:
@@ -1024,7 +1057,19 @@ def execute_single_document(staging_record, session_snapshot):
                 'status_code': 404
             }
         
-        logger.info(f"Found {len(documents[2])} files to migrate", category="EXECUTE")
+        source_file_count = len(documents[2])
+        logger.info(f"Found {source_file_count} files to migrate", category="EXECUTE")
+        
+        # Save source file count to staging table
+        try:
+            with misc_engine.begin() as con:
+                con.execute(text("""
+                    UPDATE dbo.migration_staging
+                    SET source_file_count = :cnt
+                    WHERE id = :staging_id
+                """), {'cnt': source_file_count, 'staging_id': staging_id})
+        except Exception as e:
+            logger.debug(f"Failed to update source_file_count: {e}", category="EXECUTE")
         
         # Extract metadata from first document for updating staging table
         first_doc = documents[2][0] if documents[2] else {}
@@ -1097,10 +1142,72 @@ def execute_single_document(staging_record, session_snapshot):
         metadata_updated = False
         # batch_id already set at function start from staging_record
         
+        # Extract document identifiers ONCE before the file loop.
+        # CRITICAL: These must NOT be re-read from staging_record inside the loop,
+        # because CREATE may update doc_number/doc_version/doc_part (e.g. IY1 auto-numbering)
+        # and re-reading from the stale in-memory staging_record would overwrite the
+        # correct values back to None.
+        doc_type = staging_record['target_documenttype']
+        doc_number = staging_record['target_documentnumber']
+        doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
+        doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
+        
+        # Check if container was already created in a previous (failed) attempt
+        container_already_created = staging_record.get('container_created', 0) == 1
+        if container_already_created:
+            # Safety check: for internal numbering types, doc_number MUST exist.
+            # If a previous CREATE succeeded but the number wasn't captured,
+            # container_created=1 but target_documentnumber is NULL.
+            # Instead of failing permanently, reset and create a NEW container.
+            # (The orphaned S4 container from the previous attempt is accepted.)
+            if not doc_number and doc_type in {'IY1', 'IY2'}:
+                logger.warning(
+                    f"RETRY_DOC_NUMBER_MISSING: container_created=1 but doc_number is NULL "
+                    f"for internal-numbering type {doc_type}. Resetting to create a new "
+                    f"container (orphaned S4 container accepted).", category="CREATE"
+                )
+                # Reset container state so a fresh CREATE will happen
+                try:
+                    with misc_engine.begin() as con:
+                        con.execute(text("""
+                            UPDATE dbo.migration_staging
+                            SET container_created = 0,
+                                target_documentnumber = NULL,
+                                target_documentversion = NULL,
+                                target_documentpart = NULL
+                            WHERE id = :sid
+                        """), {'sid': staging_id})
+                        # Also delete any stale file_details from the broken attempt
+                        con.execute(text("""
+                            DELETE FROM dbo.migration_file_details
+                            WHERE staging_id = :sid
+                        """), {'sid': staging_id})
+                    container_already_created = False
+                    doc_number = None  # Will be set by CREATE response
+                    logger.info(f"Reset container state for staging_id={staging_id}, will create new container", category="CREATE")
+                except Exception as reset_ex:
+                    error_msg = (
+                        f"RETRY_DOC_NUMBER_MISSING: Could not auto-reset: {reset_ex}"
+                    )
+                    logger.error(error_msg, category="CREATE")
+                    update_execution_status(staging_id, 'failed', error_msg)
+                    return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+            else:
+                logger.info(f"Container already created in previous attempt, skipping CREATE", category="CREATE")
+            # Only mark doc_created if container still exists (not reset above)
+            if container_already_created:
+                doc_created = True
+        
         # Get already successfully uploaded files (for retry optimization)
-        already_uploaded = get_successfully_uploaded_files(staging_id)
-        if already_uploaded:
-            logger.info(f"Retry mode: {len(already_uploaded)} files already uploaded successfully, will skip them", category="EXECUTE")
+        # IMPORTANT: Only skip files if the container already exists from a previous attempt.
+        # If container_created is False, ALL files must be re-uploaded to the NEW container
+        # even if file_details has SUCCESS records from a previous (now-reset) run.
+        if container_already_created:
+            already_uploaded = get_successfully_uploaded_files(staging_id)
+            if already_uploaded:
+                logger.info(f"Retry mode: {len(already_uploaded)} files already uploaded successfully, will skip them", category="EXECUTE")
+        else:
+            already_uploaded = set()  # Fresh container → upload everything
         
         for file_index, document in enumerate(documents[2]):
             # Skip files that were already successfully uploaded (retry optimization)
@@ -1120,6 +1227,13 @@ def execute_single_document(staging_record, session_snapshot):
                 continue
             
             # Fetch document content
+            # IMPORTANT: Re-prepare session for source system before EACH file download.
+            # After the first iteration, the session is configured for the TARGET system
+            # (from the upload step). Without this, subsequent downloads get 401 because
+            # target-system auth/cookies/CSRF are sent to the source system.
+            prepare_session_headers(server_session, session_snapshot, source_system)
+            server_session.headers.pop('Slug', None)
+            
             selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
             document_args = {k: document[k] for k in selected_keys}
             formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
@@ -1270,17 +1384,8 @@ def execute_single_document(staging_record, session_snapshot):
             # Prepare for write operations
             prepare_session_headers(server_session, session_snapshot, target_system)
             
-            # Extract document identifiers (needed for upload URL even if container exists)
-            doc_type = staging_record['target_documenttype']
-            doc_number = staging_record['target_documentnumber']
-            doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
-            doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
-            
-            # Check if container was already created in a previous (failed) attempt
-            container_already_created = staging_record.get('container_created', 0) == 1
-            if container_already_created:
-                logger.info(f"Container already created in previous attempt, skipping CREATE", category="CREATE")
-                doc_created = True
+            # NOTE: doc_type, doc_number, doc_version, doc_part are set BEFORE the file loop
+            # and updated by CREATE response. Do NOT re-read from staging_record here!
             
             # Create document info record (once per container)
             if not doc_created:
@@ -1452,6 +1557,20 @@ def execute_single_document(staging_record, session_snapshot):
                     except Exception as e:
                         logger.warning(f"Failed to extract document number from response: {e}", category="CREATE")
                     
+                    # CRITICAL: For internal-numbering types (IY1/IY2), the doc_number MUST
+                    # be captured from the CREATE response. If extraction failed, we must NOT
+                    # mark container_created=1 — otherwise retries skip CREATE and the
+                    # auto-generated number is lost forever (upload URL gets 'None').
+                    if target_has_internal_numbering and not doc_number:
+                        error_msg = (
+                            f"CREATE_DOC_NUMBER_LOST: S4 created {doc_type} document (HTTP {create_resp.status_code}) "
+                            f"but auto-generated document number could not be extracted from response. "
+                            f"The document exists in S4 without a known number. Manual cleanup required."
+                        )
+                        logger.error(error_msg, category="CREATE")
+                        update_execution_status(staging_id, 'failed', error_msg)
+                        return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+                    
                     logger.info(f"Document created successfully: {doc_number} (status {create_resp.status_code})", category="CREATE")
                     doc_created = True
                     
@@ -1489,23 +1608,34 @@ def execute_single_document(staging_record, session_snapshot):
             
             # Upload attachment
             if doc_created:
+                # Guard: doc_number must be set before building upload URL
+                if not doc_number:
+                    error_msg = (
+                        f"UPLOAD_NO_DOC_NUMBER: Cannot upload — target document number is None. "
+                        f"CREATE may have succeeded but the number was not captured."
+                    )
+                    logger.error(error_msg, category="UPLOAD")
+                    update_execution_status(staging_id, 'failed', error_msg)
+                    return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+                
                 import mimetypes
                 mime_type, _ = mimetypes.guess_type(filename)
                 if not mime_type:
                     mime_type = 'application/octet-stream'
                 
-                server_session.headers.update({'Content-Type': mime_type, 'Slug': filename})
+                # Sanitize filename for HTTP Slug header: requests encodes headers
+                # as latin-1, so non-latin-1 characters (e.g. \u0300 combining grave
+                # accent) cause UnicodeEncodeError. Normalize and strip them.
+                slug_filename = _sanitize_slug(filename)
+                server_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
                 
                 try:
                     attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
                 except Exception:
                     attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
                 
-                # Use doc_number/doc_version/doc_part that were either:
-                # 1. Set from staging_record at the start of this iteration, OR
-                # 2. Updated from the CREATE response (S4 may change number/version/part)
-                # Don't re-read from staging_record as it still has the old values!
-                doc_type = staging_record['target_documenttype']
+                # Use doc_type/doc_number/doc_version/doc_part set before the file loop
+                # and potentially updated by CREATE response. Never re-read from staging_record!
                 
                 attachment_url = (
                     f"{attachment_base_url}/A_DocumentInfoRecordAttch"
@@ -1638,11 +1768,33 @@ def execute_single_document(staging_record, session_snapshot):
         
         # All files successful (including skipped from previous runs)
         if all(r['status'] in ('SUCCESS', 'SUCCESS_SKIPPED') for r in results):
+            # Safety check: don't mark as success if no container was created and no doc_number
+            # This catches edge cases where all files were "skipped" but no actual work was done
+            if not doc_created and not doc_number:
+                error_msg = (
+                    f"INTEGRITY_ERROR: All {len(results)} files appear successful/skipped but "
+                    f"no container was created and target_documentnumber is None. "
+                    f"This likely means stale file_details from a previous run caused false skips."
+                )
+                logger.error(error_msg, category="EXECUTE")
+                update_execution_status(staging_id, 'failed', error_msg)
+                return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+            
             if skipped_count > 0:
                 logger.info(f"Migration completed: {success_count - skipped_count} new + {skipped_count} skipped (already uploaded) in {execution_time:.2f}s", category="EXECUTE")
             else:
                 logger.info(f"Migration completed successfully for all {len(results)} files in {execution_time:.2f}s ({total_bytes/1024/1024:.2f} MB)", category="EXECUTE")
             update_execution_status(staging_id, 'success')
+            # Save target file count (successful uploads)
+            try:
+                with misc_engine.begin() as con:
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET target_file_count = :cnt
+                        WHERE id = :staging_id
+                    """), {'cnt': success_count, 'staging_id': staging_id})
+            except Exception as e:
+                logger.debug(f"Failed to update target_file_count: {e}", category="EXECUTE")
             return {
                 'staging_id': staging_id, 
                 'status': 'success', 
@@ -1694,6 +1846,17 @@ def execute_single_document(staging_record, session_snapshot):
                 error_summary = f"PARTIAL_SUCCESS {new_success_count} new + {skipped_count} skipped / {len(results)} total"
             
             logger.warning(f"Partial success: {success_count} of {len(results)} files migrated (new: {new_success_count}, skipped: {skipped_count}) in {execution_time:.2f}s", category="EXECUTE")
+            
+            # Save target file count (successful uploads only)
+            try:
+                with misc_engine.begin() as con:
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET target_file_count = :cnt
+                        WHERE id = :staging_id
+                    """), {'cnt': success_count, 'staging_id': staging_id})
+            except Exception as e:
+                logger.debug(f"Failed to update target_file_count: {e}", category="EXECUTE")
             
             # Store detailed errors as JSON if available
             if error_details:
@@ -1959,7 +2122,8 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                     total_records = {total_records},
                     executed_records = 0,
                     successful_records = 0,
-                    failed_records = 0
+                    failed_records = 0,
+                    last_execution_started_at = GETUTCDATE()
                 WHERE batch_id = '{batch_id}'
             """))
         

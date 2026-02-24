@@ -101,6 +101,28 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
     systems_ctx = session_snapshot.setdefault('systems', {})
     sys_ctx = systems_ctx.setdefault(sap_system, {})
 
+    # ── STEP 0: Save outgoing system's cookies before switching (per-worker) ──
+    # Between prepare_session_headers calls, actual API requests (downloads/uploads)
+    # may update the session cookies (SAP ICM often refreshes or adds cookies like
+    # SAP_SESSIONID during data requests, not just during the initial CSRF fetch).
+    # If we don't save these updated cookies, the next time we switch back to this
+    # system we'd restore stale cookies from the CSRF fetch → 401 Unauthorized.
+    #
+    # IMPORTANT: We track this per server_session (= per worker thread), NOT in the
+    # shared session_snapshot, because each worker has its own requests.Session with
+    # its own cookie jar. Writing to session_snapshot would cause race conditions
+    # when multiple workers run in parallel (configurable 1-50 in Settings).
+    if not hasattr(server_session, '_worker_cookies'):
+        server_session._worker_cookies = {}
+    if not hasattr(server_session, '_active_system'):
+        server_session._active_system = None
+
+    prev_system = server_session._active_system
+    if prev_system and prev_system != sap_system:
+        server_session._worker_cookies[prev_system] = server_session.cookies.copy()
+
+    server_session._active_system = sap_system
+
     # ── STEP 1: Clean session state BEFORE any requests to this system ──
     # Remove stale headers, cookies, and auth from the previous system.
     # This MUST happen before the CSRF fetch, otherwise foreign headers/cookies
@@ -121,24 +143,41 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
         'csrf_token_time' not in sys_ctx or
         now - sys_ctx['csrf_token_time'] > 600):  # renew every 10 min
         # Fetch new CSRF token (session is now clean — no foreign cookies/headers)
-        if is_basic:
-            headers = {
-                'X-CSRF-Token': 'fetch',
-                'Accept': 'application/json'
-            }
-            base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
-            resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
-        else:
-            headers = {
-                'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
-                'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
-                'X-CSRF-Token': 'fetch',
-                'Accept': 'application/json'
-            }
-            base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
-            resp = server_session.get(base_url, headers=headers)
-        if resp.status_code != 200:
-            raise Exception(f'Failed to fetch CSRF token for {sap_system}: {resp.status_code} {resp.reason}')
+        # Retry up to 3 times on failure (401/403 can be transient when SAP session expires)
+        csrf_max_retries = 3
+        csrf_resp = None
+        csrf_last_error = None
+        for csrf_attempt in range(1, csrf_max_retries + 1):
+            if is_basic:
+                headers = {
+                    'X-CSRF-Token': 'fetch',
+                    'Accept': 'application/json'
+                }
+                base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+                csrf_resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
+            else:
+                headers = {
+                    'Authorization': 'Bearer ' + session_snapshot['bearer_token'],
+                    'X-API-Key': cfg.get(sap_system, 'X-API-Key'),
+                    'X-CSRF-Token': 'fetch',
+                    'Accept': 'application/json'
+                }
+                base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+                csrf_resp = server_session.get(base_url, headers=headers)
+            if csrf_resp.status_code == 200:
+                break  # Success
+            csrf_last_error = f'{csrf_resp.status_code} {csrf_resp.reason}'
+            print(f"[CSRF] Attempt {csrf_attempt}/{csrf_max_retries} failed for {sap_system}: {csrf_last_error}")
+            if csrf_attempt < csrf_max_retries:
+                # Clear cookies and wait before retry (SAP may need a fresh session)
+                server_session.cookies.clear()
+                # Also invalidate any cached worker cookies for this system
+                if hasattr(server_session, '_worker_cookies'):
+                    server_session._worker_cookies.pop(sap_system, None)
+                time.sleep(2 * csrf_attempt)  # Increasing backoff: 2s, 4s
+        if csrf_resp.status_code != 200:
+            raise Exception(f'Failed to fetch CSRF token for {sap_system} after {csrf_max_retries} attempts: {csrf_last_error}')
+        resp = csrf_resp
         sys_ctx['x_csrf_token'] = resp.headers.get('x-csrf-token')
         # IMPORTANT: Save the FULL session cookies, not just resp.cookies.
         # SAP servers may redirect (e.g. /API_DMS_PROCESS_SRV → /API_DMS_PROCESS_SRV/)
@@ -148,8 +187,16 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
         sys_ctx['cookies'] = server_session.cookies.copy()
         sys_ctx['csrf_token_time'] = now
     else:
-        # Use cached cookies from previous CSRF fetch
-        server_session.cookies.update(sys_ctx['cookies'])
+        # Prefer worker-local cookies (updated by actual API requests) over the
+        # shared CSRF-time cache. Worker-local cookies are fresher because they
+        # include SAP session updates from downloads/uploads, not just the initial
+        # CSRF fetch. The shared sys_ctx['cookies'] is only a fallback for the
+        # very first switch to a system (before any worker-local cookies exist).
+        worker_cookies = getattr(server_session, '_worker_cookies', {}).get(sap_system)
+        if worker_cookies:
+            server_session.cookies.update(worker_cookies)
+        else:
+            server_session.cookies.update(sys_ctx['cookies'])
 
     # ── STEP 3: Set session headers for subsequent API calls ──
     if is_basic:

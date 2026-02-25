@@ -9,6 +9,18 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 
+def pytest_configure(config):
+    """Suppress third-party SQLAlchemy HANA dialect warnings (not our code)."""
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:The dbapi\\(\\) classmethod.*has been renamed:DeprecationWarning"
+    )
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:Dialect hana.hdbcli will not make use of SQL compilation caching:Warning"
+    )
+
+
 @pytest.fixture(scope="session")
 def misc_engine():
     """Database engine for MISC database (staging data)."""

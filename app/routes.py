@@ -2175,7 +2175,7 @@ def get_batch_error_categories(batch_id):
                 SELECT error_category, COUNT(*) as cnt
                 FROM dbo.migration_staging
                 WHERE batch_id = :batch_id
-                    AND execution_status = 'failed'
+                    AND execution_status IN ('failed', 'partial')
                     AND error_category IS NOT NULL
                 GROUP BY error_category
                 ORDER BY cnt DESC
@@ -2222,9 +2222,9 @@ def get_batch_records(batch_id):
         where_conditions = [f"ms.batch_id = '{batch_id}'"]
         if status_filter:
             where_conditions.append(f"ms.execution_status = '{status_filter}'")
-        # If filtering by error_category, filter by failed status AND the category in staging table
+        # If filtering by error_category, filter by failed/partial status AND the category in staging table
         if error_category_filter:
-            where_conditions.append("ms.execution_status = 'failed'")
+            where_conditions.append("ms.execution_status IN ('failed', 'partial')")
             where_conditions.append(f"ms.error_category = '{error_category_filter}'")
         # Server-side text search: search across DOKNR, OBJKY, description, filename, target_documentnumber
         if search_term:
@@ -2240,7 +2240,7 @@ def get_batch_records(batch_id):
         if status_filter:
             count_conditions.append(f"ms.execution_status = '{status_filter}'")
         if error_category_filter:
-            count_conditions.append("ms.execution_status = 'failed'")
+            count_conditions.append("ms.execution_status IN ('failed', 'partial')")
             count_conditions.append(f"ms.error_category = '{error_category_filter}'")
         if search_term:
             safe_search = search_term.replace("'", "''")
@@ -3165,7 +3165,7 @@ def retry_by_category():
 
 @migrate_bp.route('/retry_all_errors', methods=['POST'])
 def retry_all_errors():
-    """Reset all failed records across all batches."""
+    """Reset all failed and partial records across all batches."""
     try:
         with misc_engine.begin() as con:
             result = con.execute(text("""
@@ -3174,7 +3174,7 @@ def retry_all_errors():
                     execution_error = NULL,
                     execution_started_at = NULL,
                     execution_completed_at = NULL
-                WHERE execution_status = 'failed'
+                WHERE execution_status IN ('failed', 'partial')
                     AND skip_migration = 0
             """))
             reset_count = result.rowcount
@@ -3182,7 +3182,7 @@ def retry_all_errors():
         return jsonify({
             'success': True,
             'reset_count': reset_count,
-            'message': f'{reset_count} failed records reset to pending'
+            'message': f'{reset_count} failed/partial records reset to pending'
         })
         
     except Exception as e:
@@ -3191,7 +3191,12 @@ def retry_all_errors():
 
 @migrate_bp.route('/reset_failed', methods=['POST'])
 def reset_failed():
-    """Reset all failed records to pending status (without re-executing)."""
+    """Reset all failed AND partial records to pending status (without re-executing).
+    
+    For partial records: container_created and target_documentnumber are preserved.
+    The execution loop will detect container_created=1 and skip already-uploaded files
+    via get_successfully_uploaded_files() → SUCCESS_SKIPPED.
+    """
     try:
         data = request.get_json()
         batch_id = data.get('batch_id')
@@ -3199,7 +3204,9 @@ def reset_failed():
         if not batch_id:
             return jsonify({'success': False, 'error': 'Batch ID required'}), 400
         
-        # Reset all failed records to pending
+        # Reset all failed AND partial records to pending
+        # Note: container_created and target_documentnumber are NOT cleared,
+        # so partial records will only retry the missing files.
         with misc_engine.begin() as con:
             result = con.execute(text(f"""
                 UPDATE dbo.migration_staging
@@ -3208,7 +3215,7 @@ def reset_failed():
                     execution_started_at = NULL,
                     execution_completed_at = NULL
                 WHERE batch_id = '{batch_id}'
-                    AND execution_status = 'failed'
+                    AND execution_status IN ('failed', 'partial')
                     AND skip_migration = 0
             """))
             reset_count = result.rowcount
@@ -3216,7 +3223,7 @@ def reset_failed():
         return jsonify({
             'success': True,
             'reset_count': reset_count,
-            'message': f'{reset_count} failed records reset to pending'
+            'message': f'{reset_count} failed/partial records reset to pending'
         })
         
     except Exception as e:
@@ -3225,7 +3232,7 @@ def reset_failed():
 
 @migrate_bp.route('/retry_failed', methods=['POST'])
 def retry_failed():
-    """Re-execute all failed records in a batch."""
+    """Re-execute all failed and partial records in a batch."""
     try:
         data = request.get_json()
         batch_id = data.get('batch_id')
@@ -3233,7 +3240,8 @@ def retry_failed():
         if not batch_id:
             return jsonify({'success': False, 'error': 'Batch ID required'}), 400
         
-        # Reset failed records to pending state
+        # Reset failed and partial records to pending state
+        # container_created/target_documentnumber preserved for partial → only missing files retried
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_staging
@@ -3242,7 +3250,7 @@ def retry_failed():
                     execution_started_at = NULL,
                     execution_completed_at = NULL
                 WHERE batch_id = '{batch_id}'
-                    AND execution_status = 'failed'
+                    AND execution_status IN ('failed', 'partial')
                     AND skip_migration = 0
             """))
             

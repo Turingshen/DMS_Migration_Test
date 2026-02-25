@@ -453,7 +453,7 @@ def get_error_description(category):
         'TARGET_NOT_FOUND': ('Zielobjekt nicht gefunden', 'Mapping prüfen'),
         
         # Upload Issues
-        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 50MB pro Datei'),
+        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 99MB pro Datei'),
         'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
         'UPLOAD_FAILED': ('Upload fehlgeschlagen', 'Details prüfen'),
         
@@ -517,7 +517,7 @@ def get_error_details(category):
         'MAPPING_EQUIPMENT_MISSING': ('Equipment fehlt im Ziel', 'Equipment-Mapping prüfen'),
         
         # Upload Issues
-        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 50MB pro Datei'),
+        'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 99MB pro Datei'),
         'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
         'UPLOAD_FAILED': ('Upload fehlgeschlagen', 'Details prüfen'),
         

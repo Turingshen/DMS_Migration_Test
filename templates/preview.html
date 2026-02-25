@@ -77,11 +77,11 @@
                             <h5 id="statSmall" class="text-success">-</h5>
                         </div>
                         <div class="col-md-1">
-                            <small class="text-muted">🟡 10-50MB</small>
+                            <small class="text-muted">🟡 10-99MB</small>
                             <h5 id="statMedium" class="text-warning">-</h5>
                         </div>
                         <div class="col-md-1">
-                            <small class="text-muted">🔴 >50MB</small>
+                            <small class="text-muted">🔴 >99MB</small>
                             <h5 id="statLarge" class="text-danger">-</h5>
                         </div>
                         <div class="col-md-1">
@@ -121,9 +121,9 @@
                         <button onclick="refreshData()" class="btn btn-info" id="refreshDataBtn" title="Metadaten, Dateinamen abrufen und Regeln anwenden">
                             <i class="fas fa-sync-alt"></i> Daten aktualisieren
                         </button>
-                        <label class="btn btn-outline-warning mb-0" id="excludeLargeLabel" title="Dateien größer als 50MB ausschließen">
+                        <label class="btn btn-outline-warning mb-0" id="excludeLargeLabel" title="Dateien größer als 99MB ausschließen">
                             <input type="checkbox" id="excludeLargeCheckbox" onchange="excludeLargeFiles(this.checked)" style="margin-right: 5px;">
-                            <i class="fas fa-ban"></i> &gt;50MB ausschließen
+                            <i class="fas fa-ban"></i> &gt;99MB ausschließen
                         </label>
                         <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
                             <i class="fas fa-play-circle"></i> Ausgewählte ausführen
@@ -135,10 +135,10 @@
                             <i class="fas fa-stop"></i> Migration abbrechen
                         </button>
                         <button onclick="resetFailed()" class="btn btn-warning" id="resetBtn">
-                            <i class="fas fa-undo"></i> Fehler zurücksetzen
+                            <i class="fas fa-undo"></i> Fehler/Partial zurücksetzen
                         </button>
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
-                            <i class="fas fa-redo"></i> Fehler wiederholen
+                            <i class="fas fa-redo"></i> Fehler/Partial wiederholen
                         </button>
                     </div>
                 </div>
@@ -875,8 +875,8 @@ function updateBatchStatistics(records) {
     const buckets = {
         tiny:    { max: 1,   count: 0, size: 0, label: '⚡ ≤1MB' },
         small:   { max: 10,  count: 0, size: 0, label: '🟢 1-10MB' },
-        medium:  { max: 50,  count: 0, size: 0, label: '🟡 10-50MB' },
-        large:   { max: Infinity, count: 0, size: 0, label: '🔴 >50MB' },
+        medium:  { max: 99,  count: 0, size: 0, label: '🟡 10-99MB' },
+        large:   { max: Infinity, count: 0, size: 0, label: '🔴 >99MB' },
         unknown: { count: 0 }
     };
     
@@ -894,7 +894,7 @@ function updateBatchStatistics(records) {
             } else if (sizeMB <= 10) {
                 buckets.small.count++;
                 buckets.small.size += bytes;
-            } else if (sizeMB <= 50) {
+            } else if (sizeMB <= 99) {
                 buckets.medium.count++;
                 buckets.medium.size += bytes;
             } else {
@@ -974,8 +974,8 @@ function showRuntimeDetails() {
 ├─────────────┼───────┼──────────┤
 │ ⚡ ≤1MB     │ ${b.tiny.count.toString().padStart(5)} │ ${formatFileSize(b.tiny.size || 0).padStart(8)} │
 │ 🟢 1-10MB   │ ${b.small.count.toString().padStart(5)} │ ${formatFileSize(b.small.size || 0).padStart(8)} │
-│ 🟡 10-50MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size || 0).padStart(8)} │
-│ 🔴 >50MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size || 0).padStart(8)} │
+│ 🟡 10-99MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size || 0).padStart(8)} │
+│ 🔴 >99MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size || 0).padStart(8)} │
 │ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │
 └─────────────┴───────┴──────────┘
 
@@ -1129,7 +1129,15 @@ const ERROR_CATEGORY_DETAILS = {
     'READ_EMPTY': { desc: 'Keine Dateien im Quellsystem', class: 'badge-secondary' },
     'TIMEOUT_RETRY': { desc: 'Timeout (Retry möglich)', class: 'badge-warning' },
     'API_NOT_IMPLEMENTED': { desc: 'Serverfehler (501)', class: 'badge-dark' },
-    'CODE_BUG_FIXED': { desc: 'Code-Bug behoben', class: 'badge-success' }
+    'CODE_BUG_FIXED': { desc: 'Code-Bug behoben', class: 'badge-success' },
+    // Categories from partial records (file-level errors)
+    'CONNECTION_ERROR': { desc: 'Verbindungsfehler', class: 'badge-warning' },
+    'TIMEOUT': { desc: 'Timeout', class: 'badge-warning' },
+    'AUTH_ERROR': { desc: 'Authentifizierung', class: 'badge-danger' },
+    'AUTH_FORBIDDEN': { desc: 'Zugriff verweigert (403)', class: 'badge-danger' },
+    'CODE_BUG': { desc: 'Code-Bug', class: 'badge-dark' },
+    'UPLOAD_ERROR': { desc: 'Upload-Fehler', class: 'badge-warning' },
+    'SIZE_EXCEEDED': { desc: 'Dateigröße überschritten', class: 'badge-warning' }
 };
 
 function getErrorCategoryBadge(category) {
@@ -1150,12 +1158,12 @@ function formatFileSizeWithColor(bytes) {
     const sizeText = formatFileSize(bytes);
     const sizeMB = bytes / (1024 * 1024);
     
-    if (sizeMB > 50) {
-        // Red: high risk of failure (>50MB)
-        return `<span class="text-danger font-weight-bold" title="Hohes Risiko: >50MB kann fehlschlagen">${sizeText} ⚠️</span>`;
+    if (sizeMB > 99) {
+        // Red: high risk of failure (>99MB)
+        return `<span class="text-danger font-weight-bold" title="Hohes Risiko: >99MB kann fehlschlagen">${sizeText} ⚠️</span>`;
     } else if (sizeMB > 10) {
-        // Orange: moderate risk (10-50MB)
-        return `<span class="text-warning" title="Mittlere Größe: 10-50MB">${sizeText}</span>`;
+        // Orange: moderate risk (10-99MB)
+        return `<span class="text-warning" title="Mittlere Größe: 10-99MB">${sizeText}</span>`;
     } else {
         // Green: safe size (≤10MB)
         return `<span class="text-success" title="Sichere Größe: ≤10MB">${sizeText}</span>`;
@@ -1631,14 +1639,14 @@ function displayRecordDetail(record) {
 }
 
 function excludeLargeFiles(checked) {
-    // Find records with file_size_bytes > 50MB
+    // Find records with file_size_bytes > 99MB
     const largeRecords = allRecords.filter(r => {
         const bytes = r.file_size_bytes;
-        return bytes !== null && bytes !== undefined && (bytes / (1024 * 1024)) > 50;
+        return bytes !== null && bytes !== undefined && (bytes / (1024 * 1024)) > 99;
     });
     
     if (largeRecords.length === 0) {
-        alert('Keine Dateien größer als 50MB in diesem Batch gefunden.');
+        alert('Keine Dateien größer als 99MB in diesem Batch gefunden.');
         document.getElementById('excludeLargeCheckbox').checked = false;
         return;
     }
@@ -1646,12 +1654,12 @@ function excludeLargeFiles(checked) {
     const totalMB = largeRecords.reduce((sum, r) => sum + (r.file_size_bytes / (1024 * 1024)), 0);
     
     if (checked) {
-        if (!confirm(`${largeRecords.length} Dateien größer als 50MB ausschließen?\n\nGesamtgröße: ${totalMB.toFixed(1)} MB\n\nDiese Dateien werden als übersprungen markiert und nicht migriert.`)) {
+        if (!confirm(`${largeRecords.length} Dateien größer als 99MB ausschließen?\n\nGesamtgröße: ${totalMB.toFixed(1)} MB\n\nDiese Dateien werden als übersprungen markiert und nicht migriert.`)) {
             document.getElementById('excludeLargeCheckbox').checked = false;
             return;
         }
     } else {
-        if (!confirm(`${largeRecords.length} Dateien größer als 50MB wieder einschließen?`)) {
+        if (!confirm(`${largeRecords.length} Dateien größer als 99MB wieder einschließen?`)) {
             document.getElementById('excludeLargeCheckbox').checked = true;
             return;
         }
@@ -1672,7 +1680,7 @@ function excludeLargeFiles(checked) {
             batch_id: batchId,
             record_ids: recordIds,
             skip: checked,
-            reason: checked ? 'File size exceeds 50MB limit' : ''
+            reason: checked ? 'File size exceeds 99MB limit' : ''
         })
     })
     .then(response => response.json())
@@ -1694,7 +1702,7 @@ function excludeLargeFiles(checked) {
 }
 
 function resetFailed() {
-    if (!confirm('Alle fehlgeschlagenen Datensätze auf "Ausstehend" zurücksetzen?\n\nDadurch können sie erneut ausgeführt werden.')) {
+    if (!confirm('Alle fehlgeschlagenen und teilweise migrierten Datensätze auf "Ausstehend" zurücksetzen?\n\nBei teilweise migrierten werden nur die fehlenden Dateien erneut versucht.')) {
         return;
     }
     
@@ -1712,18 +1720,18 @@ function resetFailed() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(`Zurücksetzen abgeschlossen!\n\n${data.reset_count} fehlgeschlagene Datensätze zurückgesetzt.`);
+            alert(`Zurücksetzen abgeschlossen!\n\n${data.reset_count} fehlgeschlagene/teilweise Datensätze zurückgesetzt.`);
             loadRecords();
         } else {
             alert('Zurücksetzen fehlgeschlagen: ' + data.error);
         }
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler zurücksetzen';
+        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler/Partial zurücksetzen';
     })
     .catch(error => {
         alert('Fehler beim Zurücksetzen: ' + error);
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler zurücksetzen';
+        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler/Partial zurücksetzen';
     });
 }
 
@@ -1781,7 +1789,7 @@ function refreshData() {
 }
 
 function retryFailed() {
-    if (!confirm('Alle fehlgeschlagenen Datensätze erneut ausführen?')) {
+    if (!confirm('Alle fehlgeschlagenen und teilweise migrierten Datensätze erneut ausführen?\n\nBei teilweise migrierten werden nur die fehlenden Dateien hochgeladen.')) {
         return;
     }
     
@@ -1805,9 +1813,9 @@ function retryFailed() {
         
         const resetCount = data.reset_count;
         if (resetCount === 0) {
-            alert('Keine fehlgeschlagenen Datensätze zum Wiederholen.');
+            alert('Keine fehlgeschlagenen oder teilweise migrierten Datensätze zum Wiederholen.');
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-redo"></i> Fehler wiederholen';
+            btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
             return;
         }
         
@@ -1815,7 +1823,7 @@ function retryFailed() {
         
         // Step 2: Show progress bar and start polling
         showProgressBar();
-        document.getElementById('progressStats').textContent = `Starte ${resetCount} fehlgeschlagene Dokumente...`;
+        document.getElementById('progressStats').textContent = `Starte ${resetCount} fehlgeschlagene/teilweise Dokumente...`;
         document.getElementById('progressBar').style.width = '0%';
         document.getElementById('progressBar').textContent = '0%';
         document.getElementById('progressDetails').textContent = 'Initialisiere Retry...';
@@ -1852,14 +1860,14 @@ function retryFailed() {
             alert('Wiederholung fehlgeschlagen: ' + data.error);
         }
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler wiederholen';
+        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
     })
     .catch(error => {
         stopProgressPolling();
         hideProgressBar();
         alert('Fehler bei der Wiederholung: ' + error);
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler wiederholen';
+        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
     });
 }
 

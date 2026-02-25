@@ -1858,12 +1858,21 @@ def execute_single_document(staging_record, session_snapshot):
             except Exception as e:
                 logger.debug(f"Failed to update target_file_count: {e}", category="EXECUTE")
             
+            # Determine dominant error_category from failed file results
+            failed_file_categories = [r.get('error_category') for r in results if r.get('error_category') and not r.get('skipped', False)]
+            if failed_file_categories:
+                # Use most common error category from failed files
+                from collections import Counter
+                partial_error_category = Counter(failed_file_categories).most_common(1)[0][0]
+            else:
+                partial_error_category = 'UNKNOWN'
+            
             # Store detailed errors as JSON if available
             if error_details:
                 error_json = json.dumps({'summary': error_summary, 'errors': error_details})
-                update_execution_status(staging_id, 'partial', error_json)
+                update_execution_status(staging_id, 'partial', error_json, error_category=partial_error_category)
             else:
-                update_execution_status(staging_id, 'partial', error_summary)
+                update_execution_status(staging_id, 'partial', error_summary, error_category=partial_error_category)
             
             return {
                 'staging_id': staging_id, 

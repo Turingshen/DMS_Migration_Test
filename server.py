@@ -5,6 +5,13 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import datetime
+import warnings
+import urllib3
+
+# Suppress InsecureRequestWarning for direct SAP connections (verify_ssl=false)
+# Both methods needed: warnings.filterwarnings for all threads, urllib3 for direct usage
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app_config import Config
 cfg = Config.load()

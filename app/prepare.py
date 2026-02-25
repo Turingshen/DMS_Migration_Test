@@ -575,7 +575,7 @@ def apply_translations(data_df, rules):
 
 def generate_batch_id():
     """Generate unique batch ID for tracking."""
-    return f"BATCH_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    return f"BATCH_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
 
 def load_source_data(source_file_path=None, custom_query=None, query_source='dil'):

@@ -157,6 +157,7 @@
                             <option value="success" id="statusSuccess">✅ Erfolgreich</option>
                             <option value="failed" id="statusFailed">❌ Fehlgeschlagen</option>
                             <option value="partial" id="statusPartial">⚠️ Teilweise</option>
+                            <option value="skipped_orphan">⊘ Verwaist</option>
                             <option value="hide_completed">📋 Nur unbearbeitet</option>
                         </select>
                         <select id="errorCategoryFilter" class="form-select" style="width: auto;">
@@ -193,6 +194,7 @@
                                     <th data-column="filename">Filename</th>
                                     <th data-column="file_size">File Size</th>
                                     <th data-column="file_count">Files (S/T)</th>
+                                    <th data-column="link_count">Links (S/E/T)</th>
                                     <th data-column="ablage">Ablage</th>
                                     <th data-column="auth_group">Auth Group</th>
                                     <th data-column="execution">Execution</th>
@@ -321,6 +323,10 @@
                     <label class="form-check-label" for="col_file_count">Dateianzahl (S/T)</label>
                 </div>
                 <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_link_count" value="link_count" checked>
+                    <label class="form-check-label" for="col_link_count">Objektlinks (S/E/T)</label>
+                </div>
+                <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_ablage" value="ablage" checked>
                     <label class="form-check-label" for="col_ablage">Ablage (KPRO/DB)</label>
                 </div>
@@ -405,6 +411,7 @@ let visibleColumns = {
     'filename': true,
     'file_size': true,
     'file_count': true,
+    'link_count': true,
     'ablage': true,
     'auth_group': true,
     'execution': true,
@@ -505,7 +512,7 @@ const defaultVisibleColumns = {
     'dokob': true, 'target_dokob': true,
     'objky': true, 'target_objky': true,
     'doc_status': true, 'description': true,
-    'filename': true, 'file_size': true, 'file_count': true, 'ablage': true,
+    'filename': true, 'file_size': true, 'file_count': true, 'link_count': true, 'ablage': true,
     'auth_group': true, 'execution': true,
     'link_status': true, 'error_category': true,
     'source_loioid': false, 'mime_type': false, 'batch_id': false,
@@ -1049,6 +1056,7 @@ function displayRecords(records) {
                 <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
                 <td data-column="file_size"><small>${fileSize}</small></td>
                 <td data-column="file_count"><small>${formatFileCount(record)}</small></td>
+                <td data-column="link_count"><small>${formatLinkCount(record)}</small></td>
                 <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
                 <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
@@ -1082,7 +1090,8 @@ function getExecutionBadge(status) {
         'success': '<span class="badge badge-success">Erfolgreich</span>',
         'failed': '<span class="badge badge-danger">Fehlgeschlagen</span>',
         'partial': '<span class="badge badge-warning">Teilweise</span>',
-        'pending': '<span class="badge badge-secondary">Ausstehend</span>'
+        'pending': '<span class="badge badge-secondary">Ausstehend</span>',
+        'skipped_orphan': '<span class="badge badge-dark" title="Übersprungen: Alle Objektlinks ausgeschlossen">⊘ Verwaist</span>'
     };
     return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
 }
@@ -1182,6 +1191,25 @@ function formatFileCount(record) {
         return `<span class="text-danger font-weight-bold" title="Quelldateien: ${src}, Zieldateien: ${tgt} — Mismatch!">${srcStr} / ${tgtStr} ✗</span>`;
     }
     return `${srcStr} / ${tgtStr}`;
+}
+
+function formatLinkCount(record) {
+    const src = record.source_link_count;
+    const excl = record.excluded_link_count;
+    const tgt = record.target_link_count;
+    if (src === null || src === undefined) return '-';
+    const exclStr = (excl !== null && excl !== undefined) ? excl : 0;
+    const tgtStr = (tgt !== null && tgt !== undefined) ? tgt : src;
+    // No exclusions: all green
+    if (exclStr === 0) {
+        return `<span class="text-success" title="Source: ${src}, Excluded: 0, Target: ${tgtStr}">${src} / 0 / ${tgtStr} ✓</span>`;
+    }
+    // All links excluded: red — record will be skipped during execute
+    if (tgtStr === 0) {
+        return `<span class="text-danger font-weight-bold" title="Alle ${src} Links ausgeschlossen → wird bei Ausführung übersprungen (⊘ Verwaist)">${src} / ${exclStr} / 0 ⊘</span>`;
+    }
+    // Partial exclusion: orange
+    return `<span class="text-warning font-weight-bold" title="Source: ${src}, Excluded: ${exclStr}, Target: ${tgtStr} — Teilweise ausgeschlossen">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
 }
 
 function formatDateTime(dateStr) {
@@ -1618,6 +1646,7 @@ function displayRecordDetail(record) {
     html += `<tr><th>Abgeschlossen</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
     html += `<tr><th>Datei</th><td>${record.filename || '-'}</td></tr>`;
     html += `<tr><th>Dateien (Quelle/Ziel)</th><td>${formatFileCount(record)}</td></tr>`;
+    html += `<tr><th>Objektlinks (S/E/T)</th><td>${formatLinkCount(record)}</td></tr>`;
     html += `<tr><th>MIME-Typ</th><td>${record.mime_type || '-'}</td></tr>`;
     html += `</table></div>`;
     
@@ -1764,6 +1793,13 @@ function refreshData() {
             message += `✓ Metadata aktualisiert: ${data.metadata_updated || 0}\n`;
             message += `✓ Dateinamen gefunden: ${data.filenames_found || 0}\n`;
             message += `✓ Regeln angewendet: ${data.rules_applied || 0}\n`;
+            
+            if (data.links_excluded !== undefined) {
+                message += `✓ Objektlinks geprüft: ${data.links_excluded || 0} exkludiert\n`;
+                if (data.records_zero_links > 0) {
+                    message += `⚠ ${data.records_zero_links} Datensätze haben keine verbleibenden Links (Waisen-Warnung)\n`;
+                }
+            }
             
             if (data.total_size_mb) {
                 message += `\n📊 Gesamtgröße: ${data.total_size_mb} MB\n`;

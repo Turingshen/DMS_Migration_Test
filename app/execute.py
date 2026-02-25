@@ -594,6 +594,7 @@ def load_approved_records(batch_id):
         WHERE batch_id = '{batch_id}'
             AND skip_migration = 0
             AND execution_status = 'pending'
+            AND (target_link_count IS NULL OR target_link_count > 0)
         ORDER BY CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END, file_size_bytes ASC, id
     """
     
@@ -634,6 +635,7 @@ def load_specific_records(batch_id, record_ids):
         WHERE batch_id = '{batch_id}'
             AND id IN ({ids_str})
             AND skip_migration = 0
+            AND (target_link_count IS NULL OR target_link_count > 0)
         ORDER BY CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END, file_size_bytes ASC, id
     """
     
@@ -2070,6 +2072,19 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
         
         # Reset any orphaned records from previous crashed execution
         reset_orphaned_records(batch_id)
+        
+        # Mark orphan records (target_link_count = 0) as skipped
+        with misc_engine.begin() as con:
+            orphan_result = con.execute(text("""
+                UPDATE dbo.migration_staging
+                SET execution_status = 'skipped_orphan'
+                WHERE batch_id = :batch_id
+                    AND skip_migration = 0
+                    AND execution_status = 'pending'
+                    AND target_link_count = 0
+            """), {'batch_id': batch_id})
+            if orphan_result.rowcount > 0:
+                print(f"[ORPHAN_SKIP] Marked {orphan_result.rowcount} orphan records as skipped_orphan (all object links excluded)")
         
         # Set the lock
         set_migration_lock(batch_id)

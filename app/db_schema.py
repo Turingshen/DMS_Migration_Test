@@ -22,6 +22,7 @@ CREATE TABLE dbo.migration_staging (
     source_dokob VARCHAR(10),
     source_objky VARCHAR(100),
     source_object_links NVARCHAR(MAX),
+    excluded_object_links NVARCHAR(MAX),
     source_document_status VARCHAR(20),
     
     -- Target document identifiers (computed from source)
@@ -232,6 +233,79 @@ CREATE TABLE dbo.migration_dokob_strategy (
     INDEX idx_batch_id (batch_id)
 );
 """
+
+# ---------------------------------------------------------------------------
+# Exclusion tables: per batch + dokob, store DIL query and excluded keys
+# ---------------------------------------------------------------------------
+
+CREATE_EXCLUSION_QUERY_TABLE = """
+CREATE TABLE dbo.migration_exclusion_query (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    batch_id VARCHAR(50) NOT NULL,
+    dokob VARCHAR(10) NOT NULL,              -- Object type: IFLOT, EQUI, PMQMEL, ...
+    dil_query NVARCHAR(MAX) NOT NULL,        -- The SELECT statement run against DIL (HANA)
+    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+    updated_by VARCHAR(100),
+    
+    CONSTRAINT uq_excl_query_batch_dokob UNIQUE (batch_id, dokob),
+    INDEX idx_excl_query_batch (batch_id)
+);
+"""
+
+CREATE_EXCLUSION_KEYS_TABLE = """
+CREATE TABLE dbo.migration_exclusion_keys (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    batch_id VARCHAR(50) NOT NULL,
+    dokob VARCHAR(10) NOT NULL,              -- Object type: IFLOT, EQUI, PMQMEL, ...
+    objky VARCHAR(100) NOT NULL,             -- Object key to exclude
+    label NVARCHAR(255),                     -- Human-readable label (e.g. PLTXT, description)
+    excluded_at DATETIME2 DEFAULT GETUTCDATE(),
+    excluded_by VARCHAR(100),
+    
+    CONSTRAINT uq_excl_key UNIQUE (batch_id, dokob, objky),
+    INDEX idx_excl_keys_batch (batch_id),
+    INDEX idx_excl_keys_batch_dokob (batch_id, dokob)
+);
+"""
+
+CREATE_EXCLUSION_QUERY_RESULTS_TABLE = """
+CREATE TABLE dbo.migration_exclusion_query_results (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    batch_id VARCHAR(50) NOT NULL,
+    dokob VARCHAR(10) NOT NULL,
+    objky NVARCHAR(255) NOT NULL,             -- Mapped object key from selected column
+    label NVARCHAR(500),                      -- Human-readable label from other columns
+    row_data NVARCHAR(MAX),                   -- Full row as JSON for display
+    queried_at DATETIME2 DEFAULT GETUTCDATE(),
+    INDEX idx_exqr_batch_dokob (batch_id, dokob),
+    INDEX idx_exqr_objky (batch_id, dokob, objky)
+);
+"""
+
+# All supported DOKOB types with labels
+EXCLUSION_DOKOB_TYPES = {
+    'EQUI':      'Equipment',
+    'IFLOT':     'Techn. Platz',
+    'MPLA':      'Wartungsplan',
+    'IMPTT':     'Messpunkt',
+    'PMPLKO':    'Arbeitsplan (Tasklist)',
+    'PMAUFK':    'Instandhaltungsauftrag',
+    'PMAFVC':    'Auftragsvorgang',
+    'PMQMEL':    'Meldung (Notification)',
+    'STKO_DOC':  'Stückliste Kopf (BOM)',
+    'STPO_DOC':  'Stückliste Position',
+}
+
+# Default DIL queries per DOKOB type (used when no custom query is stored yet)
+DEFAULT_EXCLUSION_QUERIES = {
+    'IFLOT': """SELECT DISTINCT
+    iflot.TPLNR  AS objky,
+    iflot.PLTXT  AS label
+FROM DIL.IFLOT iflot
+JOIN DIL.DRAD  drad ON drad.OBJKY = iflot.TPLNR AND drad.DOKOB = 'IFLOT'
+WHERE iflot.IWERK = '{{IWERK}}'
+ORDER BY iflot.TPLNR""",
+}
 
 CREATE_CREDENTIALS_TABLE = """
 CREATE TABLE dbo.sap_credentials (
@@ -544,6 +618,16 @@ def init_staging_tables(engine):
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add source_object_links column: {e}")
 
+        # Excluded object links (JSON array of links removed by exclusion rules)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'excluded_object_links') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD excluded_object_links NVARCHAR(MAX) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has excluded_object_links column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add excluded_object_links column: {e}")
+
         # File count columns (source vs target comparison)
         try:
             con.execute(text("""
@@ -557,6 +641,24 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has source_file_count / target_file_count columns")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add file count columns: {e}")
+
+        # Link count columns (source / excluded / target for exclusion preview)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'source_link_count') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD source_link_count INT NULL;
+            """))
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'excluded_link_count') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD excluded_link_count INT NULL;
+            """))
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'target_link_count') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD target_link_count INT NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has source_link_count / excluded_link_count / target_link_count columns")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add link count columns: {e}")
 
         # Check and create sap_credentials table (encrypted Basic Auth storage)
         check_credentials = text("""
@@ -718,3 +820,82 @@ def init_staging_tables(engine):
                 print("[DB_INIT] Ensured migration_dokob_strategy has source_method/target_method/strno_prefix columns")
             except Exception as e:
                 print(f"[DB_INIT_WARN] Could not add columns to migration_dokob_strategy: {e}")
+
+        # Check and create exclusion_query table
+        check_excl_query = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query'
+        """)
+        result = con.execute(check_excl_query).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_EXCLUSION_QUERY_TABLE))
+            print("[DB_INIT] Created migration_exclusion_query table")
+        else:
+            print("[DB_INIT] migration_exclusion_query table already exists")
+
+        # Check and create exclusion_keys table
+        check_excl_keys = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_keys'
+        """)
+        result = con.execute(check_excl_keys).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_EXCLUSION_KEYS_TABLE))
+            print("[DB_INIT] Created migration_exclusion_keys table")
+        else:
+            print("[DB_INIT] migration_exclusion_keys table already exists")
+
+        # Check and create exclusion_query_results table
+        check_excl_results = text("""
+        SELECT COUNT(*) as cnt 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query_results'
+        """)
+        result = con.execute(check_excl_results).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_EXCLUSION_QUERY_RESULTS_TABLE))
+            print("[DB_INIT] Created migration_exclusion_query_results table")
+        else:
+            print("[DB_INIT] migration_exclusion_query_results table already exists")
+
+        # Check and create migration_user_settings table
+        check_settings = text("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_user_settings'
+        """)
+        result = con.execute(check_settings).fetchone()
+        if result[0] == 0:
+            con.execute(text("""
+                CREATE TABLE dbo.migration_user_settings (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    setting_key VARCHAR(100) NOT NULL,
+                    setting_value NVARCHAR(500),
+                    updated_at DATETIME2 DEFAULT GETUTCDATE(),
+                    updated_by VARCHAR(200),
+                    CONSTRAINT UQ_setting_key UNIQUE (setting_key)
+                )
+            """))
+            print("[DB_INIT] Created migration_user_settings table")
+        else:
+            print("[DB_INIT] migration_user_settings table already exists")
+
+        # Add result metadata columns to exclusion_query table (if missing)
+        try:
+            for col_def in [
+                ("result_columns", "NVARCHAR(MAX)"),
+                ("result_objky_column", "VARCHAR(100)"),
+                ("result_count", "INT"),
+                ("executed_at", "DATETIME2"),
+            ]:
+                col_check = con.execute(text("""
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query'
+                          AND COLUMN_NAME = :col
+                """), {'col': col_def[0]}).fetchone()
+                if col_check[0] == 0:
+                    con.execute(text(f"ALTER TABLE dbo.migration_exclusion_query ADD {col_def[0]} {col_def[1]}"))
+                    print(f"[DB_INIT] Added column {col_def[0]} to migration_exclusion_query")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add result columns to migration_exclusion_query: {e}")

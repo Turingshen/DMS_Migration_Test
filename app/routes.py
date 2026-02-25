@@ -57,14 +57,15 @@ def _build_session_snapshot():
     including OAuth refresh tokens for standalone token refresh.
     """
     from app.process import MAX_API_WORKERS
+    db_settings = _load_db_settings()
     return {
         'bearer_token': session.get('bearer_token'),
         'sap_system': session.get('sap_system'),
         'x_csrf_token': session.get('x-csrf-token'),
         'cookies': session.get('cookies'),
         'csrf_token_time': session.get('csrf_token_time', 0),
-        'max_workers': session.get('max_workers', MAX_API_WORKERS),
-        'pacing_seconds': session.get('pacing_seconds', 0),
+        'max_workers': session.get('max_workers') or db_settings.get('max_workers') or MAX_API_WORKERS,
+        'pacing_seconds': session.get('pacing_seconds') if session.get('pacing_seconds') is not None else db_settings.get('pacing_seconds', 0),
         'source_system': session.get('source_system', DEFAULT_SOURCE_SYSTEM),
         'target_system': session.get('target_system', DEFAULT_TARGET_SYSTEM),
         'refresh_token': session.get('refresh_token'),
@@ -130,8 +131,8 @@ def get_template_context():
         'target_system_label': cfg.get(target_sys, 'system_label') if target_sys else 'Unknown',
         'source_systems': source_systems,
         'target_systems': target_systems,
-        'max_workers': session.get('max_workers', DEFAULT_SETTINGS.get('max_workers', 2)),
-        'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS.get('pacing_seconds', 0))
+        'max_workers': session.get('max_workers') or _load_db_settings().get('max_workers') or DEFAULT_SETTINGS.get('max_workers', 2),
+        'pacing_seconds': session.get('pacing_seconds') if session.get('pacing_seconds') is not None else _load_db_settings().get('pacing_seconds', DEFAULT_SETTINGS.get('pacing_seconds', 0))
     }
 
 
@@ -143,12 +144,52 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _load_db_settings():
+    """Load persisted settings from migration_user_settings table.
+    Returns a dict of setting_key -> setting_value (typed)."""
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text(
+                "SELECT setting_key, setting_value FROM dbo.migration_user_settings"
+            )).fetchall()
+        result = {}
+        for key, val in rows:
+            if key in ('max_workers',):
+                result[key] = int(val) if val else DEFAULT_SETTINGS.get(key)
+            elif key in ('pacing_seconds',):
+                result[key] = float(val) if val else DEFAULT_SETTINGS.get(key)
+            else:
+                result[key] = val
+        return result
+    except Exception:
+        return {}
+
+
+def _save_db_setting(key, value, user='system'):
+    """Persist a single setting to migration_user_settings (upsert)."""
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                MERGE dbo.migration_user_settings AS t
+                USING (SELECT :key AS setting_key) AS s
+                    ON t.setting_key = s.setting_key
+                WHEN MATCHED THEN
+                    UPDATE SET setting_value = :val, updated_at = GETUTCDATE(), updated_by = :user
+                WHEN NOT MATCHED THEN
+                    INSERT (setting_key, setting_value, updated_by)
+                    VALUES (:key, :val, :user);
+            """), {'key': key, 'val': str(value), 'user': user})
+    except Exception as e:
+        print(f'[SETTINGS_WARN] Could not persist setting {key}: {e}')
+
+
 @migrate_bp.route('/settings/json', methods=['GET'])
 def settings_json():
-    """Return current settings as JSON."""
+    """Return current settings as JSON.  Priority: session > DB > defaults."""
+    db_settings = _load_db_settings()
     current_settings = {
-        'max_workers': session.get('max_workers', DEFAULT_SETTINGS['max_workers']),
-        'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds']),
+        'max_workers': session.get('max_workers') or db_settings.get('max_workers') or DEFAULT_SETTINGS['max_workers'],
+        'pacing_seconds': session.get('pacing_seconds') if session.get('pacing_seconds') is not None else db_settings.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds']),
         'source_system': session.get('source_system', DEFAULT_SOURCE_SYSTEM),
         'target_system': session.get('target_system', DEFAULT_TARGET_SYSTEM)
     }
@@ -193,10 +234,11 @@ def switch_system():
 def settings():
     """Settings page for migration configuration."""
     if request.method == 'GET':
-        # Get current settings from session or defaults
+        # Get current settings: session > DB > defaults
+        db_settings = _load_db_settings()
         current_settings = {
-            'max_workers': session.get('max_workers', DEFAULT_SETTINGS['max_workers']),
-            'pacing_seconds': session.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds'])
+            'max_workers': session.get('max_workers') or db_settings.get('max_workers') or DEFAULT_SETTINGS['max_workers'],
+            'pacing_seconds': session.get('pacing_seconds') if session.get('pacing_seconds') is not None else db_settings.get('pacing_seconds', DEFAULT_SETTINGS['pacing_seconds'])
         }
         return render_template('settings.html', settings=current_settings, **get_template_context())
     
@@ -212,9 +254,12 @@ def settings():
         if pacing_seconds < 0 or pacing_seconds > 60:
             return jsonify({'success': False, 'error': 'Pacing must be between 0 and 60 seconds'}), 400
         
-        # Save to session
+        # Save to session AND database
         session['max_workers'] = max_workers
         session['pacing_seconds'] = pacing_seconds
+        current_user = session.get('fullName', 'system')
+        _save_db_setting('max_workers', max_workers, current_user)
+        _save_db_setting('pacing_seconds', pacing_seconds, current_user)
         
         return jsonify({'success': True, 'max_workers': max_workers, 'pacing_seconds': pacing_seconds})
         
@@ -1993,12 +2038,102 @@ def refresh_batch_data_stream(batch_id):
                 
                 yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Rule updates complete'})}\n\n"
             
+            # ========== PHASE 5: Object-Link Exclusion Counts ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'link_counts', 'message': 'Phase 5/5: Calculating object link exclusion counts...'})}\n\n"
+            
+            import json as _json
+            
+            # Load all exclusion keys for this batch
+            with misc_engine.begin() as con:
+                excl_rows = con.execute(text("""
+                    SELECT dokob, objky FROM dbo.migration_exclusion_keys
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id}).fetchall()
+            
+            excl_map = {}
+            for dokob_val, objky_val in excl_rows:
+                excl_map.setdefault(dokob_val, set()).add(objky_val)
+            
+            # Load staging records with their object links
+            with misc_engine.begin() as con:
+                link_rows = con.execute(text("""
+                    SELECT id, source_object_links, source_dokob, source_objky
+                    FROM dbo.migration_staging
+                    WHERE batch_id = :batch_id AND skip_migration = 0
+                """), {'batch_id': batch_id}).fetchall()
+            
+            link_updates = []  # list of {staging_id, src, excl, tgt}
+            for row in link_rows:
+                rec_id = row[0]
+                links_json = row[1]
+                primary_dokob = row[2]
+                primary_objky = row[3]
+                
+                # Parse links
+                links = []
+                if links_json:
+                    try:
+                        links = _json.loads(links_json)
+                    except (ValueError, TypeError):
+                        pass
+                if not links and primary_dokob and primary_objky:
+                    links = [{'dokob': primary_dokob, 'objky': primary_objky}]
+                
+                src_count = len(links)
+                excl_count = 0
+                if excl_map and links:
+                    for lnk in links:
+                        d = str(lnk.get('dokob', '')).upper()
+                        o = str(lnk.get('objky', ''))
+                        if d in excl_map and o in excl_map[d]:
+                            excl_count += 1
+                
+                link_updates.append({
+                    'staging_id': rec_id,
+                    'source_link_count': src_count,
+                    'excluded_link_count': excl_count,
+                    'target_link_count': src_count - excl_count
+                })
+            
+            # Bulk update via temp table
+            if link_updates:
+                link_df = pd.DataFrame(link_updates)
+                with misc_engine.begin() as con:
+                    con.execute(text("""
+                        IF OBJECT_ID('tempdb..#link_counts') IS NOT NULL DROP TABLE #link_counts;
+                        CREATE TABLE #link_counts (
+                            staging_id INT PRIMARY KEY,
+                            source_link_count INT,
+                            excluded_link_count INT,
+                            target_link_count INT
+                        );
+                    """))
+                    
+                    for i in range(0, len(link_df), 900):
+                        chunk = link_df.iloc[i:i + 900]
+                        chunk.to_sql('#link_counts', con, if_exists='append', index=False, method='multi')
+                    
+                    con.execute(text("""
+                        UPDATE s
+                        SET s.source_link_count = t.source_link_count,
+                            s.excluded_link_count = t.excluded_link_count,
+                            s.target_link_count = t.target_link_count
+                        FROM dbo.migration_staging s
+                        INNER JOIN #link_counts t ON s.id = t.staging_id
+                    """))
+                    con.execute(text("DROP TABLE #link_counts"))
+            
+            links_excluded_total = sum(u['excluded_link_count'] for u in link_updates)
+            records_zero_links = sum(1 for u in link_updates if u['target_link_count'] == 0 and u['source_link_count'] > 0)
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'link_counts', 'percent': 95, 'message': f'Link counts updated: {len(link_updates)} records, {links_excluded_total} links excluded, {records_zero_links} records with 0 remaining links'})}\n\n"
+            
             # Calculate statistics
             total_bytes = size_df['file_size'].dropna().sum() if len(size_df) > 0 else 0
             max_bytes = size_df['file_size'].dropna().max() if len(size_df) > 0 else 0
             
             # Convert numpy types to native Python types for JSON serialization
-            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0, 'links_excluded': int(links_excluded_total), 'records_zero_links': int(records_zero_links)})}\n\n"
             
         except Exception as e:
             import traceback
@@ -2290,7 +2425,10 @@ def get_batch_records(batch_id):
                     ms.ablage,
                     ms.source_object_links,
                     ms.source_file_count,
-                    ms.target_file_count
+                    ms.target_file_count,
+                    ms.source_link_count,
+                    ms.excluded_link_count,
+                    ms.target_link_count
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -2335,7 +2473,10 @@ def get_batch_records(batch_id):
                     ms.ablage,
                     ms.source_object_links,
                     ms.source_file_count,
-                    ms.target_file_count
+                    ms.target_file_count,
+                    ms.source_link_count,
+                    ms.excluded_link_count,
+                    ms.target_link_count
                 FROM dbo.migration_staging ms
                 WHERE {where_clause}
                 ORDER BY ms.source_documenttype, ms.source_documentnumber, ms.source_documentversion, ms.source_documentpart, ms.source_dokob
@@ -4677,6 +4818,776 @@ def set_dokob_strategy(batch_id):
                        strno_prefix_old=strno_prefix_old, strno_prefix_new=strno_prefix_new)
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
+
+
+# ==============================================================================
+# OBJECT MAPPING – Exclusion Query & Exclusion Keys
+# ==============================================================================
+
+@migrate_bp.route('/exclusion-dokob-types', methods=['GET'])
+def get_exclusion_dokob_types():
+    """Return the list of supported DOKOB types for exclusion queries."""
+    from app.db_schema import EXCLUSION_DOKOB_TYPES
+    return jsonify(success=True, types=[
+        {'dokob': k, 'label': v} for k, v in EXCLUSION_DOKOB_TYPES.items()
+    ])
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-queries', methods=['GET'])
+def get_all_exclusion_queries(batch_id):
+    """Return all stored exclusion queries (with metadata) for a batch."""
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT dokob, dil_query, result_count, result_objky_column,
+                       executed_at, updated_at, updated_by
+                FROM dbo.migration_exclusion_query
+                WHERE batch_id = :batch_id
+                ORDER BY dokob
+            """), {'batch_id': batch_id}).fetchall()
+        queries = [{'dokob': r[0], 'has_query': bool(r[1]),
+                    'result_count': r[2], 'result_objky_column': r[3],
+                    'executed_at': r[4].isoformat() if r[4] else None,
+                    'updated_at': r[5].isoformat() if r[5] else None,
+                    'updated_by': r[6]} for r in rows]
+        return jsonify(success=True, queries=queries)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-query/<dokob>', methods=['GET'])
+def get_exclusion_query(batch_id, dokob):
+    """Return the stored DIL exclusion query for a batch + dokob.
+    Falls back to DEFAULT_EXCLUSION_QUERIES if nothing is stored yet."""
+    from app.db_schema import DEFAULT_EXCLUSION_QUERIES
+    import json as _json
+    dokob = dokob.strip().upper()
+    try:
+        with misc_engine.begin() as con:
+            row = con.execute(text("""
+                SELECT dil_query, updated_at, updated_by,
+                       result_columns, result_objky_column, result_count, executed_at
+                FROM dbo.migration_exclusion_query
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob}).fetchone()
+        if row:
+            return jsonify(success=True, dil_query=row[0],
+                           updated_at=row[1].isoformat() if row[1] else None,
+                           updated_by=row[2], is_default=False,
+                           result_columns=_json.loads(row[3]) if row[3] else None,
+                           result_objky_column=row[4],
+                           result_count=row[5],
+                           executed_at=row[6].isoformat() if row[6] else None)
+        # Return default template
+        default_q = DEFAULT_EXCLUSION_QUERIES.get(dokob, '')
+        return jsonify(success=True, dil_query=default_q, is_default=True)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-query/<dokob>', methods=['PUT'])
+def save_exclusion_query(batch_id, dokob):
+    """Create or update the DIL exclusion query for a batch + dokob."""
+    dokob = dokob.strip().upper()
+    data = request.get_json()
+    dil_query = (data.get('dil_query') or '').strip()
+    if not dil_query:
+        return jsonify(success=False, error='dil_query darf nicht leer sein'), 400
+    current_user = session.get('fullName', 'system')
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                MERGE dbo.migration_exclusion_query AS t
+                USING (SELECT :batch_id AS batch_id, :dokob AS dokob) AS s
+                    ON t.batch_id = s.batch_id AND t.dokob = s.dokob
+                WHEN MATCHED THEN
+                    UPDATE SET dil_query = :q, updated_at = GETUTCDATE(), updated_by = :user
+                WHEN NOT MATCHED THEN
+                    INSERT (batch_id, dokob, dil_query, updated_by)
+                    VALUES (:batch_id, :dokob, :q, :user);
+            """), {'batch_id': batch_id, 'dokob': dokob, 'q': dil_query, 'user': current_user})
+        return jsonify(success=True)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-query/<dokob>/execute', methods=['POST'])
+def execute_exclusion_query(batch_id, dokob):
+    """Run the stored (or POSTed) DIL query, persist ALL results in
+    migration_exclusion_query_results and return the first page (limit rows).
+    Body (optional): { dil_query: "...", objky_column: "..." }"""
+    from app_config import DilEngine
+    from app.db_schema import DEFAULT_EXCLUSION_QUERIES
+    import json as _json
+    dokob = dokob.strip().upper()
+    data = request.get_json(silent=True) or {}
+    dil_query = (data.get('dil_query') or '').strip()
+    PAGE_SIZE = 50
+
+    try:
+        # If no query POSTed, load from DB or default
+        if not dil_query:
+            with misc_engine.begin() as con:
+                row = con.execute(text("""
+                    SELECT dil_query FROM dbo.migration_exclusion_query
+                    WHERE batch_id = :batch_id AND dokob = :dokob
+                """), {'batch_id': batch_id, 'dokob': dokob}).fetchone()
+            dil_query = row[0] if row else DEFAULT_EXCLUSION_QUERIES.get(dokob, '')
+        if not dil_query:
+            return jsonify(success=False, error=f'Keine DIL-Query für {dokob} vorhanden'), 400
+
+        # Safety: only allow SELECT statements
+        if not dil_query.lstrip().upper().startswith('SELECT'):
+            return jsonify(success=False, error='Nur SELECT-Anweisungen erlaubt'), 400
+
+        dil_db = DilEngine.load()
+        if not dil_db.engine:
+            return jsonify(success=False, error='DIL-Datenbankverbindung nicht verfügbar'), 500
+
+        with dil_db.engine.begin() as con:
+            df = pd.read_sql(text(dil_query), con)
+
+        # Normalise column names to lower
+        df.columns = [c.lower() for c in df.columns]
+        columns = list(df.columns)
+
+        # Determine which column to use as objky
+        objky_col = (data.get('objky_column') or '').strip().lower()
+        if not objky_col:
+            for candidate in ['objky', 'tplnr', 'equnr']:
+                if candidate in columns:
+                    objky_col = candidate
+                    break
+            if not objky_col:
+                objky_col = columns[0] if columns else ''
+
+        if objky_col not in columns:
+            return jsonify(success=False,
+                           error=f'Spalte "{objky_col}" nicht im Ergebnis vorhanden',
+                           columns=columns), 400
+
+        records = df.to_dict(orient='records')
+        current_user = session.get('fullName', 'system')
+
+        # ---- Persist: save query + all results to MSSQL ----
+        with misc_engine.begin() as con:
+            # 1) Upsert the query itself (auto-save on execute)
+            con.execute(text("""
+                MERGE dbo.migration_exclusion_query AS t
+                USING (SELECT :batch_id AS batch_id, :dokob AS dokob) AS s
+                    ON t.batch_id = s.batch_id AND t.dokob = s.dokob
+                WHEN MATCHED THEN
+                    UPDATE SET dil_query = :q, updated_at = GETUTCDATE(), updated_by = :usr,
+                              result_columns = :cols, result_objky_column = :okcol,
+                              result_count = :cnt, executed_at = GETUTCDATE()
+                WHEN NOT MATCHED THEN
+                    INSERT (batch_id, dokob, dil_query, updated_by,
+                            result_columns, result_objky_column, result_count, executed_at)
+                    VALUES (:batch_id, :dokob, :q, :usr, :cols, :okcol, :cnt, GETUTCDATE());
+            """), {'batch_id': batch_id, 'dokob': dokob, 'q': dil_query,
+                   'usr': current_user, 'cols': _json.dumps(columns),
+                   'okcol': objky_col, 'cnt': len(records)})
+
+            # 2) Delete old results for this batch+dokob (ensures only one result set)
+            con.execute(text("""
+                DELETE FROM dbo.migration_exclusion_query_results
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob})
+
+            # 3) Bulk-insert via pandas to_sql (multi-row INSERT, ~400 rows/statement)
+            #    ~45k rows in ~113 statements instead of 45k individual INSERTs
+            display_cols = [c for c in columns if c != objky_col]
+            objky_series = df[objky_col].astype(str).str.strip()
+            label_series = df[display_cols].astype(str).apply(
+                lambda row: ' | '.join(v for v in row if v.strip() and v != 'None'),
+                axis=1
+            ).str[:500]
+            row_data_series = df.apply(
+                lambda row: _json.dumps(
+                    {k: (str(v) if v is not None else None) for k, v in row.items()},
+                    ensure_ascii=False
+                ), axis=1
+            )
+            result_df = pd.DataFrame({
+                'batch_id': batch_id,
+                'dokob': dokob,
+                'objky': objky_series.values,
+                'label': label_series.values,
+                'row_data': row_data_series.values,
+            })
+            if len(result_df) > 0:
+                result_df.to_sql(
+                    'migration_exclusion_query_results',
+                    con, schema='dbo', if_exists='append',
+                    index=False, chunksize=400, method='multi'
+                )
+
+        # ---- Return first page ----
+        # Already-excluded keys for this batch+dokob
+        with misc_engine.begin() as con:
+            excl_rows = con.execute(text("""
+                SELECT objky FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob}).fetchall()
+        excluded_set = {r[0] for r in excl_rows}
+
+        page_records = records[:PAGE_SIZE]
+        for rec in page_records:
+            rec['_objky'] = str(rec.get(objky_col, '')).strip()
+            rec['_excluded'] = rec['_objky'] in excluded_set
+
+        excluded_total = sum(1 for r in records
+                             if str(r.get(objky_col, '')).strip() in excluded_set)
+
+        return jsonify(success=True, rows=page_records, total=len(records),
+                       page_size=PAGE_SIZE, offset=0,
+                       excluded_count=excluded_total,
+                       columns=columns, objky_column=objky_col)
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-query/<dokob>/results', methods=['GET'])
+def get_exclusion_query_results(batch_id, dokob):
+    """Return a page of previously stored query results.
+    Query params: offset (default 0), limit (default 50), objky_column."""
+    import json as _json
+    dokob = dokob.strip().upper()
+    offset = request.args.get('offset', 0, type=int)
+    limit = request.args.get('limit', 50, type=int)
+    limit = min(limit, 200)  # cap
+
+    try:
+        with misc_engine.begin() as con:
+            # Get metadata
+            meta = con.execute(text("""
+                SELECT result_columns, result_objky_column, result_count, executed_at
+                FROM dbo.migration_exclusion_query
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob}).fetchone()
+            if not meta or not meta[2]:
+                return jsonify(success=False,
+                               error='Keine gespeicherten Ergebnisse. Bitte Query zuerst ausführen.'), 404
+
+            columns = _json.loads(meta[0]) if meta[0] else []
+            objky_col = meta[1] or ''
+            total = meta[2] or 0
+
+            # Fetch page
+            rows = con.execute(text("""
+                SELECT objky, label, row_data
+                FROM dbo.migration_exclusion_query_results
+                WHERE batch_id = :batch_id AND dokob = :dokob
+                ORDER BY id
+                OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """), {'batch_id': batch_id, 'dokob': dokob,
+                   'offset': offset, 'limit': limit}).fetchall()
+
+            # Excluded keys
+            excl_rows = con.execute(text("""
+                SELECT objky FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob}).fetchall()
+            excluded_set = {r[0] for r in excl_rows}
+
+        records = []
+        for r in rows:
+            rec = _json.loads(r[2]) if r[2] else {}
+            rec['_objky'] = r[0] or ''
+            rec['_excluded'] = r[0] in excluded_set
+            records.append(rec)
+
+        return jsonify(success=True, rows=records, total=total,
+                       page_size=limit, offset=offset,
+                       excluded_count=sum(1 for r in records if r['_excluded']),
+                       columns=columns, objky_column=objky_col)
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+# ---- Exclusion Keys CRUD ----
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>', methods=['GET'])
+def list_exclusion_keys(batch_id, dokob):
+    """Return all excluded keys for a batch + dokob."""
+    dokob = dokob.strip().upper()
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT id, objky, label, excluded_at, excluded_by
+                FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id AND dokob = :dokob
+                ORDER BY objky
+            """), {'batch_id': batch_id, 'dokob': dokob}).fetchall()
+        keys = [{'id': r[0], 'objky': r[1], 'label': r[2],
+                 'excluded_at': r[3].isoformat() if r[3] else None,
+                 'excluded_by': r[4]} for r in rows]
+        return jsonify(success=True, keys=keys, total=len(keys))
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>', methods=['POST'])
+def add_exclusion_keys(batch_id, dokob):
+    """Add one or more keys to the exclusion list.
+    Body: { keys: [ {objky, label}, ... ] }"""
+    dokob = dokob.strip().upper()
+    data = request.get_json()
+    keys_list = data.get('keys', [])
+    if not keys_list:
+        return jsonify(success=False, error='keys array required'), 400
+    current_user = session.get('fullName', 'system')
+    added = 0
+    skipped = 0
+    try:
+        with misc_engine.begin() as con:
+            for item in keys_list:
+                objky = str(item.get('objky', '')).strip()
+                label = str(item.get('label', '') or '').strip()[:255]
+                if not objky:
+                    skipped += 1
+                    continue
+                # MERGE = upsert
+                con.execute(text("""
+                    MERGE dbo.migration_exclusion_keys AS t
+                    USING (SELECT :batch_id AS batch_id, :dokob AS dokob, :objky AS objky) AS s
+                        ON t.batch_id = s.batch_id AND t.dokob = s.dokob AND t.objky = s.objky
+                    WHEN MATCHED THEN
+                        UPDATE SET label = :label, excluded_at = GETUTCDATE(), excluded_by = :user
+                    WHEN NOT MATCHED THEN
+                        INSERT (batch_id, dokob, objky, label, excluded_by)
+                        VALUES (:batch_id, :dokob, :objky, :label, :user);
+                """), {'batch_id': batch_id, 'dokob': dokob,
+                       'objky': objky, 'label': label, 'user': current_user})
+                added += 1
+        return jsonify(success=True, added=added, skipped=skipped)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>/<int:key_id>', methods=['DELETE'])
+def delete_exclusion_key(batch_id, dokob, key_id):
+    """Remove a single key from the exclusion list."""
+    dokob = dokob.strip().upper()
+    try:
+        with misc_engine.begin() as con:
+            con.execute(text("""
+                DELETE FROM dbo.migration_exclusion_keys
+                WHERE id = :id AND batch_id = :batch_id AND dokob = :dokob
+            """), {'id': key_id, 'batch_id': batch_id, 'dokob': dokob})
+        return jsonify(success=True)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>/clear', methods=['DELETE'])
+def clear_exclusion_keys(batch_id, dokob):
+    """Remove ALL excluded keys for a batch + dokob."""
+    dokob = dokob.strip().upper()
+    try:
+        with misc_engine.begin() as con:
+            result = con.execute(text("""
+                DELETE FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id AND dokob = :dokob
+            """), {'batch_id': batch_id, 'dokob': dokob})
+        return jsonify(success=True, deleted=result.rowcount)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>/exclude-all-results', methods=['POST'])
+def exclude_all_query_results(batch_id, dokob):
+    """Exclude ALL query results stored in the DB (not just the displayed page).
+    Reads every objky/label from migration_exclusion_query_results and MERGEs
+    them into migration_exclusion_keys in one bulk operation."""
+    dokob = dokob.strip().upper()
+    current_user = session.get('fullName', 'system')
+    try:
+        with misc_engine.begin() as con:
+            result = con.execute(text("""
+                MERGE dbo.migration_exclusion_keys AS t
+                USING (
+                    SELECT DISTINCT qr.objky, qr.label
+                    FROM dbo.migration_exclusion_query_results qr
+                    WHERE qr.batch_id = :batch_id AND qr.dokob = :dokob
+                ) AS s
+                ON t.batch_id = :batch_id AND t.dokob = :dokob AND t.objky = s.objky
+                WHEN MATCHED THEN
+                    UPDATE SET label = s.label, excluded_at = GETUTCDATE(), excluded_by = :user
+                WHEN NOT MATCHED THEN
+                    INSERT (batch_id, dokob, objky, label, excluded_by)
+                    VALUES (:batch_id, :dokob, s.objky, s.label, :user);
+            """), {'batch_id': batch_id, 'dokob': dokob, 'user': current_user})
+            added = result.rowcount
+        return jsonify(success=True, added=added)
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+# ---- Apply Exclusions to Staging Records (Link-Level) ----
+
+@migrate_bp.route('/batch/<batch_id>/exclusions/preview', methods=['GET'])
+def preview_exclusions(batch_id):
+    """Preview the impact of applying exclusion rules on staging records.
+
+    This does NOT modify any data.  It reads source_object_links for every
+    record in the batch and checks each link against *all* exclusion keys
+    (across all DOKOB types).  Returns per-record statistics:
+
+    - records_affected:  records that have at least one excluded link
+    - links_removed:     total number of links that would be removed
+    - records_fully_excluded: records where ALL links would be removed (→ skip)
+    - records_partially_excluded: records that keep at least one link
+    """
+    import json as _json
+    try:
+        # Load all exclusion keys for this batch (all DOKOB types)
+        with misc_engine.begin() as con:
+            excl_rows = con.execute(text("""
+                SELECT dokob, objky FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+
+        # Build lookup: dokob -> set of excluded objky
+        excl_map = {}
+        for dokob_val, objky_val in excl_rows:
+            excl_map.setdefault(dokob_val, set()).add(objky_val)
+
+        if not excl_map:
+            return jsonify(success=True, records_affected=0, links_removed=0,
+                           records_fully_excluded=0, records_partially_excluded=0,
+                           detail=[])
+
+        # Load staging records that have object links
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT id, source_object_links, source_dokob, source_objky,
+                       skip_migration, excluded_object_links
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+
+        records_affected = 0
+        links_removed = 0
+        records_fully_excluded = 0
+        records_partially = 0
+        detail = []
+
+        for row in rows:
+            rec_id = row[0]
+            links_json = row[1]
+            primary_dokob = row[2]
+            primary_objky = row[3]
+
+            # Parse links
+            links = []
+            if links_json:
+                try:
+                    links = _json.loads(links_json)
+                except (ValueError, TypeError):
+                    pass
+
+            # If no links JSON, fall back to primary dokob/objky
+            if not links and primary_dokob and primary_objky:
+                links = [{'dokob': primary_dokob, 'objky': primary_objky}]
+
+            if not links:
+                continue
+
+            # Check which links would be excluded
+            remaining = []
+            removed = []
+            for lnk in links:
+                d = str(lnk.get('dokob', '')).upper()
+                o = str(lnk.get('objky', ''))
+                if d in excl_map and o in excl_map[d]:
+                    removed.append(lnk)
+                else:
+                    remaining.append(lnk)
+
+            if removed:
+                records_affected += 1
+                links_removed += len(removed)
+                fully = len(remaining) == 0
+                if fully:
+                    records_fully_excluded += 1
+                else:
+                    records_partially += 1
+                detail.append({
+                    'id': rec_id,
+                    'total_links': len(links),
+                    'removed_links': len(removed),
+                    'remaining_links': len(remaining),
+                    'fully_excluded': fully,
+                    'removed': removed,
+                    'remaining': remaining
+                })
+
+        return jsonify(success=True,
+                       records_affected=records_affected,
+                       links_removed=links_removed,
+                       records_fully_excluded=records_fully_excluded,
+                       records_partially_excluded=records_partially,
+                       total_exclusion_keys=len(excl_rows),
+                       detail=detail[:200])  # limit detail for large batches
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusions/apply', methods=['POST'])
+def apply_exclusions(batch_id):
+    """Apply exclusion rules to staging records at the LINK LEVEL.
+
+    For each staging record in the batch:
+    1. Parse source_object_links JSON
+    2. Remove links that match any exclusion key (batch+dokob+objky)
+    3. Store removed links in excluded_object_links (for undo)
+    4. Update source_object_links with remaining links
+    5. Update source_dokob/source_objky to first remaining link
+    6. Only if ALL links are excluded → set skip_migration=1
+    7. If at least one link remains → record stays active
+
+    This ensures no records are lost when only some object links are excluded.
+    """
+    import json as _json
+    current_user = session.get('fullName', 'system')
+
+    try:
+        # Load all exclusion keys for this batch (all DOKOB types)
+        with misc_engine.begin() as con:
+            excl_rows = con.execute(text("""
+                SELECT dokob, objky FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+
+        excl_map = {}
+        for dokob_val, objky_val in excl_rows:
+            excl_map.setdefault(dokob_val, set()).add(objky_val)
+
+        if not excl_map:
+            return jsonify(success=True, message='Keine Ausschlussregeln vorhanden',
+                           records_updated=0, links_removed=0, records_skipped=0)
+
+        # Load staging records
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT id, source_object_links, source_dokob, source_objky,
+                       excluded_object_links
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchall()
+
+        updates = []  # list of dicts for batch update
+
+        total_links_removed = 0
+        records_updated = 0
+        records_skipped = 0
+        records_partial = 0
+
+        for row in rows:
+            rec_id = row[0]
+            links_json = row[1]
+            primary_dokob = row[2]
+            primary_objky = row[3]
+            prev_excluded_json = row[4]
+
+            # Parse current links
+            links = []
+            if links_json:
+                try:
+                    links = _json.loads(links_json)
+                except (ValueError, TypeError):
+                    pass
+
+            # Fall back to primary if no JSON
+            if not links and primary_dokob and primary_objky:
+                links = [{'dokob': primary_dokob, 'objky': primary_objky}]
+
+            if not links:
+                continue
+
+            # Parse previously excluded links (to merge, not overwrite)
+            prev_excluded = []
+            if prev_excluded_json:
+                try:
+                    prev_excluded = _json.loads(prev_excluded_json)
+                except (ValueError, TypeError):
+                    pass
+
+            # Separate remaining vs excluded
+            remaining = []
+            newly_excluded = []
+            for lnk in links:
+                d = str(lnk.get('dokob', '')).upper()
+                o = str(lnk.get('objky', ''))
+                if d in excl_map and o in excl_map[d]:
+                    newly_excluded.append(lnk)
+                else:
+                    remaining.append(lnk)
+
+            if not newly_excluded:
+                continue  # No change for this record
+
+            total_links_removed += len(newly_excluded)
+            records_updated += 1
+
+            # Merge newly excluded with previously excluded (dedup)
+            all_excluded = prev_excluded[:]
+            existing_keys = {(str(e.get('dokob', '')).upper(), str(e.get('objky', '')))
+                            for e in all_excluded}
+            for ex in newly_excluded:
+                key = (str(ex.get('dokob', '')).upper(), str(ex.get('objky', '')))
+                if key not in existing_keys:
+                    all_excluded.append(ex)
+                    existing_keys.add(key)
+
+            # Determine new primary dokob/objky
+            new_primary_dokob = remaining[0]['dokob'] if remaining else None
+            new_primary_objky = remaining[0]['objky'] if remaining else None
+
+            # skip_migration only if ALL links excluded
+            skip = 1 if not remaining else 0
+            if skip:
+                records_skipped += 1
+            else:
+                records_partial += 1
+
+            updates.append({
+                'id': rec_id,
+                'source_object_links': _json.dumps(remaining) if remaining else '[]',
+                'excluded_object_links': _json.dumps(all_excluded),
+                'source_dokob': new_primary_dokob,
+                'source_objky': new_primary_objky,
+                'skip_migration': skip,
+            })
+
+        # Apply updates in a single transaction
+        if updates:
+            with misc_engine.begin() as con:
+                for upd in updates:
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET source_object_links = :source_object_links,
+                            excluded_object_links = :excluded_object_links,
+                            source_dokob = :source_dokob,
+                            source_objky = :source_objky,
+                            skip_migration = :skip_migration
+                        WHERE id = :id
+                    """), upd)
+
+        return jsonify(success=True,
+                       records_updated=records_updated,
+                       links_removed=total_links_removed,
+                       records_skipped=records_skipped,
+                       records_partial=records_partial,
+                       message=f'{total_links_removed} Objektverknüpfungen aus {records_updated} Records entfernt. '
+                               f'{records_skipped} Records komplett übersprungen, '
+                               f'{records_partial} Records teilweise betroffen (Links entfernt, Record bleibt aktiv).')
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusions/revert', methods=['POST'])
+def revert_exclusions(batch_id):
+    """Revert previously applied exclusion rules.
+
+    Restores excluded links from excluded_object_links back into
+    source_object_links, re-sets primary dokob/objky, and clears skip_migration
+    for records that had ALL links excluded.
+    """
+    import json as _json
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT id, source_object_links, excluded_object_links,
+                       source_dokob, source_objky, skip_migration
+                FROM dbo.migration_staging
+                WHERE batch_id = :batch_id
+                  AND excluded_object_links IS NOT NULL
+                  AND excluded_object_links != '[]'
+            """), {'batch_id': batch_id}).fetchall()
+
+        if not rows:
+            return jsonify(success=True, message='Keine Ausschlüsse zum Zurücksetzen gefunden',
+                           records_restored=0)
+
+        updates = []
+        records_restored = 0
+        links_restored = 0
+
+        for row in rows:
+            rec_id = row[0]
+            current_links_json = row[1]
+            excluded_json = row[2]
+
+            current_links = []
+            if current_links_json:
+                try:
+                    current_links = _json.loads(current_links_json)
+                except (ValueError, TypeError):
+                    pass
+
+            excluded = []
+            if excluded_json:
+                try:
+                    excluded = _json.loads(excluded_json)
+                except (ValueError, TypeError):
+                    pass
+
+            if not excluded:
+                continue
+
+            # Restore: merge back excluded into current links (dedup)
+            restored = current_links[:]
+            existing_keys = {(str(l.get('dokob', '')).upper(), str(l.get('objky', '')))
+                            for l in restored}
+            for ex in excluded:
+                key = (str(ex.get('dokob', '')).upper(), str(ex.get('objky', '')))
+                if key not in existing_keys:
+                    restored.append(ex)
+                    existing_keys.add(key)
+
+            links_restored += len(excluded)
+            records_restored += 1
+
+            # New primary = first link
+            new_primary_dokob = restored[0]['dokob'] if restored else None
+            new_primary_objky = restored[0]['objky'] if restored else None
+
+            updates.append({
+                'id': rec_id,
+                'source_object_links': _json.dumps(restored) if restored else None,
+                'excluded_object_links': None,
+                'source_dokob': new_primary_dokob,
+                'source_objky': new_primary_objky,
+                'skip_migration': 0,
+            })
+
+        if updates:
+            with misc_engine.begin() as con:
+                for upd in updates:
+                    con.execute(text("""
+                        UPDATE dbo.migration_staging
+                        SET source_object_links = :source_object_links,
+                            excluded_object_links = :excluded_object_links,
+                            source_dokob = :source_dokob,
+                            source_objky = :source_objky,
+                            skip_migration = :skip_migration
+                        WHERE id = :id
+                    """), upd)
+
+        return jsonify(success=True,
+                       records_restored=records_restored,
+                       links_restored=links_restored,
+                       message=f'{links_restored} Objektverknüpfungen in {records_restored} Records wiederhergestellt.')
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
 
 
 @migrate_bp.route('/batch/<batch_id>/object-mapping/dil-lookup', methods=['GET'])

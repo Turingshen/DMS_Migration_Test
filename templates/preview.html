@@ -1173,8 +1173,6 @@ function getErrorCategoryBadge(category) {
     return `<span class="badge ${info.class}" title="${category}">${info.desc}</span>`;
 }
 
-// formatFileSize → common.js (unified version with GB support)
-
 function formatFileSizeWithColor(bytes) {
     if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
     const sizeText = formatFileSize(bytes);
@@ -1224,8 +1222,6 @@ function formatLinkCount(record) {
     // Partial exclusion: orange
     return `<span class="text-warning font-weight-bold" title="Source: ${src}, Excluded: ${exclStr}, Target: ${tgtStr} — Teilweise ausgeschlossen">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
 }
-
-// formatDateTime → common.js
 
 function toggleSelection(id) {
     if (selectedRecords.has(id)) {
@@ -1975,8 +1971,6 @@ function filterRecords(searchTerm) {
     applyFilters();
 }
 
-// truncate → common.js
-
 function parseObjectLinks(record) {
     // Parse source_object_links JSON, fall back to single dokob/objky
     if (record.source_object_links) {
@@ -2008,8 +2002,6 @@ function formatObjky(record) {
     // Multiple: show first + badge
     return truncate(links[0].objky, 20) + ` <span class="badge badge-secondary" title="${links.map(l => l.objky).join('\n')}">+${links.length - 1}</span>`;
 }
-
-// escapeHtml → common.js
 
 function showError(message) {
     console.error(message);

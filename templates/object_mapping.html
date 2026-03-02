@@ -1338,14 +1338,10 @@
         .catch(err => alert('Fehler beim Anwenden der Zuordnungen: ' + err));
     }
 
-    // escapeHtml, formatDateTime → common.js
-
     function escapeJs(text) {
         if (!text) return '';
         return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     }
-
-    // formatDate → common.js (use formatDateTime instead)
 
     // ========================================================================
     // Linking Functions
@@ -2201,8 +2197,6 @@
             return `<tr class="excl-result-row" data-idx="${idx}" style="${excluded ? 'opacity:0.6;' : ''}">${cells}</tr>`;
         }).join('');
     }
-
-    // escapeHtml → common.js
 
     function filterExclResults() {
         const q = document.getElementById('exclResultSearch').value.toLowerCase();

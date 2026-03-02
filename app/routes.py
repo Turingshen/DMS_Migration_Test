@@ -877,10 +877,6 @@ def delete_batch(batch_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# REMOVED: POST /batch/<id>/fetch-metadata, POST /batch/<id>/apply-rules, GET /batch/<id>/fetch-metadata-stream
-# All superseded by GET /batch/<id>/refresh-data-stream
-
-
 @migrate_bp.route('/batch/<batch_id>/refresh-data-stream', methods=['GET'])
 def refresh_batch_data_stream(batch_id):
     """SSE streaming endpoint that combines:
@@ -2768,9 +2764,6 @@ def reset_failed():
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-# REMOVED: POST /retry_failed (retry_failed) — superseded by /reset_failed + /execute
 
 
 @migrate_bp.route('/batch/<batch_id>/results', methods=['GET'])
@@ -5536,8 +5529,6 @@ def api_lookup_for_mapping(batch_id):
 # DMS OBJEKTE - Routes für die Werksfilterung und DMS-Daten-Ladung aus DIL
 # ==============================================================================
 
-# REMOVED: /dms-objects route — merged into /prepare (DMS Objects tab)
-
 
 @migrate_bp.route('/api/dms/werke', methods=['GET'])
 def get_dms_werke():
@@ -5573,9 +5564,6 @@ def get_dms_werke():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
-
-
-# REMOVED: POST /api/dms/load (load_dms_objects) — superseded by /api/dms/load-stream
 
 
 @migrate_bp.route('/api/dms/load-stream')

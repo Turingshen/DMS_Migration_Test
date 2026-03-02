@@ -217,23 +217,6 @@ CREATE TABLE dbo.migration_object_mapping (
 );
 """
 
-CREATE_DOKOB_STRATEGY_TABLE = """
-CREATE TABLE dbo.migration_dokob_strategy (
-    id INT IDENTITY(1,1) PRIMARY KEY,
-    batch_id VARCHAR(50) NOT NULL,
-    dokob VARCHAR(10) NOT NULL,
-    source_method VARCHAR(20) NOT NULL DEFAULT 'none',  -- 'none','dil'
-    target_method VARCHAR(20) NOT NULL DEFAULT 'none',  -- 'none','api','excel','1:1'
-    strno_prefix_old VARCHAR(10) NULL,  -- IFLOT: old STRNO prefix (e.g. 'UTMC')
-    strno_prefix_new VARCHAR(10) NULL,  -- IFLOT: new STRNO prefix (e.g. 'US1M')
-    updated_at DATETIME2 DEFAULT GETUTCDATE(),
-    updated_by VARCHAR(100),
-    
-    CONSTRAINT uq_batch_dokob UNIQUE (batch_id, dokob),
-    INDEX idx_batch_id (batch_id)
-);
-"""
-
 # ---------------------------------------------------------------------------
 # Exclusion tables: per batch + dokob, store excluded keys (Excel-based)
 # ---------------------------------------------------------------------------
@@ -743,49 +726,6 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_wave_plan table with default waves 0-7")
         else:
             print("[DB_INIT] migration_wave_plan table already exists")
-
-        # Check and create dokob_strategy table
-        check_dokob_strat = text("""
-        SELECT COUNT(*) as cnt 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_dokob_strategy'
-        """)
-        result = con.execute(check_dokob_strat).fetchone()
-        if result[0] == 0:
-            con.execute(text(CREATE_DOKOB_STRATEGY_TABLE))
-            print("[DB_INIT] Created migration_dokob_strategy table")
-        else:
-            print("[DB_INIT] migration_dokob_strategy table already exists")
-            # Migrate from single strategy column to source_method + target_method
-            try:
-                con.execute(text("""
-                    IF COL_LENGTH('dbo.migration_dokob_strategy', 'source_method') IS NULL
-                        ALTER TABLE dbo.migration_dokob_strategy ADD source_method VARCHAR(20) NOT NULL DEFAULT 'none'
-                """))
-                con.execute(text("""
-                    IF COL_LENGTH('dbo.migration_dokob_strategy', 'target_method') IS NULL
-                        ALTER TABLE dbo.migration_dokob_strategy ADD target_method VARCHAR(20) NOT NULL DEFAULT 'none'
-                """))
-                con.execute(text("""
-                    IF COL_LENGTH('dbo.migration_dokob_strategy', 'strategy') IS NOT NULL
-                    BEGIN
-                        UPDATE dbo.migration_dokob_strategy SET source_method = 'dil', target_method = strategy
-                            WHERE strategy IN ('api','excel','1:1');
-                        UPDATE dbo.migration_dokob_strategy SET source_method = 'dil' WHERE strategy = 'dil';
-                    END
-                """))
-                # Add STRNO prefix columns for IFLOT
-                con.execute(text("""
-                    IF COL_LENGTH('dbo.migration_dokob_strategy', 'strno_prefix_old') IS NULL
-                        ALTER TABLE dbo.migration_dokob_strategy ADD strno_prefix_old VARCHAR(10) NULL
-                """))
-                con.execute(text("""
-                    IF COL_LENGTH('dbo.migration_dokob_strategy', 'strno_prefix_new') IS NULL
-                        ALTER TABLE dbo.migration_dokob_strategy ADD strno_prefix_new VARCHAR(10) NULL
-                """))
-                print("[DB_INIT] Ensured migration_dokob_strategy has source_method/target_method/strno_prefix columns")
-            except Exception as e:
-                print(f"[DB_INIT_WARN] Could not add columns to migration_dokob_strategy: {e}")
 
         # Check and create exclusion_keys table
         check_excl_keys = text("""

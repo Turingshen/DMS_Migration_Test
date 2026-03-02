@@ -296,6 +296,25 @@ EXCLUSION_DOKOB_TYPES = {
     'STPO_DOC':  'Stückliste Position',
 }
 
+# Exclusion Excel template: sheet definitions per DOKOB
+# Each sheet has a key column that maps to DRAD.OBJKY for that type
+EXCLUSION_EXCEL_SHEETS = {
+    'IFLOT':    {'key_column': 'TPLNR',  'label': 'Techn. Platz',             'example': 'ES11-100040-V3-0100-V-H621'},
+    'EQUI':     {'key_column': 'EQUNR',  'label': 'Equipment',                'example': '000000000010045678'},
+    'MPLA':     {'key_column': 'WARPL',  'label': 'Wartungsplan',             'example': '000000015456'},
+    'IMPTT':    {'key_column': 'POINT',  'label': 'Messpunkt',               'example': '000000001234'},
+    'PMPLKO':   {'key_column': 'OBJKY',  'label': 'Arbeitsplan (PLNTY+PLNNR+PLNAL)',   'example': 'A00XV123401',
+                 'extra_examples': [
+                     ('E0005458001', 'Beispiel Typ E (Einzelplan)'),
+                     ('T0006187001', 'Beispiel Typ T (Standardplan)'),
+                 ]},
+    'PMAUFK':   {'key_column': 'AUFNR',  'label': 'Instandhaltungsauftrag',   'example': '000004002345'},
+    'PMAFVC':   {'key_column': 'OBJNR',  'label': 'Auftragsvorgang (OBJNR)',  'example': 'OV109274004300000001'},
+    'PMQMEL':   {'key_column': 'QMNUM',  'label': 'Meldung (Notification)',   'example': '000300012345'},
+    'STKO_DOC': {'key_column': 'STKO.GUIDX',  'label': 'Stückliste Kopf (BOM)',    'example': '000C296592A71EDB9EF2BAE31B1D442A'},
+    'STPO_DOC': {'key_column': 'STPO.GUIDX',  'label': 'Stückliste Position',      'example': '000C296592A71EDC80A463380E9EC27E'},
+}
+
 # Default DIL queries per DOKOB type (used when no custom query is stored yet)
 DEFAULT_EXCLUSION_QUERIES = {
     'IFLOT': """SELECT DISTINCT
@@ -305,6 +324,44 @@ FROM DIL.IFLOT iflot
 JOIN DIL.DRAD  drad ON drad.OBJKY = iflot.TPLNR AND drad.DOKOB = 'IFLOT'
 WHERE iflot.IWERK = '{{IWERK}}'
 ORDER BY iflot.TPLNR""",
+
+    'PMAFVC': """SELECT IFLOS.STRNO, IFLOT.TPLNR, AFVC.OBJNR
+FROM DIL.AFVC
+INNER JOIN DIL.AUFKO ON AUFKO.AUFPL = AFVC.AUFPL
+INNER JOIN DIL.AFIH  ON AFIH.AUFNR  = AUFKO.AUFNR
+INNER JOIN DIL.ILOA  ON ILOA.ILOAN  = AFIH.ILOAN
+INNER JOIN DIL.IFLOT ON IFLOT.TPLNR = ILOA.TPLNR
+INNER JOIN DIL.IFLOS ON IFLOS.TPLNR = IFLOT.TPLNR
+INNER JOIN DIL.JEST  ON JEST.OBJNR  = IFLOT.OBJNR
+WHERE IFLOT.IWERK IN ('ES11','ES19','ES1P','ES1R','ES81')
+  AND IFLOS.ACTVS = 'X'
+  AND JEST.STAT LIKE 'I%'
+  AND (JEST.INACT = '' OR JEST.INACT IS NULL)
+  AND IFLOT.OBJNR LIKE 'IF%'
+  AND ILOA.OWNER = '6'
+  AND AFIH.AUFNR IS NOT NULL AND AFIH.AUFNR <> ''
+  AND AFVC.OBJNR LIKE 'OV%'
+  AND EXISTS (
+      SELECT 1 FROM DIL.IFLOS f
+      WHERE f.TPLNR = IFLOT.TPLNR
+        AND (
+              f.STRNO LIKE 'ES11-100040%' OR
+              f.STRNO LIKE 'ES11-430102%' OR
+              f.STRNO LIKE 'ES11-670607%' OR
+              f.STRNO LIKE 'ES11-100050%' OR
+              f.STRNO LIKE 'ES11-604003%' OR
+              f.STRNO LIKE 'ES11-652017%' OR
+              f.STRNO LIKE 'ES11-652018%' OR
+              f.STRNO LIKE 'ES11-660001%' OR
+              f.STRNO LIKE 'ES11-660000%' OR
+              f.STRNO LIKE 'ES11-170040%' OR
+              f.STRNO LIKE 'ES11-645009%' OR
+              f.STRNO LIKE 'ES11-170050%'
+          )
+  )
+GROUP BY IFLOS.STRNO, IFLOT.TPLNR, AFVC.OBJNR
+HAVING SUM(CASE WHEN JEST.STAT IN ('I0013','I0076') THEN 1 ELSE 0 END) = 0
+ORDER BY IFLOT.TPLNR""",
 }
 
 CREATE_CREDENTIALS_TABLE = """

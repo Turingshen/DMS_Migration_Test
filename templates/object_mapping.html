@@ -521,6 +521,28 @@
                 </div>
             </div>
             <div class="card-body">
+                <!-- Excel Upload/Download Section -->
+                <div style="margin-bottom:20px; padding:15px; background:#f0f8ff; border:1px solid #b8daff; border-radius:6px;">
+                    <h5 style="margin-top:0;"><i class="fas fa-file-excel" style="color:#28a745;"></i> Excel-basierte Ausschlüsse</h5>
+                    <p style="font-size:13px; color:#555; margin-bottom:12px;">
+                        Ausschlüsse per Excel-Datei verwalten. Pro Objekttyp gibt es ein Blatt mit der jeweiligen Key-Spalte (IFLOT, EQUI, MPLA, IMPTT, PMPLKO, PMAUFK, PMAFVC, PMQMEL, STKO_DOC, STPO_DOC).
+                    </p>
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                        <a href="/api/exclusion-template/download" class="btn btn-outline-success" style="font-size:13px;">
+                            <i class="fas fa-download"></i> Leeres Template
+                        </a>
+                        <a id="exclDownloadBatchBtn" class="btn btn-outline-primary" style="font-size:13px; cursor:pointer;"
+                           onclick="window.location.href='/batch/'+BATCH_ID+'/exclusion-template/download'">
+                            <i class="fas fa-download"></i> Aktuelle Keys als Excel
+                        </a>
+                        <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:250px;">
+                            <input type="file" id="exclExcelUploadInput" accept=".xlsx,.xls" style="font-size:13px;"
+                                   onchange="uploadExclExcelForBatch(this)">
+                            <span id="exclExcelUploadStatus" style="font-size:13px; color:#666;"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="alert alert-info" style="font-size:13px; line-height:1.7;">
                     Pro DOKOB-Typ eine <strong>DIL-Query</strong> konfigurieren, die alle potenziell auszuschließenden Objekte liefert.<br>
                     Über das Dropdown <strong>OBJKY-Spalte</strong> kann die Spalte gewählt werden, die als Objektschlüssel dient.
@@ -577,9 +599,12 @@
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                         <h4 style="margin:0;">Ausgeschlossene Objekte <span id="exclKeysCount" class="badge badge-warning">0</span></h4>
                         <div class="btn-group">
-                            <button class="btn btn-primary" onclick="loadExclKeys()" style="font-size:13px;">🔄 Aktualisieren</button>
+                            <button class="btn btn-primary" onclick="loadExclKeys(true)" style="font-size:13px;">🔄 Aktualisieren</button>
                             <button class="btn btn-danger" onclick="clearAllExclKeys()" style="font-size:13px;">🗑️ Alle entfernen</button>
                         </div>
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <input type="text" id="exclKeysSearch" placeholder="Suche OBJKY / Label..." style="width:300px; padding:5px 10px; font-size:13px; border:1px solid #ccc; border-radius:4px;" oninput="debounceExclKeysSearch()">
                     </div>
                     <div class="table-container" style="max-height:400px; overflow-y:auto;">
                         <table>
@@ -596,6 +621,10 @@
                                 <tr><td colspan="5" style="text-align:center; color:#999;">Noch keine Ausschlüsse</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div id="exclKeysPagination" style="display:none; margin-top:8px; text-align:center;">
+                        <span id="exclKeysShowing" style="font-size:13px; color:#666; margin-right:12px;"></span>
+                        <button class="btn btn-info" id="exclKeysLoadMoreBtn" onclick="loadMoreExclKeys()" style="font-size:13px;">Mehr laden…</button>
                     </div>
                 </div>
 
@@ -1979,8 +2008,13 @@
             exclResultTotal = 0;
             return;
         }
+        // Reset search field + objky column on type switch
+        document.getElementById('exclKeysSearch').value = '';
+        exclResultColumns = [];
+        exclObjkyColumn = '';
+        document.getElementById('exclObjkyColumn').innerHTML = '';
         loadExclQuery();
-        loadExclKeys();
+        loadExclKeys(true);
         document.getElementById('exclQueryResults').style.display = 'none';
         exclQueryResults = [];
         exclResultTotal = 0;
@@ -2252,7 +2286,7 @@
                 // Mark all currently displayed rows as excluded
                 exclQueryResults.forEach(r => { r._excluded = true; });
                 renderExclResults();
-                loadExclKeys();
+                loadExclKeys(true);
             } else {
                 statusEl.innerHTML = `<span style="color:#c00;">❌ ${data.error}</span>`;
             }
@@ -2280,7 +2314,7 @@
                     if (excludedSet.has(getRowObjky(r))) r._excluded = true;
                 });
                 renderExclResults();
-                loadExclKeys();
+                loadExclKeys(true);
             } else {
                 statusEl.innerHTML = `<span style="color:#c00;">❌ ${data.error}</span>`;
             }
@@ -2289,31 +2323,79 @@
     }
 
     /** Load the list of already excluded keys */
-    function loadExclKeys() {
+    var exclKeysData = [];       // accumulated loaded keys
+    var exclKeysTotal = 0;       // total keys count
+    var exclKeysOffset = 0;      // current offset
+    var exclKeysSearchTimer = null;
+    const EXCL_KEYS_PAGE_SIZE = 50;
+
+    function debounceExclKeysSearch() {
+        clearTimeout(exclKeysSearchTimer);
+        exclKeysSearchTimer = setTimeout(() => loadExclKeys(true), 300);
+    }
+
+    function loadExclKeys(isFirstPage) {
         const dokob = getExclDokob();
         const body = document.getElementById('exclKeysBody');
         const countEl = document.getElementById('exclKeysCount');
+        const search = (document.getElementById('exclKeysSearch').value || '').trim();
+        if (isFirstPage) {
+            exclKeysData = [];
+            exclKeysOffset = 0;
+        }
         body.innerHTML = '<tr><td colspan="5" class="loading"><div class="spinner"></div> Lade...</td></tr>';
-        fetch(`/batch/${BATCH_ID}/exclusion-keys/${dokob}`)
+        const params = new URLSearchParams({offset: exclKeysOffset, limit: EXCL_KEYS_PAGE_SIZE});
+        if (search) params.set('search', search);
+        fetch(`/batch/${BATCH_ID}/exclusion-keys/${dokob}?${params}`)
             .then(r => r.json())
             .then(data => {
                 const keys = data.keys || [];
-                countEl.textContent = keys.length;
-                if (keys.length === 0) {
-                    body.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#999;">Keine Ausschlüsse</td></tr>';
-                    return;
+                exclKeysTotal = data.total || 0;
+                if (isFirstPage) {
+                    exclKeysData = keys;
+                } else {
+                    exclKeysData = exclKeysData.concat(keys);
                 }
-                body.innerHTML = keys.map(k => `<tr>
-                    <td>${escapeHtml(k.objky)}</td>
-                    <td>${escapeHtml(k.label || '')}</td>
-                    <td>${k.excluded_at ? new Date(k.excluded_at).toLocaleString('de-DE') : ''}</td>
-                    <td>${escapeHtml(k.excluded_by || '')}</td>
-                    <td><button class="btn btn-danger" style="font-size:12px; padding:4px 10px;" onclick="removeExclKey(${k.id})">🗑️</button></td>
-                </tr>`).join('');
+                exclKeysOffset = exclKeysData.length;
+                countEl.textContent = exclKeysTotal;
+                renderExclKeys();
+                updateExclKeysPagination();
             })
             .catch(() => {
                 body.innerHTML = '<tr><td colspan="5" style="color:#c00;">Fehler beim Laden</td></tr>';
             });
+    }
+
+    function loadMoreExclKeys() {
+        loadExclKeys(false);
+    }
+
+    function renderExclKeys() {
+        const body = document.getElementById('exclKeysBody');
+        if (exclKeysData.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#999;">Keine Ausschlüsse</td></tr>';
+            return;
+        }
+        body.innerHTML = exclKeysData.map(k => `<tr>
+            <td>${escapeHtml(k.objky)}</td>
+            <td>${escapeHtml(k.label || '')}</td>
+            <td>${k.excluded_at ? new Date(k.excluded_at).toLocaleString('de-DE') : ''}</td>
+            <td>${escapeHtml(k.excluded_by || '')}</td>
+            <td><button class="btn btn-danger" style="font-size:12px; padding:4px 10px;" onclick="removeExclKey(${k.id})">🗑️</button></td>
+        </tr>`).join('');
+    }
+
+    function updateExclKeysPagination() {
+        const pagDiv = document.getElementById('exclKeysPagination');
+        const showingEl = document.getElementById('exclKeysShowing');
+        const moreBtn = document.getElementById('exclKeysLoadMoreBtn');
+        if (exclKeysTotal > 0) {
+            pagDiv.style.display = 'block';
+            showingEl.textContent = `Angezeigt: ${exclKeysData.length} von ${exclKeysTotal}`;
+            moreBtn.style.display = (exclKeysData.length < exclKeysTotal) ? '' : 'none';
+        } else {
+            pagDiv.style.display = 'none';
+        }
     }
 
     /** Remove a single excluded key */
@@ -2323,9 +2405,9 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    loadExclKeys();
+                    loadExclKeys(true);
                     // If query results are visible, refresh the excluded flags
-                    if (exclQueryResults.length > 0) executeExclQuery();
+                    if (exclQueryResults.length > 0) loadStoredResults(true);
                 }
             });
     }
@@ -2338,8 +2420,8 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    loadExclKeys();
-                    if (exclQueryResults.length > 0) executeExclQuery();
+                    loadExclKeys(true);
+                    if (exclQueryResults.length > 0) loadStoredResults(true);
                 }
             });
     }
@@ -2405,6 +2487,38 @@
             });
     }
 
+    /** Upload exclusion Excel for batch (object_mapping page) */
+    function uploadExclExcelForBatch(input) {
+        if (!input.files || !input.files[0]) return;
+        const statusEl = document.getElementById('exclExcelUploadStatus');
+        statusEl.innerHTML = '⏳ Wird hochgeladen...';
+
+        const formData = new FormData();
+        formData.append('file', input.files[0]);
+
+        fetch(`/batch/${BATCH_ID}/exclusion-template/upload`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    let parts = [];
+                    if (data.per_dokob) {
+                        for (const [dk, cnt] of Object.entries(data.per_dokob)) {
+                            parts.push(`${dk}: ${cnt}`);
+                        }
+                    }
+                    statusEl.innerHTML = `<span style="color:#28a745;">✅ ${data.total_keys} Keys importiert (${parts.join(', ')})</span>`;
+                    // Refresh the exclusion keys list if a DOKOB is selected
+                    const selDokob = document.getElementById('exclDokob').value;
+                    if (selDokob) loadExclKeys(true);
+                } else {
+                    statusEl.innerHTML = `<span style="color:#c00;">❌ ${data.error || 'Fehler'}</span>`;
+                }
+            })
+            .catch(err => {
+                statusEl.innerHTML = `<span style="color:#c00;">❌ ${err}</span>`;
+            });
+    }
+
     /** Apply exclusions to staging records (link-level) */
     function applyExclusions() {
         if (!confirm('Ausschlüsse auf Batch-Records anwenden?\n\n' +
@@ -2424,7 +2538,28 @@
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                statusEl.innerHTML = `<span style="color:green;">✅ ${data.message}</span>`;
+                let msg = `<span style="color:green;">✅ ${data.message}</span>`;
+                // Show debug info when 0 matches (helps diagnose why no records matched)
+                if (data.debug && data.records_updated === 0) {
+                    let dbg = data.debug;
+                    let lines = ['<br><details style="margin-top:8px;"><summary style="cursor:pointer;color:#888;">🔍 Debug-Info (warum 0 Treffer?)</summary>',
+                        '<pre style="font-size:11px;background:#f5f5f5;padding:8px;border-radius:4px;max-height:300px;overflow:auto;">'];
+                    lines.push(`Staging Records gescannt: ${dbg.staging_records_scanned}`);
+                    lines.push(`Staging Links gescannt: ${dbg.staging_links_scanned}`);
+                    lines.push('');
+                    lines.push('=== Exclusion Keys (gespeicherte Ausschlüsse) ===');
+                    for (let [dk, info] of Object.entries(dbg.exclusion_keys || {})) {
+                        lines.push(`  ${dk}: ${info.count} Keys, Beispiele: ${info.samples.join(', ')}`);
+                    }
+                    lines.push('');
+                    lines.push('=== Staging Links (Objektverknüpfungen in Records) ===');
+                    for (let [dk, info] of Object.entries(dbg.staging_links_by_dokob || {})) {
+                        lines.push(`  ${dk}: ${info.count} Links, Beispiele: ${info.samples.join(', ')}`);
+                    }
+                    lines.push('</pre></details>');
+                    msg += lines.join('\n');
+                }
+                statusEl.innerHTML = msg;
                 document.getElementById('exclPreviewPanel').style.display = 'none';
             } else {
                 statusEl.innerHTML = `<span style="color:#c00;">❌ ${data.error}</span>`;

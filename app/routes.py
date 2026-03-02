@@ -2237,22 +2237,23 @@ def get_batch_preview_stats(batch_id):
         query = text("""
             SELECT 
                 COUNT(*) as total_records,
-                SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
-                SUM(CASE WHEN execution_status = 'pending' THEN 1 ELSE 0 END) as pending_count,
-                SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                SUM(CASE WHEN execution_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-                -- Ablage counts (KPRO vs DB)
-                SUM(CASE WHEN ISNULL(ablage, 'KPRO') = 'KPRO' THEN 1 ELSE 0 END) as kpro_count,
-                SUM(CASE WHEN ablage = 'DB' THEN 1 ELSE 0 END) as db_count,
-                -- Buckets count only non-success records for runtime estimation
-                SUM(CASE WHEN execution_status != 'success' AND (file_size_bytes IS NULL OR file_size_bytes = 0) THEN 1 ELSE 0 END) as unknown_size_count,
-                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
-                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 1048576 AND file_size_bytes <= 10485760 THEN 1 ELSE 0 END) as small_count,
-                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 10485760 AND file_size_bytes <= 52428800 THEN 1 ELSE 0 END) as medium_count,
-                SUM(CASE WHEN execution_status != 'success' AND file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
-                -- Total size also only for non-success records
-                SUM(CAST(CASE WHEN execution_status != 'success' AND file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
-                MAX(CASE WHEN execution_status != 'success' THEN file_size_bytes ELSE 0 END) as max_file_size
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 1 THEN 1 ELSE 0 END) as skipped_count,
+                SUM(CASE WHEN execution_status = 'success' AND ISNULL(skip_migration, 0) = 0 THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN execution_status = 'pending' AND ISNULL(skip_migration, 0) = 0 THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN execution_status = 'failed' AND ISNULL(skip_migration, 0) = 0 THEN 1 ELSE 0 END) as failed_count,
+                SUM(CASE WHEN execution_status = 'partial' AND ISNULL(skip_migration, 0) = 0 THEN 1 ELSE 0 END) as partial_count,
+                -- Ablage counts (only non-skipped)
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND ISNULL(ablage, 'KPRO') = 'KPRO' THEN 1 ELSE 0 END) as kpro_count,
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND ablage = 'DB' THEN 1 ELSE 0 END) as db_count,
+                -- Buckets count only non-skipped, non-success records for runtime estimation
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND (file_size_bytes IS NULL OR file_size_bytes = 0) THEN 1 ELSE 0 END) as unknown_size_count,
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 0 AND file_size_bytes <= 1048576 THEN 1 ELSE 0 END) as tiny_count,
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 1048576 AND file_size_bytes <= 10485760 THEN 1 ELSE 0 END) as small_count,
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 10485760 AND file_size_bytes <= 52428800 THEN 1 ELSE 0 END) as medium_count,
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
+                -- Total size only for non-skipped, non-success records
+                SUM(CAST(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
+                MAX(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' THEN file_size_bytes ELSE 0 END) as max_file_size
             FROM dbo.migration_staging
             WHERE batch_id = :batch_id
         """)
@@ -2263,22 +2264,40 @@ def get_batch_preview_stats(batch_id):
         if not result or result.total_records == 0:
             return jsonify({'success': False, 'error': 'Batch not found or empty'}), 404
         
+        # Count exclusion keys for this batch (for reference)
+        excluded_keys_count = 0
+        try:
+            with misc_engine.begin() as con:
+                excl_row = con.execute(text("""
+                    SELECT COUNT(*) as cnt FROM dbo.migration_exclusion_keys
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id}).fetchone()
+                excluded_keys_count = excl_row.cnt if excl_row else 0
+        except Exception:
+            pass  # Table may not exist yet
+        
+        skipped_count = result.skipped_count or 0
+        total_active = (result.total_records or 0) - skipped_count
+        
         # Use actual pending count from DB (records with execution_status = 'pending')
         actual_pending_count = result.pending_count or 0
-        # Also calculate "to execute" count (all non-success = pending + failed + partial)
-        to_execute_count = (result.total_records or 0) - (result.success_count or 0)
+        # Also calculate "to execute" count (all non-success, non-skipped)
+        to_execute_count = total_active - (result.success_count or 0)
         
         return jsonify({
             'success': True,
             'stats': {
                 'total': result.total_records or 0,
+                'total_active': total_active,
+                'skipped': skipped_count,
                 'success': result.success_count or 0,
                 'pending': actual_pending_count,  # Real pending from DB
-                'to_execute': to_execute_count,   # All non-success (for runtime estimation)
+                'to_execute': to_execute_count,   # All non-success, non-skipped
                 'failed': result.failed_count or 0,
                 'partial': result.partial_count or 0,
                 'kpro': result.kpro_count or 0,
                 'db': result.db_count or 0,
+                'excluded_keys': excluded_keys_count,
                 'buckets': {
                     'tiny': result.tiny_count or 0,
                     'small': result.small_count or 0,
@@ -4821,6 +4840,314 @@ def set_dokob_strategy(batch_id):
 
 
 # ==============================================================================
+# EXCLUSION – Excel Template Download / Upload
+# ==============================================================================
+
+@migrate_bp.route('/api/exclusion-template/download', methods=['GET'])
+def download_exclusion_template():
+    """Download an empty Excel exclusion template.
+    One sheet per DOKOB type with the key column and an example row."""
+    from flask import send_file
+    from app.db_schema import EXCLUSION_EXCEL_SHEETS
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    # Remove default sheet
+    wb.remove(wb.active)
+
+    header_font = Font(bold=True, color='FFFFFF', size=11)
+    header_fill = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
+    example_font = Font(italic=True, color='888888')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    for dokob, sheet_def in EXCLUSION_EXCEL_SHEETS.items():
+        ws = wb.create_sheet(title=dokob)
+        key_col = sheet_def['key_column']
+        label = sheet_def['label']
+        example = sheet_def.get('example', '')
+
+        # Header row
+        ws.cell(row=1, column=1, value=key_col).font = header_font
+        ws.cell(row=1, column=1).fill = header_fill
+        ws.cell(row=1, column=1).alignment = Alignment(horizontal='center')
+        ws.cell(row=1, column=1).border = thin_border
+
+        # Description column
+        ws.cell(row=1, column=2, value='Beschreibung (optional)').font = header_font
+        ws.cell(row=1, column=2).fill = header_fill
+        ws.cell(row=1, column=2).alignment = Alignment(horizontal='center')
+        ws.cell(row=1, column=2).border = thin_border
+
+        # Example row
+        ws.cell(row=2, column=1, value=example).font = example_font
+        ws.cell(row=2, column=2, value=f'Beispiel {label}').font = example_font
+
+        # Additional example rows (e.g. PMPLKO has multiple format types)
+        extra_examples = sheet_def.get('extra_examples', [])
+        for i, (ex_val, ex_desc) in enumerate(extra_examples, start=3):
+            ws.cell(row=i, column=1, value=ex_val).font = example_font
+            ws.cell(row=i, column=2, value=ex_desc).font = example_font
+
+        # Auto-width
+        all_examples = [example] + [e[0] for e in extra_examples]
+        ws.column_dimensions['A'].width = max(len(key_col), max(len(e) for e in all_examples)) + 4
+        ws.column_dimensions['B'].width = 30
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name='exclusion_template.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+@migrate_bp.route('/api/exclusion-template/upload', methods=['POST'])
+def upload_exclusion_template():
+    """Upload a filled Excel exclusion template.
+    Parses all sheets matching DOKOB names and returns the exclusion keys per type.
+    Also stores the parsed keys in a temp JSON file so the batch creation SSE stream
+    can read them (SSE uses GET, so we can't POST data with it)."""
+    from app.db_schema import EXCLUSION_EXCEL_SHEETS
+
+    if 'file' not in request.files:
+        return jsonify(success=False, error='Keine Datei hochgeladen'), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify(success=False, error='Keine Datei ausgewählt'), 400
+
+    try:
+        # Read all sheets
+        xl = pd.ExcelFile(file, engine='openpyxl')
+        result = {}
+        total_keys = 0
+
+        for dokob, sheet_def in EXCLUSION_EXCEL_SHEETS.items():
+            if dokob not in xl.sheet_names:
+                continue
+            df = xl.parse(dokob)
+            key_col = sheet_def['key_column']
+
+            # Find the key column (case-insensitive)
+            col_map = {c.strip().upper(): c for c in df.columns}
+            actual_col = col_map.get(key_col.upper())
+            if not actual_col:
+                continue
+
+            # Extract non-empty keys, skip example row (italic font not detectable in pandas)
+            keys = df[actual_col].dropna().astype(str).str.strip()
+            keys = keys[keys != '']
+            # Remove the example value(s)
+            example_val = sheet_def.get('example', '')
+            if example_val:
+                keys = keys[keys != example_val]
+            for ex_val, _ in sheet_def.get('extra_examples', []):
+                keys = keys[keys != ex_val]
+
+            keys_list = keys.unique().tolist()
+
+            # Also check for description column
+            desc_col = col_map.get('BESCHREIBUNG (OPTIONAL)') or col_map.get('BESCHREIBUNG')
+            descriptions = {}
+            if desc_col:
+                for _, row in df.iterrows():
+                    k = str(row.get(actual_col, '')).strip()
+                    d = str(row.get(desc_col, '')).strip()
+                    if k and k != example_val and d and d != f'Beispiel {sheet_def["label"]}':
+                        descriptions[k] = d
+
+            if keys_list:
+                result[dokob] = {
+                    'key_column': key_col,
+                    'keys': keys_list,
+                    'count': len(keys_list),
+                    'descriptions': descriptions
+                }
+                total_keys += len(keys_list)
+
+        # Store exclusion keys in temp file for batch creation SSE stream
+        os.makedirs('userdata', exist_ok=True)
+        temp_path = os.path.join('userdata', 'pending_exclusion_keys.json')
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False)
+
+        return jsonify(success=True, exclusions=result, total_keys=total_keys,
+                       sheets_found=list(result.keys()))
+
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+@migrate_bp.route('/api/exclusion-template/clear', methods=['POST'])
+def clear_pending_exclusion_keys():
+    """Clear the pending exclusion keys (e.g. when user removes upload)."""
+    temp_path = os.path.join('userdata', 'pending_exclusion_keys.json')
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+    return jsonify(success=True)
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-template/download', methods=['GET'])
+def download_batch_exclusion_keys(batch_id):
+    """Download the current exclusion keys of a batch as Excel file.
+    Each DOKOB type gets its own sheet with all stored keys."""
+    from flask import send_file
+    from app.db_schema import EXCLUSION_EXCEL_SHEETS
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    try:
+        with misc_engine.begin() as con:
+            rows = con.execute(text("""
+                SELECT dokob, objky, label
+                FROM dbo.migration_exclusion_keys
+                WHERE batch_id = :batch_id
+                ORDER BY dokob, objky
+            """), {'batch_id': batch_id}).fetchall()
+
+        # Group by DOKOB
+        keys_by_dokob = {}
+        for dokob_val, objky_val, label_val in rows:
+            d = str(dokob_val).strip().upper()
+            keys_by_dokob.setdefault(d, []).append((str(objky_val).strip(), str(label_val or '').strip()))
+
+        wb = Workbook()
+        wb.remove(wb.active)
+
+        header_font = Font(bold=True, color='FFFFFF', size=11)
+        header_fill = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+
+        for dokob, sheet_def in EXCLUSION_EXCEL_SHEETS.items():
+            ws = wb.create_sheet(title=dokob)
+            key_col = sheet_def['key_column']
+
+            # Header
+            ws.cell(row=1, column=1, value=key_col).font = header_font
+            ws.cell(row=1, column=1).fill = header_fill
+            ws.cell(row=1, column=1).border = thin_border
+            ws.cell(row=1, column=2, value='Beschreibung').font = header_font
+            ws.cell(row=1, column=2).fill = header_fill
+            ws.cell(row=1, column=2).border = thin_border
+
+            # Data
+            entries = keys_by_dokob.get(dokob, [])
+            for idx, (objky, label) in enumerate(entries, start=2):
+                ws.cell(row=idx, column=1, value=objky)
+                ws.cell(row=idx, column=2, value=label)
+
+            ws.column_dimensions['A'].width = 35
+            ws.column_dimensions['B'].width = 40
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=f'exclusion_keys_{batch_id}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/exclusion-template/upload', methods=['POST'])
+def upload_batch_exclusion_keys(batch_id):
+    """Upload exclusion keys Excel for a specific batch.
+    Parses the file and persists all keys into migration_exclusion_keys table."""
+    from app.db_schema import EXCLUSION_EXCEL_SHEETS
+
+    if 'file' not in request.files:
+        return jsonify(success=False, error='Keine Datei hochgeladen'), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify(success=False, error='Keine Datei ausgewählt'), 400
+
+    current_user = session.get('fullName', 'system')
+
+    try:
+        xl = pd.ExcelFile(file, engine='openpyxl')
+        total_inserted = 0
+        result_per_dokob = {}
+
+        with misc_engine.begin() as con:
+            for dokob, sheet_def in EXCLUSION_EXCEL_SHEETS.items():
+                if dokob not in xl.sheet_names:
+                    continue
+                df = xl.parse(dokob)
+                key_col = sheet_def['key_column']
+
+                col_map = {c.strip().upper(): c for c in df.columns}
+                actual_col = col_map.get(key_col.upper())
+                if not actual_col:
+                    continue
+
+                keys = df[actual_col].dropna().astype(str).str.strip()
+                keys = keys[keys != '']
+                example_val = sheet_def.get('example', '')
+                if example_val:
+                    keys = keys[keys != example_val]
+                for ex_val, _ in sheet_def.get('extra_examples', []):
+                    keys = keys[keys != ex_val]
+
+                # Check for description column
+                desc_col = col_map.get('BESCHREIBUNG (OPTIONAL)') or col_map.get('BESCHREIBUNG')
+
+                unique_keys = keys.unique().tolist()
+                if not unique_keys:
+                    continue
+
+                # Clear existing keys for this batch+dokob
+                con.execute(text("""
+                    DELETE FROM dbo.migration_exclusion_keys
+                    WHERE batch_id = :batch_id AND dokob = :dokob
+                """), {'batch_id': batch_id, 'dokob': dokob})
+
+                # Insert new keys
+                for k in unique_keys:
+                    label_val = None
+                    if desc_col:
+                        match_rows = df[df[actual_col].astype(str).str.strip() == k]
+                        if not match_rows.empty:
+                            label_val = str(match_rows.iloc[0].get(desc_col, '') or '').strip() or None
+                            if label_val and label_val.startswith('Beispiel '):
+                                label_val = None
+
+                    con.execute(text("""
+                        INSERT INTO dbo.migration_exclusion_keys (batch_id, dokob, objky, label, excluded_by)
+                        VALUES (:batch_id, :dokob, :objky, :label, :user)
+                    """), {'batch_id': batch_id, 'dokob': dokob, 'objky': k,
+                           'label': label_val, 'user': current_user})
+
+                total_inserted += len(unique_keys)
+                result_per_dokob[dokob] = len(unique_keys)
+
+        return jsonify(success=True, total_keys=total_inserted,
+                       per_dokob=result_per_dokob,
+                       message=f'{total_inserted} Ausschluss-Keys aus {len(result_per_dokob)} Objekttypen importiert.')
+    except Exception as e:
+        import traceback
+        return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
+
+
+# ==============================================================================
 # OBJECT MAPPING – Exclusion Query & Exclusion Keys
 # ==============================================================================
 
@@ -4952,12 +5279,36 @@ def execute_exclusion_query(batch_id, dokob):
         columns = list(df.columns)
 
         # Determine which column to use as objky
+        # DOKOB-specific preferences: what DRAD.OBJKY maps to for each type
+        DOKOB_OBJKY_PREFERENCES = {
+            'IFLOT':    ['tplnr', 'objky'],
+            'IFLOS':    ['tplnr', 'objky'],
+            'EQUI':     ['equnr', 'objky'],
+            'MPLA':     ['warpl', 'objky'],
+            'IMPTT':    ['point', 'objky'],
+            'PMPLKO':   ['plnnr', 'objky'],
+            'PMAUFK':   ['aufnr', 'objky'],
+            'PMAFVC':   ['objnr', 'objky'],
+            'PMQMEL':   ['qmnum', 'qmnum', 'objky'],
+            'STKO_DOC': ['stlnr', 'objky'],
+            'STPO_DOC': ['stlnr', 'objky'],
+        }
         objky_col = (data.get('objky_column') or '').strip().lower()
+        # If explicitly provided column is not in result, ignore it and auto-detect
+        if objky_col and objky_col not in columns:
+            objky_col = ''
         if not objky_col:
-            for candidate in ['objky', 'tplnr', 'equnr']:
+            # 1. Try DOKOB-specific preferred column first
+            for candidate in DOKOB_OBJKY_PREFERENCES.get(dokob, []):
                 if candidate in columns:
                     objky_col = candidate
                     break
+            # 2. Fall back to generic candidates
+            if not objky_col:
+                for candidate in ['objky', 'tplnr', 'equnr', 'aufnr', 'objnr']:
+                    if candidate in columns:
+                        objky_col = candidate
+                        break
             if not objky_col:
                 objky_col = columns[0] if columns else ''
 
@@ -5074,28 +5425,24 @@ def get_exclusion_query_results(batch_id, dokob):
             objky_col = meta[1] or ''
             total = meta[2] or 0
 
-            # Fetch page
+            # Fetch page with excluded flag via LEFT JOIN (avoids loading all keys)
             rows = con.execute(text("""
-                SELECT objky, label, row_data
-                FROM dbo.migration_exclusion_query_results
-                WHERE batch_id = :batch_id AND dokob = :dokob
-                ORDER BY id
+                SELECT qr.objky, qr.label, qr.row_data,
+                       CASE WHEN ek.objky IS NOT NULL THEN 1 ELSE 0 END AS is_excluded
+                FROM dbo.migration_exclusion_query_results qr
+                LEFT JOIN dbo.migration_exclusion_keys ek
+                    ON ek.batch_id = qr.batch_id AND ek.dokob = qr.dokob AND ek.objky = qr.objky
+                WHERE qr.batch_id = :batch_id AND qr.dokob = :dokob
+                ORDER BY qr.id
                 OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """), {'batch_id': batch_id, 'dokob': dokob,
                    'offset': offset, 'limit': limit}).fetchall()
-
-            # Excluded keys
-            excl_rows = con.execute(text("""
-                SELECT objky FROM dbo.migration_exclusion_keys
-                WHERE batch_id = :batch_id AND dokob = :dokob
-            """), {'batch_id': batch_id, 'dokob': dokob}).fetchall()
-            excluded_set = {r[0] for r in excl_rows}
 
         records = []
         for r in rows:
             rec = _json.loads(r[2]) if r[2] else {}
             rec['_objky'] = r[0] or ''
-            rec['_excluded'] = r[0] in excluded_set
+            rec['_excluded'] = bool(r[3])
             records.append(rec)
 
         return jsonify(success=True, rows=records, total=total,
@@ -5111,20 +5458,37 @@ def get_exclusion_query_results(batch_id, dokob):
 
 @migrate_bp.route('/batch/<batch_id>/exclusion-keys/<dokob>', methods=['GET'])
 def list_exclusion_keys(batch_id, dokob):
-    """Return all excluded keys for a batch + dokob."""
+    """Return excluded keys for a batch + dokob (paginated).
+    Query params: offset (default 0), limit (default 50), search (optional)."""
     dokob = dokob.strip().upper()
+    offset = request.args.get('offset', 0, type=int)
+    limit = request.args.get('limit', 50, type=int)
+    limit = min(limit, 200)  # cap
+    search = (request.args.get('search') or '').strip()
     try:
         with misc_engine.begin() as con:
-            rows = con.execute(text("""
+            params = {'batch_id': batch_id, 'dokob': dokob,
+                      'offset': offset, 'limit': limit}
+            where = "WHERE batch_id = :batch_id AND dokob = :dokob"
+            if search:
+                where += " AND (objky LIKE :q OR label LIKE :q)"
+                params['q'] = f'%{search}%'
+
+            total = con.execute(text(f"""
+                SELECT COUNT(*) FROM dbo.migration_exclusion_keys {where}
+            """), params).scalar()
+
+            rows = con.execute(text(f"""
                 SELECT id, objky, label, excluded_at, excluded_by
-                FROM dbo.migration_exclusion_keys
-                WHERE batch_id = :batch_id AND dokob = :dokob
+                FROM dbo.migration_exclusion_keys {where}
                 ORDER BY objky
-            """), {'batch_id': batch_id, 'dokob': dokob}).fetchall()
+                OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """), params).fetchall()
         keys = [{'id': r[0], 'objky': r[1], 'label': r[2],
                  'excluded_at': r[3].isoformat() if r[3] else None,
                  'excluded_by': r[4]} for r in rows]
-        return jsonify(success=True, keys=keys, total=len(keys))
+        return jsonify(success=True, keys=keys, total=total,
+                       page_size=limit, offset=offset)
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
 
@@ -5209,9 +5573,12 @@ def exclude_all_query_results(batch_id, dokob):
             result = con.execute(text("""
                 MERGE dbo.migration_exclusion_keys AS t
                 USING (
-                    SELECT DISTINCT qr.objky, qr.label
-                    FROM dbo.migration_exclusion_query_results qr
-                    WHERE qr.batch_id = :batch_id AND qr.dokob = :dokob
+                    SELECT objky, label FROM (
+                        SELECT qr.objky, qr.label,
+                               ROW_NUMBER() OVER (PARTITION BY qr.objky ORDER BY qr.id) AS rn
+                        FROM dbo.migration_exclusion_query_results qr
+                        WHERE qr.batch_id = :batch_id AND qr.dokob = :dokob
+                    ) x WHERE x.rn = 1
                 ) AS s
                 ON t.batch_id = :batch_id AND t.dokob = :dokob AND t.objky = s.objky
                 WHEN MATCHED THEN
@@ -5366,11 +5733,17 @@ def apply_exclusions(batch_id):
 
         excl_map = {}
         for dokob_val, objky_val in excl_rows:
-            excl_map.setdefault(dokob_val, set()).add(objky_val)
+            excl_map.setdefault(str(dokob_val).strip().upper(), set()).add(str(objky_val).strip())
 
         if not excl_map:
             return jsonify(success=True, message='Keine Ausschlussregeln vorhanden',
                            records_updated=0, links_removed=0, records_skipped=0)
+
+        # Build debug info: sample exclusion keys per DOKOB
+        debug_excl_samples = {}
+        for dk, vals in excl_map.items():
+            sample = sorted(list(vals))[:5]
+            debug_excl_samples[dk] = {'count': len(vals), 'samples': sample}
 
         # Load staging records
         with misc_engine.begin() as con:
@@ -5387,6 +5760,10 @@ def apply_exclusions(batch_id):
         records_updated = 0
         records_skipped = 0
         records_partial = 0
+        total_links_scanned = 0
+
+        # Debug: collect staging link samples per DOKOB
+        debug_staging_samples = {}
 
         for row in rows:
             rec_id = row[0]
@@ -5410,6 +5787,18 @@ def apply_exclusions(batch_id):
             if not links:
                 continue
 
+            total_links_scanned += len(links)
+
+            # Collect samples for debug
+            for lnk in links:
+                d = str(lnk.get('dokob', '')).strip().upper()
+                o = str(lnk.get('objky', '')).strip()
+                if d not in debug_staging_samples:
+                    debug_staging_samples[d] = {'count': 0, 'samples': []}
+                debug_staging_samples[d]['count'] += 1
+                if len(debug_staging_samples[d]['samples']) < 5:
+                    debug_staging_samples[d]['samples'].append(o)
+
             # Parse previously excluded links (to merge, not overwrite)
             prev_excluded = []
             if prev_excluded_json:
@@ -5422,8 +5811,8 @@ def apply_exclusions(batch_id):
             remaining = []
             newly_excluded = []
             for lnk in links:
-                d = str(lnk.get('dokob', '')).upper()
-                o = str(lnk.get('objky', ''))
+                d = str(lnk.get('dokob', '')).strip().upper()
+                o = str(lnk.get('objky', '')).strip()
                 if d in excl_map and o in excl_map[d]:
                     newly_excluded.append(lnk)
                 else:
@@ -5437,10 +5826,10 @@ def apply_exclusions(batch_id):
 
             # Merge newly excluded with previously excluded (dedup)
             all_excluded = prev_excluded[:]
-            existing_keys = {(str(e.get('dokob', '')).upper(), str(e.get('objky', '')))
+            existing_keys = {(str(e.get('dokob', '')).strip().upper(), str(e.get('objky', '')).strip())
                             for e in all_excluded}
             for ex in newly_excluded:
-                key = (str(ex.get('dokob', '')).upper(), str(ex.get('objky', '')))
+                key = (str(ex.get('dokob', '')).strip().upper(), str(ex.get('objky', '')).strip())
                 if key not in existing_keys:
                     all_excluded.append(ex)
                     existing_keys.add(key)
@@ -5486,7 +5875,16 @@ def apply_exclusions(batch_id):
                        records_partial=records_partial,
                        message=f'{total_links_removed} Objektverknüpfungen aus {records_updated} Records entfernt. '
                                f'{records_skipped} Records komplett übersprungen, '
-                               f'{records_partial} Records teilweise betroffen (Links entfernt, Record bleibt aktiv).')
+                               f'{records_partial} Records teilweise betroffen (Links entfernt, Record bleibt aktiv).',
+                       debug={
+                           'exclusion_keys': debug_excl_samples,
+                           'staging_records_scanned': len(rows),
+                           'staging_links_scanned': total_links_scanned,
+                           'staging_links_by_dokob': {
+                               dk: {'count': v['count'], 'samples': v['samples']}
+                               for dk, v in debug_staging_samples.items()
+                           }
+                       })
     except Exception as e:
         import traceback
         return jsonify(success=False, error=str(e), detail=traceback.format_exc()), 500
@@ -6615,9 +7013,13 @@ def create_dms_migration_batch_stream():
         description: Batch description
         notes: Additional notes
         dokob_filter: Comma-separated list of DOKOB values to include (optional, empty = all)
+    
+    Exclusion keys are read from userdata/pending_exclusion_keys.json (uploaded via
+    /api/exclusion-template/upload) and applied before staging insertion.
     """
     import sqlite3
     from datetime import datetime
+    from app.db_schema import EXCLUSION_EXCEL_SHEETS
     
     wave = request.args.get('wave')
     description = request.args.get('description', '')
@@ -6636,6 +7038,21 @@ def create_dms_migration_batch_stream():
     
     # Parse DOKOB filter
     dokob_list = [d.strip() for d in dokob_filter.split(',') if d.strip()] if dokob_filter else []
+    
+    # Load pending exclusion keys (if uploaded via Excel)
+    exclusion_keys = {}  # {dokob_upper: set of objky strings}
+    excl_descriptions = {}  # {dokob: {objky: label}}
+    temp_excl_path = os.path.join('userdata', 'pending_exclusion_keys.json')
+    if os.path.exists(temp_excl_path):
+        try:
+            with open(temp_excl_path, 'r', encoding='utf-8') as f:
+                excl_data = json.load(f)
+            for dokob, info in excl_data.items():
+                dk = dokob.strip().upper()
+                exclusion_keys[dk] = set(str(k).strip() for k in info.get('keys', []))
+                excl_descriptions[dk] = info.get('descriptions', {})
+        except Exception as e:
+            print(f"[DMS Batch] Warning: Could not load exclusion keys: {e}")
     
     def generate():
         try:
@@ -6659,6 +7076,40 @@ def create_dms_migration_batch_stream():
             
             total_records = len(dms_df)
             yield f"data: {json.dumps({'type': 'status', 'message': f'{total_records:,} Datensätze geladen ({filter_info})', 'percent': 10})}\n\n"
+            
+            # ── Apply exclusion keys (filter out matching DOKOB+OBJKY) ──
+            excluded_count = 0
+            excluded_per_dokob = {}
+            if exclusion_keys:
+                before_count = len(dms_df)
+                
+                # Build mask: keep rows where (dokob, objky) is NOT in exclusion keys
+                def is_excluded(row):
+                    dk = str(row.get('dokob', '')).strip().upper()
+                    ok = str(row.get('objky', '')).strip()
+                    return dk in exclusion_keys and ok in exclusion_keys[dk]
+                
+                excl_mask = dms_df.apply(is_excluded, axis=1)
+                
+                # Count excluded per DOKOB
+                if excl_mask.any():
+                    excluded_rows = dms_df[excl_mask]
+                    for dk in excluded_rows['dokob'].unique():
+                        dk_upper = str(dk).strip().upper()
+                        cnt = int((excluded_rows['dokob'] == dk).sum())
+                        excluded_per_dokob[dk_upper] = cnt
+                
+                dms_df = dms_df[~excl_mask].reset_index(drop=True)
+                excluded_count = before_count - len(dms_df)
+                
+                if excluded_count > 0:
+                    excl_detail = ', '.join(f'{k}: {v}' for k, v in excluded_per_dokob.items())
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'{excluded_count:,} Objekte durch Ausschluss-Liste entfernt ({excl_detail})', 'percent': 12})}\n\n"
+                    print(f"[DMS Batch] Exclusion applied: {excluded_count} records removed ({excl_detail})")
+            
+            if len(dms_df) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Keine Objekte nach Anwendung der Ausschluss-Liste übrig'})}\n\n"
+                return
             
             # Generate batch ID
             batch_id = f"DMS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -6755,10 +7206,38 @@ def create_dms_migration_batch_stream():
                     if_exists='append',
                     index=False
                 )
+                
+                # Persist exclusion keys to DB (for later reference / re-download)
+                if exclusion_keys:
+                    for dk, keys_set in exclusion_keys.items():
+                        descs = excl_descriptions.get(dk, {})
+                        for objky_val in keys_set:
+                            try:
+                                con.execute(text("""
+                                    INSERT INTO dbo.migration_exclusion_keys
+                                        (batch_id, dokob, objky, label, excluded_by)
+                                    VALUES (:batch_id, :dokob, :objky, :label, :user)
+                                """), {
+                                    'batch_id': batch_id,
+                                    'dokob': dk,
+                                    'objky': objky_val,
+                                    'label': descs.get(objky_val),
+                                    'user': current_user
+                                })
+                            except Exception:
+                                pass  # Skip duplicate keys silently
             
-            print(f"[DMS Batch] Created batch {batch_id} with {len(staging_df)} records")
+            # Clean up temp exclusion file
+            if os.path.exists(temp_excl_path):
+                try:
+                    os.remove(temp_excl_path)
+                except Exception:
+                    pass
             
-            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'batch_id': batch_id, 'record_count': len(staging_df), 'wave': wave, 'percent': 100})}\n\n"
+            print(f"[DMS Batch] Created batch {batch_id} with {len(staging_df)} records"
+                  f" (excluded: {excluded_count})")
+            
+            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'batch_id': batch_id, 'record_count': len(staging_df), 'excluded_count': excluded_count, 'excluded_per_dokob': excluded_per_dokob, 'wave': wave, 'percent': 100})}\n\n"
             
         except Exception as e:
             import traceback

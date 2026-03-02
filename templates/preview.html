@@ -56,6 +56,10 @@
                             <small class="text-muted">Total</small>
                             <h5 id="statRecords">-</h5>
                         </div>
+                        <div class="col" style="max-width:90px;">
+                            <small class="text-muted" title="Durch Ausschlüsse entfernte Objekte"><i class="fas fa-ban" style="color:#999;"></i> Excl.</small>
+                            <h5 id="statExcluded" style="color:#999;">-</h5>
+                        </div>
                         <div class="col-md-1">
                             <small class="text-muted"><i class="fas fa-cloud" style="color:#17a2b8;"></i> KPRO</small>
                             <h5 id="statKpro" class="text-info">-</h5>
@@ -794,15 +798,27 @@ function loadRecords(errorCategoryFilter = '') {
 function updateBatchStatisticsFromServer(stats, totalRecords) {
     const buckets = stats.buckets;
     const pendingCount = stats.pending || 0;  // Real pending from DB
-    const toExecuteCount = stats.to_execute || pendingCount;  // All non-success
+    const toExecuteCount = stats.to_execute || pendingCount;  // All non-success, non-skipped
     const successCount = stats.success || 0;
     const failedCount = stats.failed || 0;
     const partialCount = stats.partial || 0;
     const totalCount = stats.total || 0;
+    const totalActive = stats.total_active || totalCount;
+    const skippedCount = stats.skipped || 0;
     const kproCount = stats.kpro || 0;
     const dbCount = stats.db || 0;
     
-    // Update KPRO/DB badges
+    // Update excluded (skipped records) / KPRO / DB badges
+    const keysCount = stats.excluded_keys || 0;
+    if (skippedCount > 0) {
+        document.getElementById('statExcluded').innerHTML = `${skippedCount.toLocaleString()}`
+            + (keysCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">${keysCount.toLocaleString()} Keys</small>` : '');
+    } else if (keysCount > 0) {
+        // Keys exist but no records skipped yet (not applied or partial exclusions)
+        document.getElementById('statExcluded').innerHTML = `<small class="text-muted">${keysCount.toLocaleString()} Keys</small>`;
+    } else {
+        document.getElementById('statExcluded').textContent = '-';
+    }
     document.getElementById('statKpro').textContent = kproCount.toLocaleString();
     document.getElementById('statDb').textContent = dbCount.toLocaleString();
     
@@ -827,10 +843,12 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     const maxWorkers = {{ max_workers | default(2) }};
     const totalRuntime = totalSerialRuntime / maxWorkers;
     
-    // Update statistics display (use toExecuteCount for "remaining work")
+    // Update statistics display (use toExecuteCount for "remaining work", totalActive excludes skipped)
     document.getElementById('statRecords').innerHTML = toExecuteCount > 0 
         ? `${toExecuteCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
-        : `<span class="text-success">✓ Alle ${stats.total} erledigt</span>`;
+            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">von ${totalCount.toLocaleString()} gesamt</small>` : '')
+        : `<span class="text-success">✓ Alle ${totalActive.toLocaleString()} erledigt</span>`
+            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">von ${totalCount.toLocaleString()} gesamt</small>` : '');
     document.getElementById('statTotalSize').textContent = formatFileSize(stats.total_size_bytes);
     document.getElementById('statTiny').textContent = buckets.tiny || 0;
     document.getElementById('statSmall').textContent = buckets.small || 0;

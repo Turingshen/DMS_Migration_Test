@@ -359,6 +359,51 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
         </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!--  Objekt-Ausschluss per Excel                           -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex align-items-center">
+                    <h6 class="mb-0"><i class="fas fa-ban"></i> Objekt-Ausschlüsse (optional)</h6>
+                    <span class="badge badge-secondary ml-2" id="exclusionBadge" style="display:none;">0 Keys</span>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-3">
+                        Lade eine Excel-Datei hoch, um bestimmte Objekte vom Batch auszuschließen.
+                        Pro Objekttyp gibt es ein eigenes Blatt mit der jeweiligen Key-Spalte
+                        (IFLOT, EQUI, MPLA, IMPTT, PMPLKO, PMAUFK, PMAFVC, PMQMEL, STKO_DOC, STPO_DOC).
+                    </p>
+                    <div class="row align-items-center">
+                        <div class="col-md-4">
+                            <a href="/api/exclusion-template/download" class="btn btn-outline-success btn-sm">
+                                <i class="fas fa-download"></i> Leeres Template herunterladen
+                            </a>
+                        </div>
+                        <div class="col-md-5">
+                            <div class="custom-file">
+                                <input type="file" class="custom-file-input" id="exclusionFileInput"
+                                       accept=".xlsx,.xls" onchange="uploadExclusionFile(this)">
+                                <label class="custom-file-label" for="exclusionFileInput" id="exclusionFileLabel">
+                                    Ausschluss-Excel wählen...
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-3 text-right">
+                            <button class="btn btn-outline-danger btn-sm" id="btnClearExclusion"
+                                    onclick="clearExclusionUpload()" style="display:none;">
+                                <i class="fas fa-times"></i> Entfernen
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Exclusion upload result -->
+                    <div id="exclusionResult" class="mt-3" style="display:none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Result Section (after batch creation) -->
     <div id="resultSection" class="mt-4" style="display:none;">
         <div class="alert" id="resultAlert"></div>
@@ -454,6 +499,7 @@ let selectedDokobs = [];
 let dokobCounts = {};
 let queryEdited = false;
 let programmaticChange = false;
+let pendingExclusions = null;  // Uploaded exclusion data (from Excel)
 
 const regionMap = {
     'EU': ['DE','FR','IT','ES','PT','NL','BE','AT','CH','PL','CZ','HU','RO','BG','SK','SI','HR','RS','GR','FI','SE','NO','DK','IE','GB','UK','LU','EE','LV','LT'],
@@ -650,12 +696,23 @@ function showBatchResult(success, data) {
     if (success) {
         alertEl.className = 'alert alert-success';
         alertEl.innerHTML = '<i class="fas fa-check-circle"></i> <strong>Migration Batch erfolgreich erstellt!</strong>';
+        let exclInfo = '';
+        if (data.excluded_count > 0) {
+            let exclParts = [];
+            if (data.excluded_per_dokob) {
+                for (const [dk, cnt] of Object.entries(data.excluded_per_dokob)) {
+                    exclParts.push(`${dk}: ${cnt.toLocaleString()}`);
+                }
+            }
+            exclInfo = `<tr><th>Ausgeschlossen:</th><td><span class="badge badge-warning">${data.excluded_count.toLocaleString()} Objekte</span> <small class="text-muted">(${exclParts.join(', ')})</small></td></tr>`;
+        }
         details.innerHTML = `
             <div class="card">
                 <div class="card-body">
                     <table class="table table-sm">
                         <tr><th>Batch ID:</th><td><code>${data.batch_id}</code></td></tr>
                         <tr><th>Datensätze:</th><td>${(data.record_count || 0).toLocaleString()}</td></tr>
+                        ${exclInfo}
                     </table>
                     <div class="mt-3">
                         <a href="/preview?batch_id=${data.batch_id}" class="btn btn-primary btn-lg">
@@ -1013,6 +1070,73 @@ function updateModalDokobSummary() {
         html += `<span class="badge ${cls}" style="padding:5px 8px;font-size:12px;cursor:pointer;user-select:none;" onclick="toggleDokobCard('${dokob}')">${icon} ${dokob} (${count.toLocaleString()})</span>`;
     });
     container.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  EXCLUSION: Excel Upload / Download
+// ═══════════════════════════════════════════════════════════════════
+function uploadExclusionFile(input) {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    document.getElementById('exclusionFileLabel').textContent = file.name;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const resultDiv = document.getElementById('exclusionResult');
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<div class="text-muted"><i class="fas fa-spinner fa-spin"></i> Datei wird verarbeitet...</div>';
+
+    fetch('/api/exclusion-template/upload', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                pendingExclusions = data.exclusions;
+                const totalKeys = data.total_keys || 0;
+                const sheets = data.sheets_found || [];
+
+                // Build summary
+                let html = '<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>' +
+                    totalKeys.toLocaleString() + ' Ausschluss-Keys</strong> aus ' +
+                    sheets.length + ' Objekttypen geladen:<br>';
+                html += '<div class="d-flex flex-wrap mt-2" style="gap:6px;">';
+                for (const dokob of sheets) {
+                    const info = data.exclusions[dokob];
+                    const cnt = info ? info.count : 0;
+                    html += '<span class="badge badge-danger" style="padding:4px 8px;">' +
+                        '<i class="fas fa-ban"></i> ' + dokob + ': ' + cnt.toLocaleString() + '</span>';
+                }
+                html += '</div></div>';
+                resultDiv.innerHTML = html;
+
+                // Show badge and clear button
+                document.getElementById('exclusionBadge').textContent = totalKeys.toLocaleString() + ' Keys';
+                document.getElementById('exclusionBadge').style.display = 'inline';
+                document.getElementById('btnClearExclusion').style.display = 'inline-block';
+            } else {
+                resultDiv.innerHTML = '<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle"></i> ' +
+                    (data.error || 'Unbekannter Fehler') + '</div>';
+                pendingExclusions = null;
+            }
+        })
+        .catch(err => {
+            resultDiv.innerHTML = '<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle"></i> ' +
+                String(err) + '</div>';
+            pendingExclusions = null;
+        });
+}
+
+function clearExclusionUpload() {
+    pendingExclusions = null;
+    document.getElementById('exclusionFileInput').value = '';
+    document.getElementById('exclusionFileLabel').textContent = 'Ausschluss-Excel wählen...';
+    document.getElementById('exclusionResult').style.display = 'none';
+    document.getElementById('exclusionResult').innerHTML = '';
+    document.getElementById('exclusionBadge').style.display = 'none';
+    document.getElementById('btnClearExclusion').style.display = 'none';
+
+    // Clear server-side temp file
+    fetch('/api/exclusion-template/clear', { method: 'POST' }).catch(() => {});
 }
 </script>
 {% endblock %}

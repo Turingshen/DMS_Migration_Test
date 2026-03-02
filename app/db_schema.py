@@ -235,22 +235,8 @@ CREATE TABLE dbo.migration_dokob_strategy (
 """
 
 # ---------------------------------------------------------------------------
-# Exclusion tables: per batch + dokob, store DIL query and excluded keys
+# Exclusion tables: per batch + dokob, store excluded keys (Excel-based)
 # ---------------------------------------------------------------------------
-
-CREATE_EXCLUSION_QUERY_TABLE = """
-CREATE TABLE dbo.migration_exclusion_query (
-    id INT IDENTITY(1,1) PRIMARY KEY,
-    batch_id VARCHAR(50) NOT NULL,
-    dokob VARCHAR(10) NOT NULL,              -- Object type: IFLOT, EQUI, PMQMEL, ...
-    dil_query NVARCHAR(MAX) NOT NULL,        -- The SELECT statement run against DIL (HANA)
-    updated_at DATETIME2 DEFAULT GETUTCDATE(),
-    updated_by VARCHAR(100),
-    
-    CONSTRAINT uq_excl_query_batch_dokob UNIQUE (batch_id, dokob),
-    INDEX idx_excl_query_batch (batch_id)
-);
-"""
 
 CREATE_EXCLUSION_KEYS_TABLE = """
 CREATE TABLE dbo.migration_exclusion_keys (
@@ -267,34 +253,6 @@ CREATE TABLE dbo.migration_exclusion_keys (
     INDEX idx_excl_keys_batch_dokob (batch_id, dokob)
 );
 """
-
-CREATE_EXCLUSION_QUERY_RESULTS_TABLE = """
-CREATE TABLE dbo.migration_exclusion_query_results (
-    id INT IDENTITY(1,1) PRIMARY KEY,
-    batch_id VARCHAR(50) NOT NULL,
-    dokob VARCHAR(10) NOT NULL,
-    objky NVARCHAR(255) NOT NULL,             -- Mapped object key from selected column
-    label NVARCHAR(500),                      -- Human-readable label from other columns
-    row_data NVARCHAR(MAX),                   -- Full row as JSON for display
-    queried_at DATETIME2 DEFAULT GETUTCDATE(),
-    INDEX idx_exqr_batch_dokob (batch_id, dokob),
-    INDEX idx_exqr_objky (batch_id, dokob, objky)
-);
-"""
-
-# All supported DOKOB types with labels
-EXCLUSION_DOKOB_TYPES = {
-    'EQUI':      'Equipment',
-    'IFLOT':     'Techn. Platz',
-    'MPLA':      'Wartungsplan',
-    'IMPTT':     'Messpunkt',
-    'PMPLKO':    'Arbeitsplan (Tasklist)',
-    'PMAUFK':    'Instandhaltungsauftrag',
-    'PMAFVC':    'Auftragsvorgang',
-    'PMQMEL':    'Meldung (Notification)',
-    'STKO_DOC':  'Stückliste Kopf (BOM)',
-    'STPO_DOC':  'Stückliste Position',
-}
 
 # Exclusion Excel template: sheet definitions per DOKOB
 # Each sheet has a key column that maps to DRAD.OBJKY for that type
@@ -313,55 +271,6 @@ EXCLUSION_EXCEL_SHEETS = {
     'PMQMEL':   {'key_column': 'QMNUM',  'label': 'Meldung (Notification)',   'example': '000300012345'},
     'STKO_DOC': {'key_column': 'STKO.GUIDX',  'label': 'Stückliste Kopf (BOM)',    'example': '000C296592A71EDB9EF2BAE31B1D442A'},
     'STPO_DOC': {'key_column': 'STPO.GUIDX',  'label': 'Stückliste Position',      'example': '000C296592A71EDC80A463380E9EC27E'},
-}
-
-# Default DIL queries per DOKOB type (used when no custom query is stored yet)
-DEFAULT_EXCLUSION_QUERIES = {
-    'IFLOT': """SELECT DISTINCT
-    iflot.TPLNR  AS objky,
-    iflot.PLTXT  AS label
-FROM DIL.IFLOT iflot
-JOIN DIL.DRAD  drad ON drad.OBJKY = iflot.TPLNR AND drad.DOKOB = 'IFLOT'
-WHERE iflot.IWERK = '{{IWERK}}'
-ORDER BY iflot.TPLNR""",
-
-    'PMAFVC': """SELECT IFLOS.STRNO, IFLOT.TPLNR, AFVC.OBJNR
-FROM DIL.AFVC
-INNER JOIN DIL.AUFKO ON AUFKO.AUFPL = AFVC.AUFPL
-INNER JOIN DIL.AFIH  ON AFIH.AUFNR  = AUFKO.AUFNR
-INNER JOIN DIL.ILOA  ON ILOA.ILOAN  = AFIH.ILOAN
-INNER JOIN DIL.IFLOT ON IFLOT.TPLNR = ILOA.TPLNR
-INNER JOIN DIL.IFLOS ON IFLOS.TPLNR = IFLOT.TPLNR
-INNER JOIN DIL.JEST  ON JEST.OBJNR  = IFLOT.OBJNR
-WHERE IFLOT.IWERK IN ('ES11','ES19','ES1P','ES1R','ES81')
-  AND IFLOS.ACTVS = 'X'
-  AND JEST.STAT LIKE 'I%'
-  AND (JEST.INACT = '' OR JEST.INACT IS NULL)
-  AND IFLOT.OBJNR LIKE 'IF%'
-  AND ILOA.OWNER = '6'
-  AND AFIH.AUFNR IS NOT NULL AND AFIH.AUFNR <> ''
-  AND AFVC.OBJNR LIKE 'OV%'
-  AND EXISTS (
-      SELECT 1 FROM DIL.IFLOS f
-      WHERE f.TPLNR = IFLOT.TPLNR
-        AND (
-              f.STRNO LIKE 'ES11-100040%' OR
-              f.STRNO LIKE 'ES11-430102%' OR
-              f.STRNO LIKE 'ES11-670607%' OR
-              f.STRNO LIKE 'ES11-100050%' OR
-              f.STRNO LIKE 'ES11-604003%' OR
-              f.STRNO LIKE 'ES11-652017%' OR
-              f.STRNO LIKE 'ES11-652018%' OR
-              f.STRNO LIKE 'ES11-660001%' OR
-              f.STRNO LIKE 'ES11-660000%' OR
-              f.STRNO LIKE 'ES11-170040%' OR
-              f.STRNO LIKE 'ES11-645009%' OR
-              f.STRNO LIKE 'ES11-170050%'
-          )
-  )
-GROUP BY IFLOS.STRNO, IFLOT.TPLNR, AFVC.OBJNR
-HAVING SUM(CASE WHEN JEST.STAT IN ('I0013','I0076') THEN 1 ELSE 0 END) = 0
-ORDER BY IFLOT.TPLNR""",
 }
 
 CREATE_CREDENTIALS_TABLE = """
@@ -878,19 +787,6 @@ def init_staging_tables(engine):
             except Exception as e:
                 print(f"[DB_INIT_WARN] Could not add columns to migration_dokob_strategy: {e}")
 
-        # Check and create exclusion_query table
-        check_excl_query = text("""
-        SELECT COUNT(*) as cnt 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query'
-        """)
-        result = con.execute(check_excl_query).fetchone()
-        if result[0] == 0:
-            con.execute(text(CREATE_EXCLUSION_QUERY_TABLE))
-            print("[DB_INIT] Created migration_exclusion_query table")
-        else:
-            print("[DB_INIT] migration_exclusion_query table already exists")
-
         # Check and create exclusion_keys table
         check_excl_keys = text("""
         SELECT COUNT(*) as cnt 
@@ -903,19 +799,6 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_exclusion_keys table")
         else:
             print("[DB_INIT] migration_exclusion_keys table already exists")
-
-        # Check and create exclusion_query_results table
-        check_excl_results = text("""
-        SELECT COUNT(*) as cnt 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query_results'
-        """)
-        result = con.execute(check_excl_results).fetchone()
-        if result[0] == 0:
-            con.execute(text(CREATE_EXCLUSION_QUERY_RESULTS_TABLE))
-            print("[DB_INIT] Created migration_exclusion_query_results table")
-        else:
-            print("[DB_INIT] migration_exclusion_query_results table already exists")
 
         # Check and create migration_user_settings table
         check_settings = text("""
@@ -937,22 +820,3 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_user_settings table")
         else:
             print("[DB_INIT] migration_user_settings table already exists")
-
-        # Add result metadata columns to exclusion_query table (if missing)
-        try:
-            for col_def in [
-                ("result_columns", "NVARCHAR(MAX)"),
-                ("result_objky_column", "VARCHAR(100)"),
-                ("result_count", "INT"),
-                ("executed_at", "DATETIME2"),
-            ]:
-                col_check = con.execute(text("""
-                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'migration_exclusion_query'
-                          AND COLUMN_NAME = :col
-                """), {'col': col_def[0]}).fetchone()
-                if col_check[0] == 0:
-                    con.execute(text(f"ALTER TABLE dbo.migration_exclusion_query ADD {col_def[0]} {col_def[1]}"))
-                    print(f"[DB_INIT] Added column {col_def[0]} to migration_exclusion_query")
-        except Exception as e:
-            print(f"[DB_INIT_WARN] Could not add result columns to migration_exclusion_query: {e}")

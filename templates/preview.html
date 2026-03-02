@@ -809,13 +809,8 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     const dbCount = stats.db || 0;
     
     // Update excluded (skipped records) / KPRO / DB badges
-    const keysCount = stats.excluded_keys || 0;
     if (skippedCount > 0) {
-        document.getElementById('statExcluded').innerHTML = `${skippedCount.toLocaleString()}`
-            + (keysCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">${keysCount.toLocaleString()} Keys</small>` : '');
-    } else if (keysCount > 0) {
-        // Keys exist but no records skipped yet (not applied or partial exclusions)
-        document.getElementById('statExcluded').innerHTML = `<small class="text-muted">${keysCount.toLocaleString()} Keys</small>`;
+        document.getElementById('statExcluded').textContent = skippedCount.toLocaleString();
     } else {
         document.getElementById('statExcluded').textContent = '-';
     }

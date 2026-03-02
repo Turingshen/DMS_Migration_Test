@@ -241,13 +241,30 @@
                     <div id="dmsResultsRow" class="mt-3" style="display:none;">
                         <div class="card">
                             <div class="card-header bg-light py-2">
-                                <i class="fas fa-table"></i> Vorschau (max. 100 Einträge)
-                                <span class="float-right text-muted" id="tableInfo"></span>
+                                <div class="d-flex align-items-center justify-content-between flex-wrap">
+                                    <div>
+                                        <i class="fas fa-table"></i> Ergebnisse
+                                        <span class="text-muted ml-2" id="tableInfo"></span>
+                                    </div>
+                                    <div class="d-flex align-items-center" style="gap: 8px;">
+                                        <div class="btn-group btn-group-sm" id="ablageFilterGroup">
+                                            <button type="button" class="btn btn-outline-secondary active" data-ablage="ALL" onclick="setAblageFilter('ALL')">Alle</button>
+                                            <button type="button" class="btn btn-outline-info" data-ablage="KPRO" onclick="setAblageFilter('KPRO')"><i class="fas fa-cloud"></i> KPRO</button>
+                                            <button type="button" class="btn btn-outline-warning" data-ablage="DB" onclick="setAblageFilter('DB')"><i class="fas fa-database"></i> DB</button>
+                                        </div>
+                                        <input type="text" id="tableSearchInput" class="form-control form-control-sm"
+                                               style="width: 200px;" placeholder="Suchen (DOKNR, OBJKY, DOKOB...)"
+                                               oninput="applyTableFilter()">
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('tableSearchInput').value=''; applyTableFilter();" title="Filter zurücksetzen">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                             <div class="card-body p-0" style="max-height:300px; overflow-y:auto;">
                                 <table class="table table-sm table-striped table-hover mb-0" id="resultsTable">
                                     <thead class="thead-dark">
-                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th></tr>
+                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th><th>Ablage</th></tr>
                                     </thead>
                                     <tbody id="resultsBody"></tbody>
                                 </table>
@@ -882,14 +899,60 @@ function showDmsProgress(pct, label) {
 }
 function hideDmsProgress() { $('#dmsProgressRow').hide(); }
 
+let currentAblageFilter = 'ALL';
+
 function displayResults(data) {
-    const tbody = $('#resultsBody'); tbody.empty();
-    if (!data || !data.length) { tbody.append('<tr><td colspan="7" class="text-center">Keine Daten</td></tr>'); return; }
-    data.slice(0, 100).forEach(r => {
-        tbody.append(`<tr><td>${r.dokar||''}</td><td><code>${r.doknr||''}</code></td><td>${r.dokvr||''}</td><td>${r.doktl||''}</td><td><span class="badge badge-info">${r.dokob||''}</span></td><td><small>${r.objky||''}</small></td><td><span class="badge badge-secondary">${r.werk||''}</span></td></tr>`);
-    });
-    $('#tableInfo').html(`Vorschau: 100 von ${data.length.toLocaleString()}`);
+    loadedData = data;
+    currentAblageFilter = 'ALL';
+    $('#ablageFilterGroup button').removeClass('active');
+    $('#ablageFilterGroup button[data-ablage="ALL"]').addClass('active');
+    if (document.getElementById('tableSearchInput')) document.getElementById('tableSearchInput').value = '';
+    applyTableFilter();
     $('#dmsResultsRow').show();
+}
+
+function setAblageFilter(filter) {
+    currentAblageFilter = filter;
+    $('#ablageFilterGroup button').removeClass('active');
+    $(`#ablageFilterGroup button[data-ablage="${filter}"]`).addClass('active');
+    applyTableFilter();
+}
+
+function applyTableFilter() {
+    const searchTerm = ($('#tableSearchInput').val() || '').toLowerCase().trim();
+    const tbody = $('#resultsBody'); tbody.empty();
+    if (!loadedData || !loadedData.length) {
+        tbody.append('<tr><td colspan="8" class="text-center">Keine Daten</td></tr>');
+        $('#tableInfo').html('');
+        return;
+    }
+    let filtered = loadedData;
+    if (currentAblageFilter !== 'ALL') {
+        filtered = filtered.filter(r => (r.ablage || 'KPRO') === currentAblageFilter);
+    }
+    if (searchTerm) {
+        filtered = filtered.filter(r =>
+            (r.dokar||'').toLowerCase().includes(searchTerm) ||
+            (r.doknr||'').toLowerCase().includes(searchTerm) ||
+            (r.dokvr||'').toLowerCase().includes(searchTerm) ||
+            (r.doktl||'').toLowerCase().includes(searchTerm) ||
+            (r.dokob||'').toLowerCase().includes(searchTerm) ||
+            (r.objky||'').toLowerCase().includes(searchTerm) ||
+            (r.werk||'').toLowerCase().includes(searchTerm) ||
+            (r.ablage||'').toLowerCase().includes(searchTerm)
+        );
+    }
+    filtered.slice(0, 200).forEach(r => {
+        const ablage = r.ablage || 'KPRO';
+        const ablageClass = ablage === 'KPRO' ? 'badge-info' : 'badge-warning';
+        const ablageIcon = ablage === 'KPRO' ? '<i class="fas fa-cloud"></i>' : '<i class="fas fa-database"></i>';
+        tbody.append(`<tr><td>${r.dokar||''}</td><td><code>${r.doknr||''}</code></td><td>${r.dokvr||''}</td><td>${r.doktl||''}</td><td><span class="badge badge-info">${r.dokob||''}</span></td><td><small>${r.objky||''}</small></td><td><span class="badge badge-secondary">${r.werk||''}</span></td><td><span class="badge ${ablageClass}">${ablageIcon} ${ablage}</span></td></tr>`);
+    });
+    const showing = Math.min(200, filtered.length);
+    const filterInfo = (searchTerm || currentAblageFilter !== 'ALL')
+        ? ` (gefiltert aus ${loadedData.length.toLocaleString()})`
+        : '';
+    $('#tableInfo').html(`${showing.toLocaleString()} von ${filtered.length.toLocaleString()} Einträgen${filterInfo}`);
 }
 
 function renderDokobBadges(stats, excluded, noFile) {
@@ -989,7 +1052,7 @@ function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
 
 function exportData() {
     if (!loadedData.length) { alert('Keine Daten zum Exportieren!'); return; }
-    const headers = ['dokar','doknr','dokvr','doktl','dokob','objky','werk'];
+    const headers = ['dokar','doknr','dokvr','doktl','dokob','objky','werk','ablage'];
     let csv = headers.map(h => h.toUpperCase()).join(';') + '\n';
     loadedData.forEach(r => { csv += headers.map(h => r[h]||'').join(';') + '\n'; });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

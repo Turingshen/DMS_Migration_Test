@@ -1173,12 +1173,7 @@ function getErrorCategoryBadge(category) {
     return `<span class="badge ${info.class}" title="${category}">${info.desc}</span>`;
 }
 
-function formatFileSize(bytes) {
-    if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
+// formatFileSize → common.js (unified version with GB support)
 
 function formatFileSizeWithColor(bytes) {
     if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
@@ -1230,17 +1225,7 @@ function formatLinkCount(record) {
     return `<span class="text-warning font-weight-bold" title="Source: ${src}, Excluded: ${exclStr}, Target: ${tgtStr} — Teilweise ausgeschlossen">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
 }
 
-function formatDateTime(dateStr) {
-    if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    return date.toLocaleString('de-DE', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-}
+// formatDateTime → common.js
 
 function toggleSelection(id) {
     if (selectedRecords.has(id)) {
@@ -1990,10 +1975,7 @@ function filterRecords(searchTerm) {
     applyFilters();
 }
 
-function truncate(str, len) {
-    if (!str) return '-';
-    return str.length > len ? str.substring(0, len) + '...' : str;
-}
+// truncate → common.js
 
 function parseObjectLinks(record) {
     // Parse source_object_links JSON, fall back to single dokob/objky
@@ -2027,12 +2009,7 @@ function formatObjky(record) {
     return truncate(links[0].objky, 20) + ` <span class="badge badge-secondary" title="${links.map(l => l.objky).join('\n')}">+${links.length - 1}</span>`;
 }
 
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+// escapeHtml → common.js
 
 function showError(message) {
     console.error(message);

@@ -1019,7 +1019,7 @@
                 <td style="color: #4CAF50; font-weight: bold;">→</td>
                 <td><code>${escapeHtml(m.target_dokob)}</code></td>
                 <td><code>${escapeHtml(m.target_objky)}</code></td>
-                <td>${formatDate(m.created_at)}</td>
+                <td>${formatDateTime(m.created_at)}</td>
                 <td>
                     <button class="action-btn edit" onclick="editMapping(${m.id}, '${escapeJs(m.source_dokob)}', '${escapeJs(m.source_objky)}', '${escapeJs(m.target_dokob)}', '${escapeJs(m.target_objky)}')">Edit</button>
                     <button class="action-btn delete" onclick="deleteMapping(${m.id})">Delete</button>
@@ -1338,30 +1338,14 @@
         .catch(err => alert('Fehler beim Anwenden der Zuordnungen: ' + err));
     }
 
-    // Utility functions
-    function escapeHtml(text) {
-        if (!text) return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
+    // escapeHtml, formatDateTime → common.js
+
     function escapeJs(text) {
         if (!text) return '';
         return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     }
 
-    function formatDate(dateStr) {
-        if (!dateStr) return '-';
-        const date = new Date(dateStr);
-        return date.toLocaleDateString('de-DE', { 
-            year: 'numeric', 
-            month: '2-digit', 
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
+    // formatDate → common.js (use formatDateTime instead)
 
     // ========================================================================
     // Linking Functions
@@ -2218,11 +2202,7 @@
         }).join('');
     }
 
-    function escapeHtml(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
-    }
+    // escapeHtml → common.js
 
     function filterExclResults() {
         const q = document.getElementById('exclResultSearch').value.toLowerCase();

@@ -218,6 +218,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Current pacing setting from server
 let currentPacingSeconds = 0;
+let currentMaxWorkers = 2;
 
 // Load error categories for filter dropdown
 function loadErrorCategories() {
@@ -245,6 +246,7 @@ function loadPacingSettings() {
         .then(response => response.json())
         .then(data => {
             currentPacingSeconds = data.pacing_seconds || 0;
+            currentMaxWorkers = data.max_workers || 2;
             updatePacingDisplay();
         })
         .catch(error => {
@@ -439,7 +441,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     const totalSizeMB = (stats.total_size_bytes || 0) / (1024 * 1024);
     const totalSerialRuntime = (totalSizeMB * transferRate) + (toExecuteCount * containerOverhead);
     
-    const maxWorkers = {{ max_workers | default(2) }};
+    const maxWorkers = currentMaxWorkers;
     const totalRuntime = totalSerialRuntime / maxWorkers;
     
     // Update statistics display (use toExecuteCount for "remaining work", totalActive excludes skipped)
@@ -542,7 +544,7 @@ function updateBatchStatistics(records) {
     const totalSerialRuntime = (totalSizeMB * transferRate) + (containerCount * containerOverhead);
     
     // Divide by number of workers for parallel execution
-    const maxWorkers = {{ max_workers | default(2) }};
+    const maxWorkers = currentMaxWorkers;
     const totalRuntime = totalSerialRuntime / maxWorkers;
     
     // Update statistics display - show pending count and success count

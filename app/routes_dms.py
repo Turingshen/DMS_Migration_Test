@@ -45,6 +45,133 @@ def get_dms_werke():
         }), 500
 
 
+@migrate_bp.route('/api/dms/refresh-werke-cache')
+def refresh_werke_cache_stream():
+    """
+    Refresh the Werke cache by querying DIL HANA (SSE stream for progress).
+    Runs the large UNION ALL query across all DOKOB types.
+    """
+    import time
+
+    def generate():
+        start_time = time.time()
+        try:
+            from app_config import DilEngine
+
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Verbinde mit DIL...'})}\n\n"
+
+            dil_db = DilEngine.load()
+            if dil_db.engine is None:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'DIL nicht verbunden'})}\n\n"
+                return
+
+            query = """
+                SELECT WERK, COUNT(*) as CNT FROM (
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, equz.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                    WHERE drad.DOKOB = 'EQUI'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, iflot.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                    WHERE drad.DOKOB = 'IFLOT'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL,
+                        COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
+                    LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                    WHERE drad.DOKOB = 'MPLA'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, plko.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.PLKO plko ON drad.OBJKY = plko.PLNTY || plko.PLNNR || plko.PLNAL
+                    WHERE drad.DOKOB = 'PMPLKO'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, aufk.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                    WHERE drad.DOKOB = 'PMAUFK'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, afvc.WERKS as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.AFVC afvc ON
+                        SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
+                        SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                    WHERE drad.DOKOB = 'PMAFVC'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    WHERE drad.DOKOB = 'PMQMEL'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                    WHERE drad.DOKOB = 'SMQMEL'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                    WHERE drad.DOKOB = 'STKO_DOC'
+                    UNION ALL
+                    SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+                    FROM DIL.DRAD drad
+                    JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    WHERE drad.DOKOB = 'STPO_DOC'
+                ) combined
+                WHERE WERK IS NOT NULL AND WERK != ''
+                GROUP BY WERK
+                ORDER BY CNT DESC
+            """
+
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Query läuft (kann 2-3 Min dauern)...'})}\n\n"
+
+            with dil_db.engine.begin() as con:
+                result = con.execute(text(query))
+                rows = result.fetchall()
+
+            werke = []
+            total_objects = 0
+            for row in rows:
+                werk_code = (row[0] or '').strip()
+                count = row[1]
+                if werk_code:
+                    werke.append({'code': werk_code, 'count': count})
+                    total_objects += count
+
+            from datetime import datetime
+            cache_data = {
+                'generated_at': datetime.now().isoformat(),
+                'source': 'DIL LO1',
+                'total_werke': len(werke),
+                'total_objects': total_objects,
+                'werke': werke
+            }
+
+            os.makedirs('userdata', exist_ok=True)
+            with open('userdata/werke_cache.json', 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2, ensure_ascii=False)
+
+            elapsed = time.time() - start_time
+            print(f"[Werke Cache] Refreshed: {len(werke)} Werke, {total_objects:,} Objekte in {elapsed:.1f}s")
+
+            yield f"data: {json.dumps({'type': 'complete', 'total_werke': len(werke), 'total_objects': total_objects, 'generated_at': cache_data['generated_at'], 'time': f'{elapsed:.1f}s'})}\n\n"
+
+        except Exception as e:
+            import traceback
+            print(f"[Werke Cache] ERROR: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    })
+
+
 @migrate_bp.route('/api/dms/load-stream')
 def load_dms_objects_stream():
     """
@@ -82,9 +209,9 @@ def load_dms_objects_stream():
             # Define queries per DOKOB with exclusion rules
             # Exclusion rules (status-based, applied in SQL):
             # - EQUI/IFLOT: Exclude if JEST status I0320, I0013, I0076 (deleted)
-            # - PMAUFK: Exclude if JEST status I0045 (TECO) or I0013, I0076 (deleted)
+            # - PMAUFK: Exclude if JEST status I0045 (TECO), I0046 (Closed) or I0013, I0076 (deleted)
             # - PMQMEL/SMQMEL: Exclude if JEST status I0072 (closed) or I0076 (deleted)
-            # - PMAFVC: Exclude if parent order is TECO/deleted
+            # - PMAFVC: Exclude if parent order is TECO/Closed/deleted
             # - STKO_DOC: Exclude if STKO.LOEKZ = 'X'
             # - STPO_DOC: Exclude if STPO.LKENZ = 'X'
             # - PLKO: Exclude if PLKO.LOEKZ = 'X'
@@ -144,9 +271,7 @@ def load_dms_objects_stream():
                            {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.PLKO plko ON 
-                        LEFT(drad.OBJKY, 1) = plko.PLNTY AND
-                        SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
-                        RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                        drad.OBJKY = plko.PLNTY || plko.PLNNR || plko.PLNAL
                     WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                       AND (plko.LOEKZ IS NULL OR plko.LOEKZ = '')
                 """,
@@ -160,7 +285,7 @@ def load_dms_objects_stream():
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
                           WHERE j.OBJNR = aufk.OBJNR 
-                          AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                          AND j.STAT IN ('I0045', 'I0046', 'I0013', 'I0076')
                           AND (j.INACT IS NULL OR j.INACT = '')
                       )
                 """,
@@ -178,7 +303,7 @@ def load_dms_objects_stream():
                       AND NOT EXISTS (
                           SELECT 1 FROM DIL.JEST j 
                           WHERE j.OBJNR = aufk.OBJNR 
-                          AND j.STAT IN ('I0045', 'I0013', 'I0076')
+                          AND j.STAT IN ('I0045', 'I0046', 'I0013', 'I0076')
                           AND (j.INACT IS NULL OR j.INACT = '')
                       )
                 """,
@@ -255,9 +380,7 @@ def load_dms_objects_stream():
                 'PMPLKO': f"""
                     SELECT COUNT(*) FROM DIL.DRAD drad
                     JOIN DIL.PLKO plko ON 
-                        LEFT(drad.OBJKY, 1) = plko.PLNTY AND
-                        SUBSTRING(drad.OBJKY, 2, 8) = plko.PLNNR AND
-                        RIGHT(drad.OBJKY, 2) = plko.PLNAL
+                        drad.OBJKY = plko.PLNTY || plko.PLNNR || plko.PLNAL
                     WHERE drad.DOKOB = 'PMPLKO' AND plko.WERKS IN ('{werke_filter}')
                 """,
                 'PMAUFK': f"""

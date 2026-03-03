@@ -142,7 +142,7 @@
                 },
                 {
                     title: '2. DMS-Objekte laden',
-                    content: 'Klicken Sie <b>„DMS Objekte laden"</b>. Das System fragt 11 Objekttypen ab:\n\n• <b>EQUI</b> — Equipment\n• <b>IFLOT</b> — Technischer Platz\n• <b>MPLA</b> — Wartungsplan\n• <b>PMPLKO</b> — Planungsobjekt\n• <b>PMAUFK</b> — Instandhaltungsauftrag\n• <b>PMAFVC</b> — Auftragsvorgang\n• <b>PMQMEL</b> — PM-Meldung\n• <b>SMQMEL</b> — SM-Meldung\n• <b>STKO_DOC</b> / <b>STPO_DOC</b> — Stücklisten\n• <b>IMPTT</b> — Messpunkte\n\n<b>Automatische Ausschlüsse</b> per JEST-Status:\n• Gelöschte Equipments/Techn. Plätze (I0320, I0013, I0076)\n• TECO-Aufträge (I0045)\n• Geschlossene Meldungen (I0072)\n• Löschkennzeichen bei Plänen und Stücklisten'
+                    content: 'Klicken Sie <b>„DMS Objekte laden"</b>. Das System fragt 11 Objekttypen ab:\n\n• <b>EQUI</b> — Equipment\n• <b>IFLOT</b> — Technischer Platz\n• <b>MPLA</b> — Wartungsplan\n• <b>PMPLKO</b> — Planungsobjekt\n• <b>PMAUFK</b> — Instandhaltungsauftrag\n• <b>PMAFVC</b> — Auftragsvorgang\n• <b>PMQMEL</b> — PM-Meldung\n• <b>SMQMEL</b> — SM-Meldung\n• <b>STKO_DOC</b> / <b>STPO_DOC</b> — Stücklisten\n• <b>IMPTT</b> — Messpunkte\n\n<b>Automatische Ausschlüsse</b> per JEST-Status:\n• Gelöschte Equipments/Techn. Plätze (I0320, I0013, I0076)\n• TECO/Closed-Aufträge (I0045, I0046)\n• Geschlossene Meldungen (I0072)\n• Löschkennzeichen bei Plänen und Stücklisten'
                 },
                 {
                     title: '3. Ausschluss-Template (optional)',

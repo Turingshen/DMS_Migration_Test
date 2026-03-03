@@ -266,8 +266,48 @@ function loadWaves() {
 function loadWerke() {
     fetch('/api/dms/werke')
         .then(r => r.json())
-        .then(data => { if (data.success) { allWerke = data.werke; initWerkeGrid(data.werke); } })
+        .then(data => {
+            if (data.success) {
+                allWerke = data.werke;
+                initWerkeGrid(data.werke);
+                if (data.generated_at) {
+                    try {
+                        const d = new Date(data.generated_at);
+                        $('#werkeCacheAge').text('(Stand: ' + d.toLocaleDateString('de-DE') + ')');
+                    } catch(e) { $('#werkeCacheAge').text(''); }
+                }
+            }
+        })
         .catch(err => console.error('Error loading Werke:', err));
+}
+
+function refreshWerkeCache() {
+    const btn = $('#btnRefreshWerke');
+    const icon = $('#iconRefreshWerke');
+    btn.prop('disabled', true);
+    icon.addClass('fa-spin');
+    btn.attr('title', 'Lade...');
+
+    const es = new EventSource('/api/dms/refresh-werke-cache');
+    es.onmessage = function(e) {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'complete') {
+            es.close();
+            icon.removeClass('fa-spin');
+            btn.prop('disabled', false).attr('title', `Aktualisiert (${msg.total_werke} Werke, ${msg.time})`);
+            loadWerke();  // reload grid with fresh data
+        } else if (msg.type === 'error') {
+            es.close();
+            icon.removeClass('fa-spin');
+            btn.prop('disabled', false).attr('title', 'Fehler: ' + msg.message);
+            alert('Werke-Cache Fehler: ' + msg.message);
+        }
+    };
+    es.onerror = function() {
+        es.close();
+        icon.removeClass('fa-spin');
+        btn.prop('disabled', false).attr('title', 'Verbindungsfehler');
+    };
 }
 
 function initWerkeGrid(werke) {
@@ -489,7 +529,7 @@ function renderDokobBadges(stats, excluded, noFile) {
     const entries = Object.entries(stats)
         .filter(([k, v]) => k !== 'total' && typeof v === 'number')
         .map(([dokob, count]) => [dokob, count, excluded[dokob] || 0, noFile[dokob] || 0])
-        .filter(([d, c, e, n]) => c > 0 || e > 0 || n > 0)
+        .filter(([d, c, e, n]) => c > 0)
         .sort((a, b) => (b[1]+b[2]+b[3]) - (a[1]+a[2]+a[3]));
 
     // Rebuild dokobCounts and init selectedDokobs

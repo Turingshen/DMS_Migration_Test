@@ -162,6 +162,116 @@ try:
 except Exception as e:
     print(f"[STARTUP] Warning: DB schema init failed: {e}")
 
+# Refresh Werke cache from DIL on startup (fast ~1s query)
+def refresh_werke_cache_on_startup():
+    """Query DIL HANA for Werke counts and update the JSON cache."""
+    import json
+    import time
+    try:
+        from app_config import DilEngine
+        from sqlalchemy import text as sa_text
+
+        dil_db = DilEngine.load()
+        if dil_db.engine is None:
+            print("[STARTUP] Werke cache refresh skipped (DIL not connected)")
+            return
+
+        query = """
+            SELECT WERK, COUNT(*) as CNT FROM (
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, equz.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.EQUZ equz ON drad.OBJKY = equz.EQUNR AND equz.DATBI = '99991231'
+                WHERE drad.DOKOB = 'EQUI'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, iflot.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.IFLOT iflot ON drad.OBJKY = iflot.TPLNR
+                WHERE drad.DOKOB = 'IFLOT'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL,
+                    COALESCE(mpos.IWERK, LEFT(mpla.PLAN_SORT, 4)) as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.MPLA mpla ON drad.OBJKY = mpla.WARPL
+                LEFT JOIN DIL.MPOS mpos ON mpla.WARPL = mpos.WARPL
+                WHERE drad.DOKOB = 'MPLA'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, plko.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.PLKO plko ON drad.OBJKY = plko.PLNTY || plko.PLNNR || plko.PLNAL
+                WHERE drad.DOKOB = 'PMPLKO'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, aufk.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.AUFK aufk ON drad.OBJKY = aufk.AUFNR
+                WHERE drad.DOKOB = 'PMAUFK'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, afvc.WERKS as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.AFVC afvc ON
+                    SUBSTRING(drad.OBJKY, 3, 10) = afvc.AUFPL AND
+                    SUBSTRING(drad.OBJKY, 13, 8) = afvc.APLZL
+                WHERE drad.DOKOB = 'PMAFVC'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                WHERE drad.DOKOB = 'PMQMEL'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, qmih.IWERK as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.QMIH qmih ON drad.OBJKY = qmih.QMNUM
+                WHERE drad.DOKOB = 'SMQMEL'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.STKO stko ON drad.OBJKY = BINTOHEX(stko.GUIDX)
+                WHERE drad.DOKOB = 'STKO_DOC'
+                UNION ALL
+                SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
+                FROM DIL.DRAD drad
+                JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
+                JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                WHERE drad.DOKOB = 'STPO_DOC'
+            ) combined
+            WHERE WERK IS NOT NULL AND WERK != ''
+            GROUP BY WERK
+            ORDER BY CNT DESC
+        """
+
+        t0 = time.time()
+        with dil_db.engine.begin() as con:
+            rows = con.execute(sa_text(query)).fetchall()
+
+        werke = []
+        total_objects = 0
+        for row in rows:
+            werk_code = (row[0] or '').strip()
+            count = row[1]
+            if werk_code:
+                werke.append({'code': werk_code, 'count': count})
+                total_objects += count
+
+        from datetime import datetime as _dt
+        cache_data = {
+            'generated_at': _dt.now().isoformat(),
+            'source': 'DIL LO1',
+            'total_werke': len(werke),
+            'total_objects': total_objects,
+            'werke': werke
+        }
+
+        os.makedirs('userdata', exist_ok=True)
+        with open('userdata/werke_cache.json', 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2, ensure_ascii=False)
+
+        elapsed = time.time() - t0
+        print(f"[STARTUP] Werke cache refreshed: {len(werke)} Werke, {total_objects:,} Objekte in {elapsed:.1f}s")
+
+    except Exception as e:
+        print(f"[STARTUP] Werke cache refresh failed (using existing cache): {e}")
+
+refresh_werke_cache_on_startup()
+
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')

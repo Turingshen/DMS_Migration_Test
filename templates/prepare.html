@@ -184,7 +184,11 @@
                         <div>
                             <strong><i class="fas fa-industry"></i> Werke auswählen</strong>
                             <span class="badge badge-light ml-2" id="selectedCount">0 ausgewählt</span>
-                            <button type="button" class="btn btn-sm btn-outline-info ml-2" data-toggle="modal" data-target="#exclusionRulesModal" title="Ausschluss-Regeln anzeigen">
+                            <small class="text-muted ml-2" title="Die Angabe pro Werk ist eine ungefilterte Brutto-Zahl aus dem Cache (ohne Status-Ausschlüsse). Die tatsächliche Batch-Anzahl kann geringer sein."><i class="fas fa-info-circle"></i> ca. Anzahl je Werk ungefiltert <span id="werkeCacheAge"></span></small>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ml-1" onclick="refreshWerkeCache()" title="Werke-Cache neu laden (dauert 2-3 Min)" id="btnRefreshWerke">
+                                <i class="fas fa-sync-alt" id="iconRefreshWerke"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-info ml-1" data-toggle="modal" data-target="#exclusionRulesModal" title="Ausschluss-Regeln anzeigen">
                                 <i class="fas fa-info-circle"></i>
                             </button>
                         </div>
@@ -445,10 +449,10 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                     <tbody>
                         <tr><td><code>EQUI</code></td><td>Equipment</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
                         <tr><td><code>IFLOT</code></td><td>Techn. Platz</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
-                        <tr><td><code>PMAUFK</code></td><td>PM-Auftrag</td><td>JEST Status: I0045 (TECO) + I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMAUFK</code></td><td>PM-Auftrag</td><td>JEST Status: I0045 (TECO), I0046 (Closed) + I0013, I0076 (gelöscht)</td></tr>
                         <tr><td><code>PMQMEL</code></td><td>PM-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
                         <tr><td><code>SMQMEL</code></td><td>Service-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
-                        <tr><td><code>PMAFVC</code></td><td>PM-Vorgang</td><td>Wenn zugehöriger Auftrag TECO/gelöscht</td></tr>
+                        <tr><td><code>PMAFVC</code></td><td>PM-Vorgang</td><td>Wenn zugehöriger Auftrag TECO/Closed/gelöscht</td></tr>
                         <tr><td><code>STKO_DOC</code></td><td>Stücklistenkopf</td><td>STKO.LOEKZ = 'X'</td></tr>
                         <tr><td><code>STPO_DOC</code></td><td>Stücklistenpos.</td><td>STPO.LKENZ = 'X'</td></tr>
                         <tr><td><code>PLKO</code></td><td>Arbeitsplan</td><td>PLKO.LOEKZ = 'X'</td></tr>

@@ -10,7 +10,7 @@ from app.process import (
     DEFAULT_SOURCE_SYSTEM, DEFAULT_TARGET_SYSTEM,
     get_systems_by_type
 )
-from app_config import Config, MiscEngine
+from app_config import Config, MiscEngine, DilEngine
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -112,6 +112,11 @@ def get_template_context():
     target_sys = session.get('target_system', DEFAULT_TARGET_SYSTEM)
     source_systems, target_systems = get_systems_by_type()
 
+    # DIL system info (single HANA instance, not switchable)
+    dil_cfg = cfg.get('db', 'dil') or {}
+    dil_host = dil_cfg.get('db_host', '')
+    dil_short = dil_host.split('.')[0].upper() if dil_host else 'N/A'
+
     return {
         'sap_system': session.get('sap_system', 'zbq'),
         'sap_systems': cfg.get('sap_systems') or {},
@@ -123,6 +128,10 @@ def get_template_context():
         'target_system_label': cfg.get(target_sys, 'system_label') if target_sys else 'Unknown',
         'source_systems': source_systems,
         'target_systems': target_systems,
+        'dil_host': dil_host,
+        'dil_short': dil_short,
+        'dil_port': dil_cfg.get('db_port', ''),
+        'dil_connected': DilEngine.load().engine is not None,
         'max_workers': session.get('max_workers') or _load_db_settings().get('max_workers') or DEFAULT_SETTINGS.get('max_workers', 2),
         'pacing_seconds': session.get('pacing_seconds') if session.get('pacing_seconds') is not None else _load_db_settings().get('pacing_seconds', DEFAULT_SETTINGS.get('pacing_seconds', 0))
     }

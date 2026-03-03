@@ -120,6 +120,20 @@
                             {% endfor %}
                         </div>
                     </li>
+
+                    <li class="nav-item d-flex align-items-center px-1">
+                        <i class="fas fa-plus text-muted" style="font-size: 0.65rem;"></i>
+                    </li>
+
+                    <!-- DIL System Indicator (HANA - read-only, not switchable) -->
+                    <li class="nav-item">
+                        <span class="nav-link py-1" title="DIL Datenanreicherung (HANA: {{ dil_host }}:{{ dil_port }})">
+                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">DIL</small>
+                            <span class="badge badge-{{ 'warning' if dil_connected else 'secondary' }}">
+                                <i class="fas fa-database"></i> {{ dil_short }}
+                            </span>
+                        </span>
+                    </li>
                     
                     <li class="nav-item d-flex align-items-center px-2">
                         <span class="text-muted">|</span>

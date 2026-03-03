@@ -15,7 +15,7 @@ $(document).ready(function() {
         const section = $('#conditionSection');
         const isHidden = section.is(':hidden');
         section.toggle(isHidden);
-        $(this).text(isHidden ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
+        $(this).text(isHidden ? t('rules.remove_condition') : t('rules.add_condition'));
         if (!isHidden) {
             // Clearing values when removing condition
             $('#conditionColumn').val('');
@@ -29,7 +29,7 @@ $(document).ready(function() {
         const section = $('#editConditionSection');
         const isHidden = section.is(':hidden');
         section.toggle(isHidden);
-        $(this).text(isHidden ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
+        $(this).text(isHidden ? t('rules.remove_condition') : t('rules.add_condition'));
         if (!isHidden) {
             // Clearing values when removing condition
             $('#editConditionColumn').val('');
@@ -44,10 +44,10 @@ function loadRules() {
         if (response.success) {
             displayRules(response.rules || []);
         } else {
-            showError('Migrationsregeln konnten nicht geladen werden: ' + response.error);
+            showError(t('rules.load_error') + ': ' + response.error);
         }
     }).fail(function(xhr) {
-        showError('Migrationsregeln konnten nicht geladen werden: ' + xhr.responseText);
+        showError(t('rules.load_error') + ': ' + xhr.responseText);
     });
 }
 
@@ -56,36 +56,36 @@ function displayRules(rules) {
     tbody.empty();
     
     if (rules.length === 0) {
-        tbody.append('<tr><td colspan="11" class="text-center text-muted">Noch keine Migrationsregeln definiert</td></tr>');
+        tbody.append('<tr><td colspan="11" class="text-center text-muted">' + t('rules.empty') + '</td></tr>');
         return;
     }
     
-    rules.forEach(function(t) {
-        const createdAt = t.created_at ? new Date(t.created_at).toLocaleString() : 'N/A';
-        const condition = (t.condition_column && t.condition_value) 
-            ? `${escapeHtml(t.condition_column)} ${escapeHtml(t.condition_operator || 'contains')} ${escapeHtml(t.condition_value)}`
+    rules.forEach(function(rule) {
+        const createdAt = rule.created_at ? new Date(rule.created_at).toLocaleString() : 'N/A';
+        const condition = (rule.condition_column && rule.condition_value) 
+            ? `${escapeHtml(rule.condition_column)} ${escapeHtml(rule.condition_operator || 'contains')} ${escapeHtml(rule.condition_value)}`
             : '-';
-        const type = (t.rule_type || 'translation').toLowerCase();
+        const type = (rule.rule_type || 'translation').toLowerCase();
         const typeClass = type === 'overwrite' ? 'badge-warning' : 'badge-info';
-        const execOrder = t.execution_order !== undefined ? t.execution_order : 100;
+        const execOrder = rule.execution_order !== undefined ? rule.execution_order : 100;
         const row = `
             <tr>
                 <td><span class="badge badge-secondary">${execOrder}</span></td>
-                <td><span class="badge ${typeClass}">${escapeHtml(t.rule_type || 'translation')}</span></td>
-                <td><code>${escapeHtml(t.source_column)}</code></td>
-                <td><code>${escapeHtml(t.target_column)}</code></td>
-                <td><strong>${escapeHtml(t.source_value)}</strong></td>
-                <td><strong>${escapeHtml(t.target_value)}</strong></td>
+                <td><span class="badge ${typeClass}">${escapeHtml(rule.rule_type || 'translation')}</span></td>
+                <td><code>${escapeHtml(rule.source_column)}</code></td>
+                <td><code>${escapeHtml(rule.target_column)}</code></td>
+                <td><strong>${escapeHtml(rule.source_value)}</strong></td>
+                <td><strong>${escapeHtml(rule.target_value)}</strong></td>
                 <td>${condition}</td>
-                <td>${escapeHtml(t.notes || '')}</td>
-                <td>${escapeHtml(t.created_by || 'system')}</td>
+                <td>${escapeHtml(rule.notes || '')}</td>
+                <td>${escapeHtml(rule.created_by || 'system')}</td>
                 <td>${createdAt}</td>
                 <td>
-                    <i class="fas fa-arrow-up edit-icon" title="Nach oben" onclick="moveRuleUp(${t.id})"></i>
-                    <i class="fas fa-arrow-down edit-icon" title="Nach unten" onclick="moveRuleDown(${t.id})"></i>
-                    <i class="fas fa-edit edit-icon" title="Bearbeiten" onclick="editRule(${t.id})"></i>
-                    <i class="fas fa-copy edit-icon" title="Duplizieren" onclick="cloneRule(${t.id})"></i>
-                    <i class="fas fa-trash delete-icon" title="Löschen" onclick="deleteRule(${t.id})"></i>
+                    <i class="fas fa-arrow-up edit-icon" title="${t('rules.move_up')}" onclick="moveRuleUp(${rule.id})"></i>
+                    <i class="fas fa-arrow-down edit-icon" title="${t('rules.move_down')}" onclick="moveRuleDown(${rule.id})"></i>
+                    <i class="fas fa-edit edit-icon" title="${t('rules.edit')}" onclick="editRule(${rule.id})"></i>
+                    <i class="fas fa-copy edit-icon" title="${t('rules.clone')}" onclick="cloneRule(${rule.id})"></i>
+                    <i class="fas fa-trash delete-icon" title="${t('delete')}" onclick="deleteRule(${rule.id})"></i>
                 </td>
             </tr>
         `;
@@ -108,12 +108,12 @@ function saveRule() {
     
     if (data.rule_type === 'translation') {
         if (!data.source_column || !data.target_column || data.target_value === null || data.target_value === undefined) {
-            showError('source_column, target_column und target_value sind erforderlich');
+            showError(t('rules.val.translation_required'));
             return;
         }
     } else {
         if (!data.target_column || data.target_value === null || data.target_value === undefined) {
-            showError('target_column und target_value sind für Überschreibungen erforderlich');
+            showError(t('rules.val.overwrite_required'));
             return;
         }
     }
@@ -127,15 +127,15 @@ function saveRule() {
             if (response.success) {
                 $('#addRuleModal').modal('hide');
                 $('#addRuleForm')[0].reset();
-                showSuccess('Regel erfolgreich hinzugefügt');
+                showSuccess(t('rules.add_success'));
                 loadRules();
             } else {
-                showError('Regel konnte nicht hinzugefügt werden: ' + response.error);
+                showError(t('rules.add_error') + ': ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Regel konnte nicht hinzugefügt werden: ' + error);
+            showError(t('rules.add_error') + ': ' + error);
         }
     });
 }
@@ -163,7 +163,7 @@ function editRule(id) {
                 // Show condition section if the rule has a condition
                 const hasCondition = !!(rule.condition_column && rule.condition_value);
                 $('#editConditionSection').toggle(hasCondition);
-                $('#toggleEditConditionBtn').text(hasCondition ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
+                $('#toggleEditConditionBtn').text(hasCondition ? t('rules.remove_condition') : t('rules.add_condition'));
                 $('#editRuleModal').modal('show');
             }
         }
@@ -189,7 +189,7 @@ function cloneRule(id) {
                 // Show condition section if the rule has a condition
                 const hasCondition = !!(rule.condition_column && rule.condition_value);
                 $('#conditionSection').toggle(hasCondition);
-                $('#toggleConditionBtn').text(hasCondition ? 'Bedingung entfernen' : 'Bedingung hinzufügen');
+                $('#toggleConditionBtn').text(hasCondition ? t('rules.remove_condition') : t('rules.add_condition'));
                 $('#addRuleModal').modal('show');
             }
         }
@@ -209,7 +209,7 @@ function updateRule() {
     };
     
     if (data.target_value === null || data.target_value === undefined) {
-        showError('Zielwert ist erforderlich');
+        showError(t('rules.val.target_required'));
         return;
     }
     
@@ -221,21 +221,21 @@ function updateRule() {
         success: function(response) {
             if (response.success) {
                 $('#editRuleModal').modal('hide');
-                showSuccess('Regel erfolgreich aktualisiert');
+                showSuccess(t('rules.update_success'));
                 loadRules();
             } else {
-                showError('Regel konnte nicht aktualisiert werden: ' + response.error);
+                showError(t('rules.update_error') + ': ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Regel konnte nicht aktualisiert werden: ' + error);
+            showError(t('rules.update_error') + ': ' + error);
         }
     });
 }
 
 function deleteRule(id) {
-    if (!confirm('Diese Migrationsregel wirklich löschen?')) {
+    if (!confirm(t('rules.delete_confirm'))) {
         return;
     }
     
@@ -244,15 +244,15 @@ function deleteRule(id) {
         method: 'POST',
         success: function(response) {
             if (response.success) {
-                showSuccess('Regel erfolgreich gelöscht');
+                showSuccess(t('rules.delete_success'));
                 loadRules();
             } else {
-                showError('Regel konnte nicht gelöscht werden: ' + response.error);
+                showError(t('rules.delete_error') + ': ' + response.error);
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Regel konnte nicht gelöscht werden: ' + error);
+            showError(t('rules.delete_error') + ': ' + error);
         }
     });
 }
@@ -265,12 +265,12 @@ function moveRuleUp(id) {
             if (response.success) {
                 loadRules();
             } else {
-                showError(response.error || 'Regel konnte nicht verschoben werden');
+                showError(response.error || t('rules.move_error'));
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Regel konnte nicht verschoben werden: ' + error);
+            showError(t('rules.move_error') + ': ' + error);
         }
     });
 }
@@ -283,12 +283,12 @@ function moveRuleDown(id) {
             if (response.success) {
                 loadRules();
             } else {
-                showError(response.error || 'Regel konnte nicht verschoben werden');
+                showError(response.error || t('rules.move_error'));
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
-            showError('Regel konnte nicht verschoben werden: ' + error);
+            showError(t('rules.move_error') + ': ' + error);
         }
     });
 }
@@ -309,5 +309,5 @@ function showSuccess(message) {
 }
 
 function showError(message) {
-    alert('Fehler: ' + message);
+    alert(t('error_prefix') + message);
 }

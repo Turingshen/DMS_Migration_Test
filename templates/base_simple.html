@@ -50,7 +50,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
-                <i class="fas fa-exchange-alt"></i> Dokument-Migration
+                <i class="fas fa-exchange-alt"></i> <span data-i18n="app_name">Dokument-Migration</span>
             </a>
             <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -59,22 +59,22 @@
                 <ul class="navbar-nav mr-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="/">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
+                            <i class="fas fa-tachometer-alt"></i> <span data-i18n="nav.dashboard">Dashboard</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="javascript:void(0)" onclick="if(typeof openWavePlanModal==='function')openWavePlanModal();else window.location='/';">
-                            <i class="fas fa-stream"></i> Wellenverwaltung
+                            <i class="fas fa-stream"></i> <span data-i18n="nav.waves">Wellenverwaltung</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/rules">
-                            <i class="fas fa-tasks"></i> Regeln
+                            <i class="fas fa-tasks"></i> <span data-i18n="nav.rules">Regeln</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/settings">
-                            <i class="fas fa-cog"></i> Einstellungen
+                            <i class="fas fa-cog"></i> <span data-i18n="nav.settings">Einstellungen</span>
                         </a>
                     </li>
                 </ul>
@@ -82,13 +82,13 @@
                     <!-- Source System Selector -->
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle py-1" href="#" id="sourceSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Quellsystem (R/3)">
-                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">QUELLE</small>
+                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;" data-i18n="nav.source">QUELLE</small>
                             <span class="badge badge-info">
                                 <i class="fas fa-download"></i> {{ source_system | upper }}
                             </span>
                         </a>
                         <div class="dropdown-menu" aria-labelledby="sourceSystemDropdown">
-                            <h6 class="dropdown-header">Quellsystem wählen (R/3)</h6>
+                            <h6 class="dropdown-header" data-i18n="nav.source_choose">Quellsystem wählen (R/3)</h6>
                             {% for sys_key, sys_label in source_systems.items() %}
                             <a class="dropdown-item {% if sys_key == source_system %}active{% endif %}" href="#" onclick="switchSystem('source_system', '{{ sys_key }}'); return false;">
                                 <i class="fas fa-{% if sys_key == source_system %}check-circle{% else %}circle{% endif %}"></i>
@@ -105,13 +105,13 @@
                     <!-- Target System Selector -->
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle py-1" href="#" id="targetSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Zielsystem (S/4HANA)">
-                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">ZIEL</small>
+                            <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;" data-i18n="nav.target">ZIEL</small>
                             <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}">
                                 <i class="fas fa-upload"></i> {{ target_system | upper }}
                             </span>
                         </a>
                         <div class="dropdown-menu" aria-labelledby="targetSystemDropdown">
-                            <h6 class="dropdown-header">Zielsystem wählen (S/4)</h6>
+                            <h6 class="dropdown-header" data-i18n="nav.target_choose">Zielsystem wählen (S/4)</h6>
                             {% for sys_key, sys_label in target_systems.items() %}
                             <a class="dropdown-item {% if sys_key == target_system %}active{% endif %}" href="#" onclick="switchSystem('target_system', '{{ sys_key }}'); return false;">
                                 <i class="fas fa-{% if sys_key == target_system %}check-circle{% else %}circle{% endif %}"></i>
@@ -138,6 +138,15 @@
                     <li class="nav-item d-flex align-items-center px-2">
                         <span class="text-muted">|</span>
                     </li>
+                    <!-- Language Toggle -->
+                    <li class="nav-item">
+                        <a class="nav-link py-1" href="#" id="langToggle" onclick="I18n.setLang(I18n.getLang()==='de'?'en':'de'); return false;" title="Sprache / Language" style="cursor:pointer; font-size: 0.85rem; line-height: 2.2;">
+                            🇩🇪 DE
+                        </a>
+                    </li>
+                    <li class="nav-item d-flex align-items-center px-1">
+                        <span class="text-muted">|</span>
+                    </li>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                             <i class="fas fa-user-circle"></i> {{ au_name | default('User') }}
@@ -151,7 +160,7 @@
                             </div>
                             <div class="dropdown-divider"></div>
                             <a class="dropdown-item" href="/login">
-                                <i class="fas fa-sign-in-alt"></i> Anmelden / Session erneuern
+                                <i class="fas fa-sign-in-alt"></i> <span data-i18n="nav.login">Anmelden / Session erneuern</span>
                             </a>
                         </div>
                     </li>
@@ -173,7 +182,7 @@
     <!-- Footer -->
     <footer class="footer mt-auto py-3 bg-light">
         <div class="container text-center">
-            <span class="text-muted">Dokument-Migration v2.0 - SAP PM Service Tools</span>
+            <span class="text-muted" data-i18n="app_footer">Dokument-Migration v2.0 - SAP PM Service Tools</span>
         </div>
     </footer>
 
@@ -301,6 +310,9 @@
         .catch(err => alert('Fehler: ' + err));
     }
     </script>
+    
+    <!-- Internationalization (must load before other scripts) -->
+    <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
     
     <!-- Shared utility functions (escapeHtml, formatDateTime, truncate, formatFileSize) -->
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>

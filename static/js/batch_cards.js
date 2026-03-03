@@ -57,9 +57,15 @@ function getStatusBadgeClass(status) {
 }
 
 /**
- * German label for batch status
+ * German label for batch status (supports i18n)
  */
 function getStatusLabel(status) {
+    // Use i18n if available
+    if (typeof t === 'function') {
+        const key = 'status.' + status;
+        const translated = t(key);
+        if (translated !== key) return translated;
+    }
     const map = {
         'prepared': 'Vorbereitet',
         'executing': 'Upload...',
@@ -107,7 +113,7 @@ function renderBatchCard(batch, options) {
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <strong style="font-size: 0.85rem;">${batch.description || batch.batch_id}</strong>
-                        <div class="wave-stats">${total} Dokumente</div>
+                        <div class="wave-stats">${total} ${typeof t === 'function' ? t('status.documents') : 'Dokumente'}</div>
                     </div>
                     <div class="d-flex align-items-center">
                         ${editBtn}

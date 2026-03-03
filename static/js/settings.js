@@ -15,13 +15,13 @@ function updateThroughput() {
     // Update pacing mode label
     const pacingLabel = document.getElementById('pacingModeLabel');
     if (pacing === 0) {
-        pacingLabel.innerHTML = '<span class="badge badge-success">Dynamisch</span>';
+        pacingLabel.innerHTML = '<span class="badge badge-success">' + t('set.perf.dynamic') + '</span>';
         // For dynamic pacing, estimate average (tiny=5, small=10, medium=20, large=45) ≈ 15s average
         const avgPacing = 15;
         const throughput = (workers * (60 / avgPacing)).toFixed(1);
-        document.getElementById('throughputValue').textContent = throughput + ' (Durchschnitt bei dynamischem Pacing)';
+        document.getElementById('throughputValue').textContent = throughput + ' ' + t('set.msg.dynamic_avg');
     } else {
-        pacingLabel.innerHTML = '<span class="badge badge-secondary">Fixiert</span>';
+        pacingLabel.innerHTML = '<span class="badge badge-secondary">' + t('set.perf.fixed') + '</span>';
         const throughput = (workers * (60 / pacing)).toFixed(1);
         document.getElementById('throughputValue').textContent = throughput;
     }
@@ -51,11 +51,11 @@ function loadPacingStats() {
             tbody.innerHTML = '';
             
             const bucketNames = {
-                'tiny': { name: 'Winzig', icon: '📄', size_range: '≤ 1 MB' },
-                'small': { name: 'Klein', icon: '📁', size_range: '1 - 10 MB' },
-                'medium': { name: 'Mittel', icon: '📦', size_range: '10 - 50 MB' },
-                'large': { name: 'Groß', icon: '📚', size_range: '> 50 MB' },
-                'unknown': { name: 'Unbekannt', icon: '❓', size_range: 'Keine Größe' }
+                'tiny': { name: t('set.bucket.tiny'), icon: '📄', size_range: '≤ 1 MB' },
+                'small': { name: t('set.bucket.small'), icon: '📁', size_range: '1 - 10 MB' },
+                'medium': { name: t('set.bucket.medium'), icon: '📦', size_range: '10 - 50 MB' },
+                'large': { name: t('set.bucket.large'), icon: '📚', size_range: '> 50 MB' },
+                'unknown': { name: t('set.bucket.unknown'), icon: '❓', size_range: t('set.pacing_status.no_size') }
             };
             
             const bucketOrder = ['tiny', 'small', 'medium', 'large'];
@@ -73,13 +73,13 @@ function loadPacingStats() {
                 
                 let statusBadge, statusClass;
                 if (stats.count === 0) {
-                    statusBadge = '<span class="badge badge-secondary">Keine Daten</span>';
+                    statusBadge = '<span class="badge badge-secondary">' + t('set.pacing_status.none') + '</span>';
                     statusClass = '';
                 } else if (recommendedPacing <= currentPacing * 0.8) {
-                    statusBadge = '<span class="badge badge-success">Schneller möglich</span>';
+                    statusBadge = '<span class="badge badge-success">' + t('set.pacing_status.faster') + '</span>';
                     statusClass = 'table-success';
                 } else if (recommendedPacing > currentPacing) {
-                    statusBadge = '<span class="badge badge-warning">Erhöhen empfohlen</span>';
+                    statusBadge = '<span class="badge badge-warning">' + t('set.pacing_status.increase') + '</span>';
                     statusClass = 'table-warning';
                 } else {
                     statusBadge = '<span class="badge badge-info">OK</span>';
@@ -107,7 +107,7 @@ function loadPacingStats() {
             document.getElementById('pacingStatsContent').style.display = 'block';
             document.getElementById('pacingNoData').style.display = 'block';
             document.getElementById('pacingNoData').innerHTML = 
-                '<i class="fas fa-exclamation-circle"></i> Fehler beim Laden der Statistiken: ' + error;
+                '<i class="fas fa-exclamation-circle"></i> ' + t('set.msg.stats_error', {msg: error});
             document.getElementById('pacingHasData').style.display = 'none';
         });
 }
@@ -119,12 +119,12 @@ document.getElementById('settingsForm').addEventListener('submit', function(e) {
     const pacingSeconds = parseFloat(document.getElementById('pacingSeconds').value);
     
     if (maxWorkers < 1 || maxWorkers > 50) {
-        alert('Max Workers muss zwischen 1 und 50 liegen');
+        alert(t('set.msg.workers_range'));
         return;
     }
     
     if (pacingSeconds < 0 || pacingSeconds > 60) {
-        alert('Pacing muss zwischen 0 und 60 Sekunden liegen');
+        alert(t('set.msg.pacing_range'));
         return;
     }
     
@@ -141,19 +141,19 @@ document.getElementById('settingsForm').addEventListener('submit', function(e) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Einstellungen gespeichert!');
+            alert(t('set.msg.saved'));
             document.getElementById('currentWorkers').textContent = maxWorkers;
             if (pacingSeconds === 0) {
-                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-success">Dynamisch</span> (5-45s basierend auf Dateigröße)';
+                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-success">' + t('set.perf.dynamic') + '</span> ' + t('set.msg.dynamic_info');
             } else {
-                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-secondary">Fixiert</span> ' + pacingSeconds + ' Sekunden';
+                document.getElementById('currentPacing').innerHTML = '<span class="badge badge-secondary">' + t('set.perf.fixed') + '</span> ' + pacingSeconds + ' ' + t('set.msg.seconds');
             }
         } else {
-            alert('Fehler beim Speichern: ' + data.error);
+            alert(t('set.msg.save_error', {msg: data.error}));
         }
     })
     .catch(error => {
-        alert('Fehler: ' + error);
+        alert(t('error_prefix') + error);
     });
 });
 
@@ -185,8 +185,8 @@ function loadCredentials() {
                 card.id = 'cred-card-' + sys.system_id;
                 
                 const statusBadge = sys.has_credentials
-                    ? '<span class="badge badge-success"><i class="fas fa-check"></i> Konfiguriert</span>'
-                    : '<span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> Nicht konfiguriert</span>';
+                    ? '<span class="badge badge-success"><i class="fas fa-check"></i> ' + t('set.cred.configured') + '</span>'
+                    : '<span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> ' + t('set.cred.not_configured') + '</span>';
                 
                 const typeBadge = sys.system_type === 'R3'
                     ? '<span class="badge badge-info ml-1">R/3 Source</span>'
@@ -197,10 +197,10 @@ function loadCredentials() {
                     : '<span class="badge badge-secondary ml-1">OAuth</span>';
                 
                 const userInfo = sys.has_credentials
-                    ? `<span class="text-muted">Benutzer: <strong>${sys.username}</strong></span>
-                       <span class="text-muted ml-3">Aktualisiert: ${sys.updated_at ? new Date(sys.updated_at).toLocaleString('de-DE') : '-'}</span>
-                       <span class="text-muted ml-3">von ${sys.updated_by || '-'}</span>`
-                    : '<span class="text-muted">Keine Zugangsdaten hinterlegt</span>';
+                    ? `<span class="text-muted">${t('set.cred.user')} <strong>${sys.username}</strong></span>
+                       <span class="text-muted ml-3">${t('set.cred.updated_at')} ${sys.updated_at ? new Date(sys.updated_at).toLocaleString('de-DE') : '-'}</span>
+                       <span class="text-muted ml-3">${t('set.cred.updated_by')} ${sys.updated_by || '-'}</span>`
+                    : '<span class="text-muted">' + t('set.cred.none') + '</span>';
                 
                 card.innerHTML = `
                     <div class="card-header d-flex justify-content-between align-items-center">
@@ -218,31 +218,31 @@ function loadCredentials() {
                             <div class="form-row">
                                 <div class="col-md-4">
                                     <div class="form-group">
-                                        <label><i class="fas fa-user"></i> Benutzername</label>
+                                        <label><i class="fas fa-user"></i> ${t('set.cred.username')}</label>
                                         <input type="text" class="form-control" id="cred-user-${sys.system_id}" 
                                                value="${sys.has_credentials ? sys.username : ''}" 
-                                               placeholder="z.B. altnict" autocomplete="off">
+                                               placeholder="${t('set.cred.ph_example')}" autocomplete="off">
                                     </div>
                                 </div>
                                 <div class="col-md-4">
                                     <div class="form-group">
-                                        <label><i class="fas fa-lock"></i> Passwort</label>
+                                        <label><i class="fas fa-lock"></i> ${t('set.cred.password')}</label>
                                         <input type="password" class="form-control" id="cred-pass-${sys.system_id}" 
-                                               placeholder="${sys.has_credentials ? '●●●●●●●● (unverändert lassen oder neu eingeben)' : 'Passwort eingeben'}" 
+                                               placeholder="${sys.has_credentials ? t('set.cred.password_unchanged') : t('set.cred.password_enter')}" 
                                                autocomplete="new-password">
                                     </div>
                                 </div>
                                 <div class="col-md-4 d-flex align-items-end">
                                     <div class="form-group mb-0 w-100">
                                         <button class="btn btn-primary mr-1" onclick="saveCredential('${sys.system_id}')">
-                                            <i class="fas fa-save"></i> Speichern
+                                            <i class="fas fa-save"></i> ${t('save')}
                                         </button>
                                         <button class="btn btn-info mr-1" onclick="testCredential('${sys.system_id}')" 
                                                 id="cred-test-btn-${sys.system_id}">
-                                            <i class="fas fa-plug"></i> Testen
+                                            <i class="fas fa-plug"></i> ${t('set.cred.test')}
                                         </button>
                                         <button class="btn btn-outline-secondary" onclick="toggleCredForm('${sys.system_id}')">
-                                            Abbrechen
+                                            ${t('cancel')}
                                         </button>
                                     </div>
                                 </div>
@@ -251,14 +251,14 @@ function loadCredentials() {
                         
                         <div id="cred-actions-${sys.system_id}">
                             <button class="btn btn-sm btn-outline-primary mr-1" onclick="toggleCredForm('${sys.system_id}')">
-                                <i class="fas fa-edit"></i> ${sys.has_credentials ? 'Ändern' : 'Einrichten'}
+                                <i class="fas fa-edit"></i> ${sys.has_credentials ? t('set.cred.change') : t('set.cred.setup')}
                             </button>
                             ${sys.has_credentials ? `
                                 <button class="btn btn-sm btn-outline-info mr-1" onclick="testCredential('${sys.system_id}')">
-                                    <i class="fas fa-plug"></i> Verbindung testen
+                                    <i class="fas fa-plug"></i> ${t('set.cred.test_conn')}
                                 </button>
                                 <button class="btn btn-sm btn-outline-danger" onclick="deleteCredential('${sys.system_id}')">
-                                    <i class="fas fa-trash"></i> Löschen
+                                    <i class="fas fa-trash"></i> ${t('delete')}
                                 </button>
                             ` : ''}
                         </div>
@@ -274,7 +274,7 @@ function loadCredentials() {
             document.getElementById('credentialsLoading').style.display = 'none';
             document.getElementById('credentialsContent').style.display = 'block';
             document.getElementById('credentialsList').innerHTML = 
-                '<div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> Fehler: ' + error + '</div>';
+                '<div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> ' + t('error_prefix') + error + '</div>';
         });
 }
 
@@ -297,11 +297,11 @@ function saveCredential(systemId) {
     const password = document.getElementById('cred-pass-' + systemId).value;
     
     if (!username) {
-        alert('Benutzername ist erforderlich');
+        alert(t('set.cred.required'));
         return;
     }
     if (!password) {
-        alert('Passwort ist erforderlich');
+        alert(t('set.cred.password_required'));
         return;
     }
     
@@ -329,14 +329,14 @@ function saveCredential(systemId) {
 
 function testCredential(systemId) {
     const resultEl = document.getElementById('cred-result-' + systemId);
-    resultEl.innerHTML = '<div class="alert alert-info mt-2"><i class="fas fa-spinner fa-spin"></i> Verbindung wird getestet...</div>';
+    resultEl.innerHTML = '<div class="alert alert-info mt-2"><i class="fas fa-spinner fa-spin"></i> ' + t('set.cred.testing') + '</div>';
     
     fetch('/credentials/test/' + systemId, { method: 'POST' })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
                 resultEl.innerHTML = '<div class="alert alert-success mt-2"><i class="fas fa-check-circle"></i> ' + data.message + 
-                    (data.csrf_token_received ? ' (CSRF-Token erhalten)' : '') + '</div>';
+                    (data.csrf_token_received ? ' ' + t('set.cred.csrf_received') : '') + '</div>';
             } else {
                 resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times-circle"></i> ' + data.error + '</div>';
             }
@@ -347,7 +347,7 @@ function testCredential(systemId) {
 }
 
 function deleteCredential(systemId) {
-    if (!confirm('Zugangsdaten für ' + systemId.toUpperCase() + ' wirklich löschen?')) return;
+    if (!confirm(t('set.cred.delete_confirm', {system: systemId.toUpperCase()}))) return;
     
     fetch('/credentials/' + systemId, { method: 'DELETE' })
         .then(response => response.json())
@@ -355,10 +355,10 @@ function deleteCredential(systemId) {
             if (data.success) {
                 loadCredentials();
             } else {
-                alert('Fehler: ' + data.error);
+                alert(t('error_prefix') + data.error);
             }
         })
-        .catch(error => alert('Fehler: ' + error));
+        .catch(error => alert(t('error_prefix') + error));
 }
 
 // ─── SAP System Management ──────────────────────────────────────────
@@ -377,7 +377,7 @@ function loadSapSystems() {
             
             if (!data.success || !data.systems || data.systems.length === 0) {
                 document.getElementById('sapSystemsList').innerHTML = 
-                    '<div class="alert alert-info"><i class="fas fa-info-circle"></i> Keine SAP-Systeme konfiguriert.</div>';
+                    '<div class="alert alert-info"><i class="fas fa-info-circle"></i> ' + t('set.sys.no_systems') + '</div>';
                 return;
             }
 
@@ -393,10 +393,10 @@ function loadSapSystems() {
                     : '<span class="badge badge-primary">S/4 Target</span>';
                 
                 const sourceBadge = sys.source === 'yaml' 
-                    ? '<span class="badge badge-secondary ml-1" title="Aus config-env.yml">YAML</span>'
+                    ? '<span class="badge badge-secondary ml-1" title="' + t('set.sys.source_yaml') + '">YAML</span>'
                     : sys.source === 'db+yaml'
                     ? '<span class="badge badge-warning ml-1" title="YAML + DB Override">DB+YAML</span>'
-                    : '<span class="badge badge-success ml-1" title="Nur in Datenbank">DB</span>';
+                    : '<span class="badge badge-success ml-1" title="' + t('set.sys.source_db') + '">DB</span>';
                 
                 const authBadge = sys.auth_type === 'basic'
                     ? '<span class="badge badge-dark ml-1">Basic</span>'
@@ -406,7 +406,7 @@ function loadSapSystems() {
                 let apisHtml = '';
                 if (sys.apis && sys.apis.length > 0) {
                     apisHtml = '<table class="table table-sm table-bordered mt-2 mb-0"><thead class="thead-light"><tr>' +
-                        '<th>API</th><th>Label</th><th>Base URL</th><th>Quelle</th><th></th></tr></thead><tbody>';
+                        '<th>API</th><th>Label</th><th>Base URL</th><th>' + t('set.sys.source_col') + '</th><th></th></tr></thead><tbody>';
                     sys.apis.forEach(api => {
                         const apiSourceBadge = api.source === 'db' 
                             ? '<span class="badge badge-success">DB</span>' 
@@ -417,7 +417,7 @@ function loadSapSystems() {
                             <td><small class="text-monospace">${api.base_url}</small></td>
                             <td>${apiSourceBadge}</td>
                             <td>
-                                <button class="btn btn-xs btn-outline-danger" title="API entfernen"
+                                <button class="btn btn-xs btn-outline-danger" title="${t('set.sys.remove_api')}"
                                         onclick="deleteSapApi('${sys.system_id}', '${api.api_name}')">
                                     <i class="fas fa-times"></i>
                                 </button>
@@ -426,7 +426,7 @@ function loadSapSystems() {
                     });
                     apisHtml += '</tbody></table>';
                 } else {
-                    apisHtml = '<small class="text-muted">Keine APIs konfiguriert</small>';
+                    apisHtml = '<small class="text-muted">' + t('set.sys.no_apis') + '</small>';
                 }
 
                 // Add API inline form
@@ -461,11 +461,11 @@ function loadSapSystems() {
                         </span>
                         <span>
                             <small class="text-muted mr-2">${sys.host || ''}</small>
-                            <button class="btn btn-xs btn-outline-primary" onclick="editSystem('${sys.system_id}')" title="Bearbeiten">
+                            <button class="btn btn-xs btn-outline-primary" onclick="editSystem('${sys.system_id}')" title="${t('set.sys.edit')}">
                                 <i class="fas fa-edit"></i>
                             </button>
                             ${sys.source !== 'yaml' ? `
-                                <button class="btn btn-xs btn-outline-danger ml-1" onclick="deleteSapSystem('${sys.system_id}')" title="Deaktivieren">
+                                <button class="btn btn-xs btn-outline-danger ml-1" onclick="deleteSapSystem('${sys.system_id}')" title="${t('set.sys.deactivate')}">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             ` : ''}
@@ -473,7 +473,7 @@ function loadSapSystems() {
                     </div>
                     <div class="card-body py-2">
                         <div class="d-flex justify-content-between align-items-center mb-1">
-                            <small><strong>API-Endpunkte:</strong></small>
+                            <small><strong>${t('set.sys.endpoints')}:</strong></small>
                             <button class="btn btn-xs btn-outline-success" onclick="document.getElementById('${addApiFormId}').style.display='flex'">
                                 <i class="fas fa-plus"></i> API
                             </button>
@@ -497,7 +497,7 @@ function loadSapSystems() {
 
 function showAddSystemForm() {
     editingSystemId = null;
-    document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-plus"></i> Neues System anlegen';
+    document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-plus"></i> ' + t('set.sys.create');
     document.getElementById('sysId').value = '';
     document.getElementById('sysId').readOnly = false;
     document.getElementById('sysLabel').value = '';
@@ -519,7 +519,7 @@ function editSystem(systemId) {
             if (!sys) return;
             
             editingSystemId = systemId;
-            document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-edit"></i> System bearbeiten: ' + systemId.toUpperCase();
+            document.getElementById('systemFormTitle').innerHTML = '<i class="fas fa-edit"></i> ' + t('set.sys.edit_system', {system: systemId.toUpperCase()});
             document.getElementById('sysId').value = sys.system_id;
             document.getElementById('sysId').readOnly = true;
             document.getElementById('sysLabel').value = sys.system_label;
@@ -551,7 +551,7 @@ function addApiRow(name, label, url) {
     row.className = 'form-row mb-1 api-row';
     row.innerHTML = `
         <div class="col-md-2">
-            <input type="text" class="form-control form-control-sm api-name" value="${name || ''}" placeholder="Name (z.B. document)">
+            <input type="text" class="form-control form-control-sm api-name" value="${name || ''}" placeholder="${t('set.sys.api_name_ph')}">
         </div>
         <div class="col-md-2">
             <input type="text" class="form-control form-control-sm api-label" value="${label || ''}" placeholder="Label">
@@ -579,7 +579,7 @@ function saveSapSystem(event) {
     const apiKey = document.getElementById('sysApiKey').value.trim();
     
     if (!systemId || !systemLabel) {
-        alert('System-ID und Label sind erforderlich');
+        alert(t('set.sys.id_label_required'));
         return;
     }
     
@@ -609,14 +609,14 @@ function saveSapSystem(event) {
             loadSapSystems();
             loadCredentials();  // Refresh credentials list too (new system might appear)
         } else {
-            alert('Fehler: ' + data.error);
+            alert(t('error_prefix') + data.error);
         }
     })
-    .catch(error => alert('Fehler: ' + error));
+    .catch(error => alert(t('error_prefix') + error));
 }
 
 function deleteSapSystem(systemId) {
-    if (!confirm('System ' + systemId.toUpperCase() + ' wirklich deaktivieren? (YAML-Defaults bleiben erhalten)')) return;
+    if (!confirm(t('set.sys.delete_confirm', {system: systemId.toUpperCase()}))) return;
     
     fetch('/sap-systems/' + systemId, { method: 'DELETE' })
         .then(r => r.json())
@@ -624,10 +624,10 @@ function deleteSapSystem(systemId) {
             if (data.success) {
                 loadSapSystems();
             } else {
-                alert('Fehler: ' + data.error);
+                alert(t('error_prefix') + data.error);
             }
         })
-        .catch(error => alert('Fehler: ' + error));
+        .catch(error => alert(t('error_prefix') + error));
 }
 
 function saveNewApi(systemId) {
@@ -636,7 +636,7 @@ function saveNewApi(systemId) {
     const url = document.getElementById('new-api-url-' + systemId).value.trim();
     
     if (!name || !url) {
-        alert('API Name und Base URL sind erforderlich');
+        alert(t('set.sys.api_required'));
         return;
     }
     
@@ -650,14 +650,14 @@ function saveNewApi(systemId) {
         if (data.success) {
             loadSapSystems();
         } else {
-            alert('Fehler: ' + data.error);
+            alert(t('error_prefix') + data.error);
         }
     })
-    .catch(error => alert('Fehler: ' + error));
+    .catch(error => alert(t('error_prefix') + error));
 }
 
 function deleteSapApi(systemId, apiName) {
-    if (!confirm('API "' + apiName + '" von ' + systemId.toUpperCase() + ' entfernen?')) return;
+    if (!confirm(t('set.sys.api_delete_confirm', {api: apiName, system: systemId.toUpperCase()}))) return;
     
     fetch('/sap-systems/' + systemId + '/apis/' + apiName, { method: 'DELETE' })
         .then(r => r.json())
@@ -665,8 +665,8 @@ function deleteSapApi(systemId, apiName) {
             if (data.success) {
                 loadSapSystems();
             } else {
-                alert('Fehler: ' + data.error);
+                alert(t('error_prefix') + data.error);
             }
         })
-        .catch(error => alert('Fehler: ' + error));
+        .catch(error => alert(t('error_prefix') + error));
 }

@@ -35,27 +35,29 @@ document.addEventListener('DOMContentLoaded', function() {
 // Error Overview (cross-batch aggregation)
 // ========================================================================
 const ERROR_DETAILS = {
-    'API_KEY_INVALID': { desc: 'API-Key ungültig', action: 'API im APIM freischalten' },
-    'TOKEN_EXPIRED': { desc: 'OAuth Token abgelaufen', action: 'Neu einloggen' },
-    'TOKEN_INVALID': { desc: 'OAuth Token ungültig', action: 'Neu einloggen' },
-    'CSRF_FAILED': { desc: 'CSRF Token Fehler', action: 'Session erneuern' },
-    'SOURCE_NOT_FOUND': { desc: 'Dokument nicht gefunden', action: 'Quelldaten prüfen' },
-    'SOURCE_EMPTY': { desc: 'Container ohne Dateien', action: 'Erwartet - leer' },
-    'SOURCE_READ_ERROR': { desc: 'Lesefehler im Quellsystem', action: 'R/3 API prüfen' },
-    'TARGET_CREATE_FAILED': { desc: 'Anlage fehlgeschlagen', action: 'SAP Log prüfen' },
-    'TARGET_EXISTS': { desc: 'Dokument existiert bereits', action: 'Zieldaten prüfen' },
-    'TARGET_LOCKED': { desc: 'Dokument gesperrt', action: 'Sperre aufheben' },
-    'UPLOAD_SIZE_EXCEEDED': { desc: 'Datei zu groß', action: 'Datei aufteilen' },
-    'UPLOAD_TIMEOUT': { desc: 'Upload Timeout', action: 'Später erneut versuchen' },
-    'GATEWAY_TIMEOUT': { desc: 'API Gateway Timeout (504)', action: 'Später erneut versuchen' },
-    'RATE_LIMITED': { desc: 'API Rate Limit erreicht', action: 'Warten und erneut versuchen' },
-    'SERVER_ERROR': { desc: 'SAP Serverfehler (5xx)', action: 'SAP Support kontaktieren' },
-    'BAD_REQUEST': { desc: 'Ungültige Anfrage (400)', action: 'Daten validieren' },
-    'UNKNOWN': { desc: 'Unbekannter Fehler', action: 'Log prüfen' }
+    'API_KEY_INVALID': { descKey: 'det.errdesc.API_KEY_INVALID', actionKey: 'det.erract.API_KEY_INVALID' },
+    'TOKEN_EXPIRED': { descKey: 'det.errdesc.TOKEN_EXPIRED', actionKey: 'det.erract.TOKEN_EXPIRED' },
+    'TOKEN_INVALID': { descKey: 'det.errdesc.TOKEN_INVALID', actionKey: 'det.erract.TOKEN_INVALID' },
+    'CSRF_FAILED': { descKey: 'det.errdesc.CSRF_FAILED', actionKey: 'det.erract.CSRF_FAILED' },
+    'SOURCE_NOT_FOUND': { descKey: 'det.errdesc.SOURCE_NOT_FOUND', actionKey: 'det.erract.SOURCE_NOT_FOUND' },
+    'SOURCE_EMPTY': { descKey: 'det.errdesc.SOURCE_EMPTY', actionKey: 'det.erract.SOURCE_EMPTY' },
+    'SOURCE_READ_ERROR': { descKey: 'det.errdesc.SOURCE_READ_ERROR', actionKey: 'det.erract.SOURCE_READ_ERROR' },
+    'TARGET_CREATE_FAILED': { descKey: 'det.errdesc.TARGET_CREATE_FAILED', actionKey: 'det.erract.TARGET_CREATE_FAILED' },
+    'TARGET_EXISTS': { descKey: 'det.errdesc.TARGET_EXISTS', actionKey: 'det.erract.TARGET_EXISTS' },
+    'TARGET_LOCKED': { descKey: 'det.errdesc.TARGET_LOCKED', actionKey: 'det.erract.TARGET_LOCKED' },
+    'UPLOAD_SIZE_EXCEEDED': { descKey: 'det.errdesc.UPLOAD_SIZE_EXCEEDED', actionKey: 'det.erract.UPLOAD_SIZE_EXCEEDED' },
+    'UPLOAD_TIMEOUT': { descKey: 'det.errdesc.UPLOAD_TIMEOUT', actionKey: 'det.erract.UPLOAD_TIMEOUT' },
+    'GATEWAY_TIMEOUT': { descKey: 'det.errdesc.GATEWAY_TIMEOUT', actionKey: 'det.erract.GATEWAY_TIMEOUT' },
+    'RATE_LIMITED': { descKey: 'det.errdesc.RATE_LIMITED', actionKey: 'det.erract.RATE_LIMITED' },
+    'SERVER_ERROR': { descKey: 'det.errdesc.SERVER_ERROR', actionKey: 'det.erract.SERVER_ERROR' },
+    'BAD_REQUEST': { descKey: 'det.errdesc.BAD_REQUEST', actionKey: 'det.erract.BAD_REQUEST' },
+    'UNKNOWN': { descKey: 'det.errdesc.UNKNOWN', actionKey: 'det.erract.UNKNOWN' }
 };
 
 function getErrorDetails(category) {
-    return ERROR_DETAILS[category] || { desc: category, action: 'Details prüfen' };
+    const entry = ERROR_DETAILS[category];
+    if (!entry) return { desc: category, action: t('det.erract.fallback') };
+    return { desc: t(entry.descKey), action: t(entry.actionKey) };
 }
 
 async function loadErrorOverview() {
@@ -79,7 +81,7 @@ async function loadErrorOverview() {
                         <td class="text-center"><strong>${err.count}</strong></td>
                         <td><small class="text-info">${details.action}</small></td>
                         <td>
-                            <button class="btn btn-sm btn-warning" onclick="retryByCategory('${err.category}')" title="Erneut versuchen">
+                            <button class="btn btn-sm btn-warning" onclick="retryByCategory('${err.category}')" title="${t('det.retry_tooltip')}">
                                 <i class="fas fa-redo"></i>
                             </button>
                         </td>
@@ -88,7 +90,7 @@ async function loadErrorOverview() {
             }).join('');
             
             document.getElementById('retryAllBtn').innerHTML = 
-                '<i class="fas fa-redo"></i> Alle ' + data.total_errors + ' Fehler erneut versuchen';
+                '<i class="fas fa-redo"></i> ' + t('det.retry_all_btn', {n: data.total_errors});
         } else {
             row.style.display = 'none';
         }
@@ -107,7 +109,7 @@ function getCategoryClass(category) {
 }
 
 async function retryByCategory(category) {
-    if (!confirm('Alle "' + category + '" Fehler erneut versuchen?')) return;
+    if (!confirm(t('det.retry_cat_confirm', {category: category}))) return;
     try {
         const response = await fetch('/retry_by_category', {
             method: 'POST',
@@ -116,14 +118,14 @@ async function retryByCategory(category) {
         });
         const data = await response.json();
         if (data.success) {
-            alert(data.reset_count + ' Datensätze zurückgesetzt.\nStarte Migration im Hintergrund...');
+            alert(t('det.retry_cat_success', {n: data.reset_count}));
             loadErrorOverview();
-        } else { alert('Fehler: ' + data.error); }
-    } catch (error) { alert('Fehler: ' + error); }
+        } else { alert(t('error_prefix') + data.error); }
+    } catch (error) { alert(t('error_prefix') + error); }
 }
 
 async function retryAllErrors() {
-    if (!confirm('Alle fehlgeschlagenen Migrationen erneut versuchen?')) return;
+    if (!confirm(t('det.retry_all_confirm'))) return;
     try {
         const response = await fetch('/retry_all_errors', {
             method: 'POST',
@@ -131,10 +133,10 @@ async function retryAllErrors() {
         });
         const data = await response.json();
         if (data.success) {
-            alert(data.reset_count + ' Datensätze zurückgesetzt.\nStarte Migration...');
+            alert(t('det.retry_all_success', {n: data.reset_count}));
             loadErrorOverview();
-        } else { alert('Fehler: ' + data.error); }
-    } catch (error) { alert('Fehler: ' + error); }
+        } else { alert(t('error_prefix') + data.error); }
+    } catch (error) { alert(t('error_prefix') + error); }
 }
 
 function toggleErrorPanel() {
@@ -156,7 +158,7 @@ async function loadBatches() {
         
         if (data.success) {
             const select = document.getElementById('batchSelect');
-            select.innerHTML = '<option value="">Batch auswählen...</option>';
+            select.innerHTML = '<option value="">' + t('det.select_batch') + '</option>';
             
             data.batches.forEach(batch => {
                 const option = document.createElement('option');
@@ -244,7 +246,7 @@ async function loadSummary(batchId) {
 
 function populateErrorCategories(categories) {
     const select = document.getElementById('filterErrorCategory');
-    select.innerHTML = '<option value="">Alle Kategorien</option>';
+    select.innerHTML = '<option value="">' + t('det.filter.all_cats') + '</option>';
     
     if (categories) {
         categories.forEach(item => {
@@ -344,10 +346,10 @@ function renderDocuments(documents) {
                 <div class="doc-files" id="files-${doc.id}">
                     <div class="text-center py-3">
                         <div class="spinner-border spinner-border-sm text-primary"></div>
-                        <span class="ml-2">Lade Dateien...</span>
+                        <span class="ml-2">${t('det.loading_files')}</span>
                     </div>
                 </div>
-                ${doc.validation_notes ? `<div class="validation-notes"><strong>Notizen:</strong> ${escapeHtml(doc.validation_notes)}</div>` : ''}
+                ${doc.validation_notes ? `<div class="validation-notes"><strong>${t('det.notes_label')}</strong> ${escapeHtml(doc.validation_notes)}</div>` : ''}
             </div>
         `;
     });
@@ -387,7 +389,7 @@ async function loadFileDetails(stagingId) {
     } catch (error) {
         console.error('Error loading file details:', error);
         document.getElementById(`files-${stagingId}`).innerHTML = 
-            `<div class="text-danger p-3">Fehler beim Laden der Dateidetails: ${error}</div>`;
+            `<div class="text-danger p-3">${t('det.file_load_error', {msg: error})}</div>`;
     }
 }
 
@@ -395,7 +397,7 @@ function renderFileDetails(stagingId, files) {
     const filesDiv = document.getElementById(`files-${stagingId}`);
     
     if (!files || files.length === 0) {
-        filesDiv.innerHTML = '<div class="text-muted p-3">Keine Dateidetails verfügbar</div>';
+        filesDiv.innerHTML = '<div class="text-muted p-3">' + t('det.no_file_details') + '</div>';
         return;
     }
     
@@ -404,12 +406,12 @@ function renderFileDetails(stagingId, files) {
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Dateiname</th>
-                    <th>Größe</th>
-                    <th>Status</th>
-                    <th>Kategorie</th>
+                    <th>${t('det.th.filename')}</th>
+                    <th>${t('det.th.size')}</th>
+                    <th>${t('det.th.status')}</th>
+                    <th>${t('det.th.category')}</th>
                     <th>HTTP</th>
-                    <th>Zeit</th>
+                    <th>${t('det.th.time')}</th>
                 </tr>
             </thead>
             <tbody>
@@ -436,7 +438,7 @@ function renderFileDetails(stagingId, files) {
             html += `
                 <tr class="error-detail-row">
                     <td colspan="7">
-                        <strong>Fehlerdetails:</strong>
+                        <strong>${t('det.error_detail_label')}</strong>
                         <pre>${escapeHtml(file.error_detail)}</pre>
                     </td>
                 </tr>

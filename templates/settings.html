@@ -6,8 +6,8 @@
 <div class="container-fluid mt-4">
     <div class="row">
         <div class="col-12">
-            <h2><i class="fas fa-cog"></i> Einstellungen</h2>
-            <p class="text-muted">Konfiguriere die Migration-Parameter</p>
+            <h2><i class="fas fa-cog"></i> <span data-i18n="set.title">Einstellungen</span></h2>
+            <p class="text-muted" data-i18n="set.subtitle">Konfiguriere die Migration-Parameter</p>
         </div>
     </div>
 
@@ -15,13 +15,13 @@
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="fas fa-tachometer-alt"></i> Leistungseinstellungen</h5>
+                    <h5 class="mb-0"><i class="fas fa-tachometer-alt"></i> <span data-i18n="set.perf.title">Leistungseinstellungen</span></h5>
                 </div>
                 <div class="card-body">
                     <form id="settingsForm">
                         <div class="form-group">
                             <label for="maxWorkers">
-                                <i class="fas fa-users"></i> Max API Workers
+                                <i class="fas fa-users"></i> <span data-i18n="set.perf.workers">Max API Workers</span>
                             </label>
                             <input type="number" class="form-control" id="maxWorkers" 
                                    value="{{ settings.max_workers }}" min="1" max="50">
@@ -32,7 +32,7 @@
                         
                         <div class="form-group">
                             <label for="pacingSeconds">
-                                <i class="fas fa-clock"></i> Pacing (Sekunden)
+                                <i class="fas fa-clock"></i> <span data-i18n="set.perf.pacing">Pacing (Sekunden)</span>
                             </label>
                             <div class="input-group">
                                 <input type="number" class="form-control" id="pacingSeconds" 
@@ -71,7 +71,7 @@
                         </div>
 
                         <button type="submit" class="btn btn-primary btn-lg btn-block">
-                            <i class="fas fa-save"></i> Einstellungen speichern
+                            <i class="fas fa-save"></i> <span data-i18n="set.perf.save">Einstellungen speichern</span>
                         </button>
                     </form>
                 </div>
@@ -81,16 +81,16 @@
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0"><i class="fas fa-info-circle"></i> Aktuelle Konfiguration</h5>
+                    <h5 class="mb-0"><i class="fas fa-info-circle"></i> <span data-i18n="set.config.title">Aktuelle Konfiguration</span></h5>
                 </div>
                 <div class="card-body">
                     <table class="table table-bordered">
                         <tr>
-                            <th>Quellsystem</th>
+                            <th data-i18n="set.config.source">Quellsystem</th>
                             <td><span class="badge badge-info">{{ source_system | upper }}</span> {{ source_system_label }}</td>
                         </tr>
                         <tr>
-                            <th>Zielsystem</th>
+                            <th data-i18n="set.config.target">Zielsystem</th>
                             <td><span class="badge badge-success">{{ target_system | upper }}</span> {{ target_system_label }}</td>
                         </tr>
                         <tr>
@@ -113,7 +113,7 @@
 
             <div class="card mt-3">
                 <div class="card-header bg-warning">
-                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> Hinweise</h5>
+                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> <span data-i18n="set.notices.title">Hinweise</span></h5>
                 </div>
                 <div class="card-body">
                     <ul>
@@ -133,7 +133,7 @@
             <div class="card">
                 <div class="card-header bg-dark text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-key"></i> SAP Zugangsdaten
+                        <i class="fas fa-key"></i> <span data-i18n="set.cred.title">SAP Zugangsdaten</span>
                         <button class="btn btn-sm btn-light float-right" onclick="loadCredentials()">
                             <i class="fas fa-sync-alt"></i> Aktualisieren
                         </button>
@@ -169,7 +169,7 @@
             <div class="card">
                 <div class="card-header bg-success text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-server"></i> SAP Systeme verwalten
+                        <i class="fas fa-server"></i> <span data-i18n="set.sys.title">SAP Systeme verwalten</span>
                         <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
                             <i class="fas fa-sync-alt"></i> Aktualisieren
                         </button>
@@ -281,7 +281,7 @@
             <div class="card">
                 <div class="card-header bg-info text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-chart-line"></i> Dynamisches Pacing - Historische Analyse
+                        <i class="fas fa-chart-line"></i> <span data-i18n="set.pacing.title">Dynamisches Pacing - Historische Analyse</span>
                         <button class="btn btn-sm btn-light float-right" onclick="loadPacingStats()">
                             <i class="fas fa-sync-alt"></i> Aktualisieren
                         </button>

@@ -17,7 +17,7 @@ function loadAll() {
                 applyWaveFilter();
             }
         })
-        .catch(err => console.error('Fehler:', err));
+        .catch(err => console.error('Batches load error:', err));
 }
 
 function populateWaveFilter(batches) {
@@ -29,7 +29,7 @@ function populateWaveFilter(batches) {
     wavePlans.forEach(w => waveNames.add(w.wave_name));
 
     const sorted = [...waveNames].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    select.innerHTML = '<option value="">Alle Wellen</option>';
+    select.innerHTML = '<option value="">' + t('dash.all_waves') + '</option>';
     sorted.forEach(w => { select.innerHTML += `<option value="${w}">${w}</option>`; });
     select.value = prevVal || '';
 }
@@ -82,26 +82,26 @@ function renderKPIs(batches) {
 function renderKanban(batches) {
     const waves = {};
     batches.forEach(b => {
-        const wave = b.wave || 'Nicht zugeordnet';
+        const wave = b.wave || t('kanban.unassigned');
         if (!waves[wave]) waves[wave] = [];
         waves[wave].push(b);
     });
 
     const sortedWaves = Object.keys(waves).sort((a, b) => {
-        if (a === 'Nicht zugeordnet') return 1;
-        if (b === 'Nicht zugeordnet') return -1;
+        if (a === t('kanban.unassigned')) return 1;
+        if (b === t('kanban.unassigned')) return -1;
         return a.localeCompare(b, undefined, { numeric: true });
     });
 
     const board = document.getElementById('kanbanBoard');
     if (sortedWaves.length === 0) {
-        board.innerHTML = '<div class="text-center w-100 py-5 text-muted">Keine Batches vorhanden. <a href="/prepare">Ersten Batch erstellen</a></div>';
+        board.innerHTML = '<div class="text-center w-100 py-5 text-muted">' + t('kanban.no_batches').replace('Ersten Batch erstellen', '<a href="/prepare">' + t('wf.step1') + '</a>') + '</div>';
         return;
     }
 
     board.innerHTML = sortedWaves.map(waveName => {
         const wb = waves[waveName];
-        const isUnassigned = waveName === 'Nicht zugeordnet';
+        const isUnassigned = waveName === t('kanban.unassigned');
         let wTotal = 0, wUploaded = 0, wLinked = 0, wFailed = 0;
         wb.forEach(b => {
             wTotal += (b.total_records || 0);
@@ -130,8 +130,8 @@ function renderKanban(batches) {
                         <div class="progress-bar bg-info" style="width: ${lPct}%"></div>
                     </div>
                     <div class="wave-stats text-right mt-1">
-                        ${wUploaded}/${wTotal} Docs | ${wLinked} verlinkt
-                        ${wFailed > 0 ? '| <span class="text-danger">' + wFailed + ' Fehler</span>' : ''}
+                        ${wUploaded}/${wTotal} Docs | ${wLinked} ${t('kanban.linked')}
+                        ${wFailed > 0 ? '| <span class="text-danger">' + wFailed + ' ' + t('kanban.errors') + '</span>' : ''}
                     </div>
                 </div>
                 ${wb.map(b => renderBatchCard(b, {showEditButton: true})).join('')}
@@ -158,7 +158,7 @@ function toggleBatchTable() {
 function displayBatches(batches) {
     const tbody = document.getElementById('batchesBody');
     if (batches.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">Keine Batches vorhanden</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">' + t('kanban.no_batches_table') + '</td></tr>';
         return;
     }
 
@@ -191,12 +191,12 @@ function getPhaseBadge(phase, status) {
         return '<span class="badge badge-secondary">Upload</span>';
     }
     const phases = {
-        'upload': '<span class="badge badge-primary"><i class="fas fa-upload"></i> Upload</span>',
-        'upload_done': '<span class="badge badge-success"><i class="fas fa-check"></i> Upload ✓</span>',
-        'linking': '<span class="badge badge-info"><i class="fas fa-link fa-spin"></i> Verlinkung</span>',
-        'completed': '<span class="badge badge-success"><i class="fas fa-check-double"></i> Fertig</span>',
-        'link_cancelled': '<span class="badge badge-secondary"><i class="fas fa-stop"></i> Abgebrochen</span>',
-        'link_error': '<span class="badge badge-danger"><i class="fas fa-exclamation"></i> Fehler</span>'
+        'upload': '<span class="badge badge-primary"><i class="fas fa-upload"></i> ' + t('phase_badge.upload') + '</span>',
+        'upload_done': '<span class="badge badge-success"><i class="fas fa-check"></i> ' + t('phase_badge.upload_done') + '</span>',
+        'linking': '<span class="badge badge-info"><i class="fas fa-link fa-spin"></i> ' + t('phase_badge.linking') + '</span>',
+        'completed': '<span class="badge badge-success"><i class="fas fa-check-double"></i> ' + t('phase_badge.completed') + '</span>',
+        'link_cancelled': '<span class="badge badge-secondary"><i class="fas fa-stop"></i> ' + t('phase_badge.cancelled') + '</span>',
+        'link_error': '<span class="badge badge-danger"><i class="fas fa-exclamation"></i> ' + t('phase_badge.error') + '</span>'
     };
     return phases[phase] || '<span class="badge badge-secondary">' + phase + '</span>';
 }
@@ -212,7 +212,7 @@ function getLinkInfo(batch) {
     else if (linked > 0) color = 'bg-info';
     else if (failed > 0) color = 'bg-danger';
 
-    return `<div title="Verlinkt: ${linked} | Fehler: ${failed} | Gesamt: ${total}">
+    return `<div title="${t('kanban.linked')}: ${linked} | ${t('kanban.errors')}: ${failed} | ${t('kanban.total')}: ${total}">
         <div class="progress" style="height: 16px; min-width: 60px;">
             <div class="progress-bar ${color}" style="width: ${pct}%">${linked}/${total}</div>
         </div>
@@ -221,16 +221,16 @@ function getLinkInfo(batch) {
 
 function getActionButtons(batch) {
     let buttons = [];
-    buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="Vorschau & Vorbereitung"><i class="fas fa-eye"></i> Vorschau</a>`);
+    buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="${t('batch_action.preview')}"><i class="fas fa-eye"></i> ${t('batch_action.preview')}</a>`);
 
     if (batch.status === 'completed' || batch.status === 'completed_with_errors' || batch.executed_records > 0) {
-        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="Auswertung"><i class="fas fa-chart-bar"></i> Auswertung</a>`);
+        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="${t('batch_action.results')}"><i class="fas fa-chart-bar"></i> ${t('batch_action.results')}</a>`);
     }
 
-    buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="Bearbeiten"><i class="fas fa-edit"></i></button>`);
+    buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="${t('batch_action.edit')}"><i class="fas fa-edit"></i></button>`);
 
     if (batch.status !== 'executing') {
-        buttons.push(`<button onclick="deleteBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-danger" title="Löschen"><i class="fas fa-trash"></i></button>`);
+        buttons.push(`<button onclick="deleteBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-danger" title="${t('batch_action.delete')}"><i class="fas fa-trash"></i></button>`);
     }
     return buttons.join(' ');
 }
@@ -249,30 +249,30 @@ function editBatch(batchId) {
         <div class="modal fade" id="editBatchModal" tabindex="-1">
             <div class="modal-dialog"><div class="modal-content">
                 <div class="modal-header bg-primary text-white py-2">
-                    <h5 class="modal-title"><i class="fas fa-edit"></i> Batch bearbeiten</h5>
+                    <h5 class="modal-title"><i class="fas fa-edit"></i> ${t('edit_batch.title')}</h5>
                     <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="editBatchId">
                     <div class="form-group">
-                        <label for="editWave">Wave</label>
+                        <label for="editWave">${t('edit_batch.wave')}</label>
                         <select class="form-control" id="editWave">
-                            <option value="">-- Wave w&auml;hlen --</option>
+                            <option value="">${t('edit_batch.choose_wave')}</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Beschreibung (max. 40 Zeichen)</label>
+                        <label>${t('edit_batch.description')}</label>
                         <input type="text" class="form-control" id="editDescription" maxlength="40">
                         <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
                     </div>
                     <div class="form-group">
-                        <label>Notizen</label>
+                        <label>${t('edit_batch.notes')}</label>
                         <textarea class="form-control" id="editNotes" rows="3"></textarea>
                     </div>
                     <div class="form-group">
-                        <label><strong>Aufgaben-Zuordnung</strong></label>
+                        <label><strong>${t('edit_batch.task_assignment')}</strong></label>
                         <table class="table table-sm table-borderless mb-0">
-                            <thead><tr><th style="width:30px"></th><th>Aufgabe</th><th>Start</th><th style="width:80px">Dauer</th><th style="width:90px">Ende</th></tr></thead>
+                            <thead><tr><th style="width:30px"></th><th>${t('edit_batch.task')}</th><th>${t('edit_batch.start')}</th><th style="width:80px">${t('edit_batch.duration')}</th><th style="width:90px">${t('edit_batch.end')}</th></tr></thead>
                             <tbody>
                                 <tr>
                                     <td><input type="checkbox" id="editTaskQualLoad" onchange="toggleBatchTaskRow('QualLoad')"></td>
@@ -304,13 +304,13 @@ function editBatch(batchId) {
                                 </tr>
                             </tbody>
                         </table>
-                        <small class="text-muted">T = Kalendertage. Checkbox aktiviert die Aufgabe.</small>
+                        <small class="text-muted">${t('edit_batch.days_hint')}</small>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-danger mr-auto" onclick="deleteBatchFromModal()"><i class="fas fa-trash"></i> L&ouml;schen</button>
-                    <button class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
-                    <button class="btn btn-primary" onclick="saveBatch()"><i class="fas fa-save"></i> Speichern</button>
+                    <button class="btn btn-danger mr-auto" onclick="deleteBatchFromModal()"><i class="fas fa-trash"></i> ${t('delete')}</button>
+                    <button class="btn btn-secondary" data-dismiss="modal">${t('cancel')}</button>
+                    <button class="btn btn-primary" onclick="saveBatch()"><i class="fas fa-save"></i> ${t('save')}</button>
                 </div>
             </div></div>
         </div>`;
@@ -401,13 +401,13 @@ function saveBatch() {
     .then(r => r.json())
     .then(data => {
         if (data.success) { $('#editBatchModal').modal('hide'); loadAll(); }
-        else alert('Fehler: ' + data.error);
+        else alert(t('error_prefix') + data.error);
     })
-    .catch(err => alert('Fehler: ' + err));
+    .catch(err => alert(t('error_prefix') + err));
 }
 
 function deleteBatch(batchId) {
-    if (!confirm('Batch ' + batchId + ' wirklich l\u00f6schen?\n\nAlle Staging-Datens\u00e4tze, Dateidetails, Logs und Mappings werden unwiderruflich gel\u00f6scht.')) return;
+    if (!confirm(t('edit_batch.delete_confirm', {id: batchId}))) return;
 
     const btn = event.target.closest('button');
     const orig = btn.innerHTML;
@@ -420,23 +420,23 @@ function deleteBatch(batchId) {
         .then(r => r.json())
         .then(data => {
             if (data.success) { loadAll(); }
-            else { alert('Fehler: ' + data.error); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; }
+            else { alert(t('error_prefix') + data.error); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; }
         })
-        .catch(err => { alert('Fehler: ' + err); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; });
+        .catch(err => { alert(t('error_prefix') + err); btn.disabled = false; btn.innerHTML = orig; if (row) row.style.opacity = '1'; });
 }
 
 function deleteBatchFromModal() {
     const batchId = document.getElementById('editBatchId').value;
     if (!batchId) return;
-    if (!confirm('Batch ' + batchId + ' wirklich l\u00f6schen?\n\nAlle Staging-Datens\u00e4tze, Dateidetails, Logs und Mappings werden unwiderruflich gel\u00f6scht.')) return;
+    if (!confirm(t('edit_batch.delete_confirm', {id: batchId}))) return;
 
     fetch('/batch/' + batchId, { method: 'DELETE' })
         .then(r => r.json())
         .then(data => {
             if (data.success) { $('#editBatchModal').modal('hide'); loadAll(); }
-            else { alert('Fehler: ' + data.error); }
+            else { alert(t('error_prefix') + data.error); }
         })
-        .catch(err => { alert('Fehler: ' + err); });
+        .catch(err => { alert(t('error_prefix') + err); });
 }
 
 // ========================================================================
@@ -471,7 +471,7 @@ function populateWaveDropdowns(waves) {
     const editSelect = document.getElementById('editWave');
     if (editSelect) {
         const currentVal = editSelect.value;
-        editSelect.innerHTML = '<option value="">-- Wave wählen --</option>';
+        editSelect.innerHTML = `<option value="">${t('edit_batch.choose_wave')}</option>`;
         names.forEach(n => {
             editSelect.innerHTML += `<option value="${n}">${n}</option>`;
         });
@@ -490,7 +490,7 @@ function parseLocalDate(str) {
 function renderGantt(waves, batches) {
     const container = document.getElementById('ganttContainer');
     if (waves.length === 0) {
-        container.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-calendar-alt fa-2x mb-2"></i><br>Noch keine Wellenplanung vorhanden.<br><button class="btn btn-sm btn-outline-primary mt-2" onclick="openWavePlanModal()"><i class="fas fa-plus"></i> Erste Welle planen</button></div>';
+        container.innerHTML = `<div class="text-center text-muted py-4"><i class="fas fa-calendar-alt fa-2x mb-2"></i><br>${t('gantt.no_plan')}<br><button class="btn btn-sm btn-outline-primary mt-2" onclick="openWavePlanModal()"><i class="fas fa-plus"></i> ${t('gantt.plan_first')}</button></div>`;
         return;
     }
 
@@ -503,7 +503,7 @@ function renderGantt(waves, batches) {
         });
     });
     if (allDates.length === 0) {
-        container.innerHTML = '<div class="text-center text-muted py-3">Keine Zeiträume definiert.</div>';
+        container.innerHTML = `<div class="text-center text-muted py-3">${t('gantt.no_periods')}</div>`;
         return;
     }
 
@@ -537,7 +537,7 @@ function renderGantt(waves, batches) {
         { key: 'prod_link', label: 'Prod Link', env: 'prod' },
     ];
 
-    let html = '<table class="gantt-table"><thead><tr><th style="min-width:160px;">Aufgabe</th>';
+    let html = `<table class="gantt-table"><thead><tr><th style="min-width:160px;">${t('gantt.task')}</th>`;
     months.forEach(m => { html += `<th colspan="${m.days}" class="gantt-month-header">${m.label}</th>`; });
     html += '</tr></thead><tbody>';
 
@@ -564,7 +564,7 @@ function renderGantt(waves, batches) {
                 row += '</td>';
             }
         } else {
-            row += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Nicht geplant</td>`;
+            row += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">${t('gantt.not_planned')}</td>`;
         }
         row += '</tr>';
         return row;
@@ -573,8 +573,8 @@ function renderGantt(waves, batches) {
     waves.forEach(w => {
         // Wave header row
         html += `<tr class="gantt-row-wave"><td colspan="${totalDays + 1}"><strong>${w.wave_name}</strong>`;
-        html += ` <button class="btn btn-sm btn-link p-0 ml-2" onclick="editWavePlan('${w.wave_name}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
-        html += ` <button class="btn btn-sm btn-link text-danger p-0 ml-1" onclick="deleteWavePlan(${w.id}, '${w.wave_name}')" title="Löschen"><i class="fas fa-trash fa-xs"></i></button>`;
+        html += ` <button class="btn btn-sm btn-link p-0 ml-2" onclick="editWavePlan('${w.wave_name}')" title="${t('batch_action.edit')}"><i class="fas fa-pen fa-xs"></i></button>`;
+        html += ` <button class="btn btn-sm btn-link text-danger p-0 ml-1" onclick="deleteWavePlan(${w.id}, '${w.wave_name}')" title="${t('delete')}"><i class="fas fa-trash fa-xs"></i></button>`;
         html += `</td></tr>`;
 
         const waveBatches = (batches || []).filter(b => b.wave === w.wave_name);
@@ -588,7 +588,7 @@ function renderGantt(waves, batches) {
             let durationInfo = '';
             if (startStr && endStr) {
                 const dDays = Math.round((parseLocalDate(endStr) - parseLocalDate(startStr)) / 86400000) + 1;
-                durationInfo = ` <span class="text-muted" style="font-size:0.7rem;">(${dDays} Tage)</span>`;
+                durationInfo = ` <span class="text-muted" style="font-size:0.7rem;">(${dDays} ${t('gantt.days')})</span>`;
             }
             const label = `<span class="task-env ${t.env}">${t.env.toUpperCase()}</span> ${t.label.split(' ')[1]}${durationInfo}`;
             html += renderBarRow(label, startStr, endStr, getStatusText(status), 'wave-' + t.env + ' status-' + status);
@@ -607,11 +607,11 @@ function renderGantt(waves, batches) {
                 if (bStatus === 'completed') batchCss = 'batch-completed';
                 else if (bStatus === 'executing') batchCss = 'batch-executing';
                 else if (phase === 'linking') batchCss = 'batch-linking';
-                const durText = bDur > 0 ? `${bDur} Tage` : '';
+                const durText = bDur > 0 ? `${bDur} ${t('gantt.days')}` : '';
                 const statusText = `${b.total_records || 0} Dok.${durText ? ' | ' + durText : ''}`;
                 const rowLabel = `<span style="padding-left:24px;font-size:0.78rem;"><i class="fas fa-box fa-xs text-muted"></i> ${batchLabel}</span>`
                     + ` <span class="text-muted" style="font-size:0.7rem;">(${statusText})</span>`
-                    + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
+                    + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="${t('batch_action.edit')}"><i class="fas fa-pen fa-xs"></i></button>`;
                 if (bStart && bDur > 0) {
                     const barEnd = addDays(bStart, bDur - 1);
                     html += renderBarRow(rowLabel, bStart, barEnd, statusText, batchCss);
@@ -620,7 +620,7 @@ function renderGantt(waves, batches) {
                     html += renderBarRow(rowLabel, startStr, endStr, statusText, batchCss);
                 } else {
                     html += `<tr class="gantt-row-batch"><td>${rowLabel}</td>`;
-                    html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Zeitraum nicht definiert</td></tr>`;
+                    html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">${t('gantt.period_undef')}</td></tr>`;
                 }
             });
         });
@@ -632,9 +632,9 @@ function renderGantt(waves, batches) {
             const statusText = `${b.total_records || 0} Dok.`;
             const rowLabel = `<span style="padding-left:24px;font-size:0.78rem;"><i class="fas fa-box fa-xs text-muted"></i> ${batchLabel}</span>`
                 + ` <span class="text-muted" style="font-size:0.7rem;">(${statusText})</span>`
-                + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="Bearbeiten"><i class="fas fa-pen fa-xs"></i></button>`;
+                + ` <button class="btn btn-sm btn-link p-0 ml-1 text-muted" onclick="event.stopPropagation(); editBatch('${b.batch_id}')" title="${t('batch_action.edit')}"><i class="fas fa-pen fa-xs"></i></button>`;
             html += `<tr class="gantt-row-batch"><td>${rowLabel}</td>`;
-            html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">Keine Aufgabe zugeordnet</td></tr>`;
+            html += `<td colspan="${totalDays}" class="text-muted" style="font-size:0.75rem">${t('gantt.no_task')}</td></tr>`;
         });
     });
 
@@ -656,15 +656,15 @@ function addDays(dateStr, days) {
 function renderTaskList(waves) {
     const tbody = document.getElementById('taskListBody');
     if (waves.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">Keine Wellenplanung vorhanden</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">${t('tasklist.no_plans')}</td></tr>`;
         return;
     }
 
     const tasks = [
         { key: 'qual_load', label: 'Load', env: 'Qual', icon: 'fa-upload' },
-        { key: 'qual_link', label: 'Verlinkung', env: 'Qual', icon: 'fa-link' },
+        { key: 'qual_link', label: t('tasklist.linking'), env: 'Qual', icon: 'fa-link' },
         { key: 'prod_load', label: 'Load', env: 'Prod', icon: 'fa-upload' },
-        { key: 'prod_link', label: 'Verlinkung', env: 'Prod', icon: 'fa-link' },
+        { key: 'prod_link', label: t('tasklist.linking'), env: 'Prod', icon: 'fa-link' },
     ];
 
     let html = '';
@@ -697,7 +697,7 @@ function renderTaskList(waves) {
                                 onclick="cycleTaskStatus(${w.id}, '${t.key}_status', '${getNextStatus(status)}')" 
                                 title="Klick: → ${getStatusText(getNextStatus(status))}">
                                 <i class="fas fa-chevron-right fa-xs"></i></span>
-                            <button class="btn btn-sm btn-link p-0 ml-2 text-muted" onclick="editWavePlan('${w.wave_name}')" title="Welle bearbeiten">
+                            <button class="btn btn-sm btn-link p-0 ml-2 text-muted" onclick="editWavePlan('${w.wave_name}')" title="${t('tasklist.edit_wave')}">
                                 <i class="fas fa-pen fa-xs"></i>
                             </button>
                         </div>
@@ -722,7 +722,7 @@ function getPrevStatus(status) {
 }
 
 function getStatusText(status) {
-    return { 'vorbereitung': 'In Vorbereitung', 'arbeit': 'In Arbeit', 'fertig': 'Fertig' }[status] || status;
+    return { 'vorbereitung': t('tasklist.status_prep'), 'arbeit': t('tasklist.status_work'), 'fertig': t('tasklist.status_done') }[status] || status;
 }
 
 function cycleTaskStatus(waveId, taskField, newStatus) {
@@ -732,8 +732,8 @@ function cycleTaskStatus(waveId, taskField, newStatus) {
         body: JSON.stringify({ wave_id: waveId, task_field: taskField, status: newStatus })
     })
     .then(r => r.json())
-    .then(data => { if (data.success) loadWavePlans(); else alert('Fehler: ' + data.error); })
-    .catch(err => alert('Fehler: ' + err));
+    .then(data => { if (data.success) loadWavePlans(); else alert(t('error_prefix') + data.error); })
+    .catch(err => alert(t('error_prefix') + err));
 }
 
 function formatDateShort(dateStr) {
@@ -750,14 +750,14 @@ function openWavePlanModal(waveName) {
         <div class="modal fade" id="wavePlanModal" tabindex="-1">
             <div class="modal-dialog modal-lg"><div class="modal-content">
                 <div class="modal-header bg-dark text-white py-2">
-                    <h5 class="modal-title"><i class="fas fa-calendar-alt"></i> Welle planen</h5>
+                    <h5 class="modal-title"><i class="fas fa-calendar-alt"></i> ${t('wave_plan.title')}</h5>
                     <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label><strong>Wellenname</strong></label>
+                        <label><strong>${t('wave_plan.name')}</strong></label>
                         <select class="form-control" id="wpWaveName">
-                            <option value="">-- Welle w&auml;hlen --</option>
+                            <option value="">${t('wave_plan.choose')}</option>
                             <option value="Wave 0">Wave 0</option>
                             <option value="Wave 1">Wave 1</option>
                             <option value="Wave 2">Wave 2</option>
@@ -769,7 +769,7 @@ function openWavePlanModal(waveName) {
                         </select>
                     </div>
                     <table class="table table-sm mb-0">
-                        <thead><tr><th>Aufgabe</th><th>Start</th><th style="width:90px">Dauer</th><th style="width:110px">Ende</th><th>Status</th></tr></thead>
+                        <thead><tr><th>${t('wave_plan.task')}</th><th>${t('wave_plan.start')}</th><th style="width:90px">${t('wave_plan.duration')}</th><th style="width:110px">${t('wave_plan.end')}</th><th>${t('wave_plan.status')}</th></tr></thead>
                         <tbody>
                             <tr>
                                 <td><span class="task-env qual">QUAL</span> Load</td>
@@ -777,20 +777,20 @@ function openWavePlanModal(waveName) {
                                 <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpQualLoadDur" data-task="QualLoad"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
                                 <td><span class="text-muted wp-end-label" id="wpQualLoadEndLabel" style="font-size:0.8rem">–</span></td>
                                 <td><select class="form-control form-control-sm" id="wpQualLoadStatus">
-                                    <option value="vorbereitung">Vorbereitung</option>
-                                    <option value="arbeit">In Arbeit</option>
-                                    <option value="fertig">Fertig</option>
+                                    <option value="vorbereitung">${t('wave_plan.status_prep')}</option>
+                                    <option value="arbeit">${t('wave_plan.status_work')}</option>
+                                    <option value="fertig">${t('wave_plan.status_done')}</option>
                                 </select></td>
                             </tr>
                             <tr>
-                                <td><span class="task-env qual">QUAL</span> Verlinkung</td>
+                                <td><span class="task-env qual">QUAL</span> ${t('tasklist.linking')}</td>
                                 <td><input type="date" class="form-control form-control-sm wp-start" id="wpQualLinkStart" data-task="QualLink"></td>
                                 <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpQualLinkDur" data-task="QualLink"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
                                 <td><span class="text-muted wp-end-label" id="wpQualLinkEndLabel" style="font-size:0.8rem">–</span></td>
                                 <td><select class="form-control form-control-sm" id="wpQualLinkStatus">
-                                    <option value="vorbereitung">Vorbereitung</option>
-                                    <option value="arbeit">In Arbeit</option>
-                                    <option value="fertig">Fertig</option>
+                                    <option value="vorbereitung">${t('wave_plan.status_prep')}</option>
+                                    <option value="arbeit">${t('wave_plan.status_work')}</option>
+                                    <option value="fertig">${t('wave_plan.status_done')}</option>
                                 </select></td>
                             </tr>
                             <tr>
@@ -799,33 +799,33 @@ function openWavePlanModal(waveName) {
                                 <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpProdLoadDur" data-task="ProdLoad"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
                                 <td><span class="text-muted wp-end-label" id="wpProdLoadEndLabel" style="font-size:0.8rem">–</span></td>
                                 <td><select class="form-control form-control-sm" id="wpProdLoadStatus">
-                                    <option value="vorbereitung">Vorbereitung</option>
-                                    <option value="arbeit">In Arbeit</option>
-                                    <option value="fertig">Fertig</option>
+                                    <option value="vorbereitung">${t('wave_plan.status_prep')}</option>
+                                    <option value="arbeit">${t('wave_plan.status_work')}</option>
+                                    <option value="fertig">${t('wave_plan.status_done')}</option>
                                 </select></td>
                             </tr>
                             <tr>
-                                <td><span class="task-env prod">PROD</span> Verlinkung</td>
+                                <td><span class="task-env prod">PROD</span> ${t('tasklist.linking')}</td>
                                 <td><input type="date" class="form-control form-control-sm wp-start" id="wpProdLinkStart" data-task="ProdLink"></td>
                                 <td><div class="input-group input-group-sm"><input type="number" min="1" class="form-control form-control-sm wp-dur" id="wpProdLinkDur" data-task="ProdLink"><div class="input-group-append"><span class="input-group-text" style="font-size:0.75rem">T</span></div></div></td>
                                 <td><span class="text-muted wp-end-label" id="wpProdLinkEndLabel" style="font-size:0.8rem">–</span></td>
                                 <td><select class="form-control form-control-sm" id="wpProdLinkStatus">
-                                    <option value="vorbereitung">Vorbereitung</option>
-                                    <option value="arbeit">In Arbeit</option>
-                                    <option value="fertig">Fertig</option>
+                                    <option value="vorbereitung">${t('wave_plan.status_prep')}</option>
+                                    <option value="arbeit">${t('wave_plan.status_work')}</option>
+                                    <option value="fertig">${t('wave_plan.status_done')}</option>
                                 </select></td>
                             </tr>
                         </tbody>
                     </table>
-                    <small class="text-muted">T = Kalendertage. Ende = Start + Dauer − 1.</small>
+                    <small class="text-muted">${t('wave_plan.days_hint')}</small>
                     <div class="form-group">
-                        <label>Notizen</label>
+                        <label>${t('wave_plan.notes')}</label>
                         <textarea class="form-control" id="wpNotes" rows="2"></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
-                    <button class="btn btn-primary" onclick="saveWavePlan()"><i class="fas fa-save"></i> Speichern</button>
+                    <button class="btn btn-secondary" data-dismiss="modal">${t('cancel')}</button>
+                    <button class="btn btn-primary" onclick="saveWavePlan()"><i class="fas fa-save"></i> ${t('save')}</button>
                 </div>
             </div></div>
         </div>`);
@@ -902,7 +902,7 @@ function editWavePlan(waveName) {
 
 function saveWavePlan() {
     const waveName = document.getElementById('wpWaveName').value;
-    if (!waveName) { alert('Bitte Welle auswählen'); return; }
+    if (!waveName) { alert(t('wave_plan.choose_alert')); return; }
 
     // Helper: compute end date from start + duration (days)
     function wpEndDate(taskPrefix) {
@@ -935,15 +935,15 @@ function saveWavePlan() {
     .then(r => r.json())
     .then(data => {
         if (data.success) { $('#wavePlanModal').modal('hide'); loadWavePlans(); }
-        else alert('Fehler: ' + data.error);
+        else alert(t('error_prefix') + data.error);
     })
-    .catch(err => alert('Fehler: ' + err));
+    .catch(err => alert(t('error_prefix') + err));
 }
 
 function deleteWavePlan(waveId, waveName) {
-    if (!confirm('Wellenplanung "' + waveName + '" löschen?')) return;
+    if (!confirm(t('wave_plan.delete_confirm', {name: waveName}))) return;
     fetch('/wave-plans/' + waveId, { method: 'DELETE' })
         .then(r => r.json())
-        .then(data => { if (data.success) loadWavePlans(); else alert('Fehler: ' + data.error); })
-        .catch(err => alert('Fehler: ' + err));
+        .then(data => { if (data.success) loadWavePlans(); else alert(t('error_prefix') + data.error); })
+        .catch(err => alert(t('error_prefix') + err));
 }

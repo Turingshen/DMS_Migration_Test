@@ -260,9 +260,9 @@ function updatePacingDisplay() {
     if (!pacingEl) return;
     
     if (currentPacingSeconds === 0) {
-        pacingEl.innerHTML = '<span class="badge badge-success" title="Response-basiert: Nächster Upload startet sofort nach API-Antwort">Response</span>';
+        pacingEl.innerHTML = `<span class="badge badge-success" title="${t('prev.pacing.response_tip')}">Response</span>`;
     } else {
-        pacingEl.innerHTML = `<span class="badge badge-secondary" title="Fixierte Wartezeit zwischen Uploads">Fixiert: ${currentPacingSeconds}s</span>`;
+        pacingEl.innerHTML = `<span class="badge badge-secondary" title="${t('prev.pacing.fixed_tip')}">${t('prev.pacing.fixed_label', {n: currentPacingSeconds})}</span>`;
     }
 }
 
@@ -298,7 +298,7 @@ function loadRecordsWithAllFilters() {
     
     // Show loading indicator
     const tbody = document.getElementById('recordsBody');
-    tbody.innerHTML = '<tr><td colspan="20" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Suche...</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="20" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> ${t('prev.searching')}</td></tr>`;
     
     // Load statistics from server (aggregated - fast!) and records
     Promise.all([
@@ -335,9 +335,9 @@ function loadRecordsWithAllFilters() {
         if (errorCategoryFilter) parts.push(errorCategoryFilter);
         
         if (parts.length > 0) {
-            filterInfo.textContent = `${totalInBatch} Treffer (${parts.join(', ')})`;
+            filterInfo.textContent = t('prev.filter_hits', {n: totalInBatch, filters: parts.join(', ')});
         } else {
-            filterInfo.textContent = `${allRecords.length} von ${totalInBatch} Datensätze`;
+            filterInfo.textContent = t('prev.records_of_total', {n: allRecords.length, total: totalInBatch});
         }
         
         // Update statistics from server-aggregated data
@@ -387,9 +387,9 @@ function loadRecords(errorCategoryFilter = '') {
         // Update filter info
         const filterInfo = document.getElementById('filterInfo');
         if (errorCategoryFilter) {
-            filterInfo.textContent = `Filter: ${errorCategoryFilter} (${allRecords.length} von ${recordsData.pagination?.total || allRecords.length})`;
+            filterInfo.textContent = t('prev.filter_active', {filter: errorCategoryFilter, n: allRecords.length, total: recordsData.pagination?.total || allRecords.length});
         } else {
-            filterInfo.textContent = `${allRecords.length} von ${recordsData.pagination?.total || allRecords.length} Datensätze`;
+            filterInfo.textContent = t('prev.records_of_total', {n: allRecords.length, total: recordsData.pagination?.total || allRecords.length});
         }
         
         // Update statistics from server-aggregated data
@@ -429,10 +429,10 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     const failedOpt = document.getElementById('statusFailed');
     const partialOpt = document.getElementById('statusPartial');
     
-    if (pendingOpt) pendingOpt.textContent = `⏳ Pending (${pendingCount.toLocaleString()})`;
-    if (successOpt) successOpt.textContent = `✅ Erfolgreich (${successCount.toLocaleString()})`;
-    if (failedOpt) failedOpt.textContent = `❌ Fehlgeschlagen (${failedCount.toLocaleString()})`;
-    if (partialOpt) partialOpt.textContent = `⚠️ Teilweise (${partialCount.toLocaleString()})`;
+    if (pendingOpt) pendingOpt.textContent = `${t('prev.filter.pending')} (${pendingCount.toLocaleString()})`;
+    if (successOpt) successOpt.textContent = `${t('prev.filter.success')} (${successCount.toLocaleString()})`;
+    if (failedOpt) failedOpt.textContent = `${t('prev.filter.failed')} (${failedCount.toLocaleString()})`;
+    if (partialOpt) partialOpt.textContent = `${t('prev.filter.partial')} (${partialCount.toLocaleString()})`;
     
     // Calculate runtime based on response-based pacing
     const transferRate = 1.0;  // seconds per MB
@@ -447,9 +447,9 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     // Update statistics display (use toExecuteCount for "remaining work", totalActive excludes skipped)
     document.getElementById('statRecords').innerHTML = toExecuteCount > 0 
         ? `${toExecuteCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
-            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">von ${totalCount.toLocaleString()} gesamt</small>` : '')
-        : `<span class="text-success">✓ Alle ${totalActive.toLocaleString()} erledigt</span>`
-            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">von ${totalCount.toLocaleString()} gesamt</small>` : '');
+            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">${t('prev.stats.of_total', {n: totalCount.toLocaleString()})}</small>` : '')
+        : `<span class="text-success">${t('prev.stats.all_done', {n: totalActive.toLocaleString()})}</span>`
+            + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">${t('prev.stats.of_total', {n: totalCount.toLocaleString()})}</small>` : '');
     document.getElementById('statTotalSize').textContent = formatFileSize(stats.total_size_bytes);
     document.getElementById('statTiny').textContent = buckets.tiny || 0;
     document.getElementById('statSmall').textContent = buckets.small || 0;
@@ -461,9 +461,9 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     // Update selection info to show preview info
     const selectionInfo = document.getElementById('selectionInfo');
     if (totalRecords > 100) {
-        selectionInfo.innerHTML = `Vorschau: 100 von ${totalRecords.toLocaleString()} Records <small class="text-muted">(Execute verarbeitet alle)</small>`;
+        selectionInfo.innerHTML = t('prev.stats.preview_info', {n: totalRecords.toLocaleString()});
     } else {
-        selectionInfo.textContent = `${totalRecords} Records`;
+        selectionInfo.textContent = t('prev.stats.n_records', {n: totalRecords});
     }
     
     // Build runtime breakdown
@@ -476,7 +476,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     
     const detailText = toExecuteCount > 0 
         ? `${breakdown.join(' ')} | ${formatFileSize(stats.total_size_bytes)} | ${maxWorkers} Worker`
-        : 'Keine ausstehenden Dokumente';
+        : t('runtime.no_pending');
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
     // Store for modal details
@@ -550,7 +550,7 @@ function updateBatchStatistics(records) {
     // Update statistics display - show pending count and success count
     document.getElementById('statRecords').innerHTML = pendingRecords.length > 0 
         ? `${pendingRecords.length} <small class="text-muted">(${successCount} ✓)</small>`
-        : `<span class="text-success">✓ Alle ${records.length} erledigt</span>`;
+        : `<span class="text-success">${t('prev.stats.all_done', {n: records.length})}</span>`;
     document.getElementById('statTotalSize').textContent = formatFileSize(totalSize);
     document.getElementById('statTiny').textContent = buckets.tiny.count;
     document.getElementById('statSmall').textContent = buckets.small.count;
@@ -569,7 +569,7 @@ function updateBatchStatistics(records) {
     
     const detailText = pendingRecords.length > 0 
         ? `(${formatFileSize(totalSize)}@1s/MB + ${containerCount}×1.5s) ÷ ${maxWorkers} workers`
-        : 'Keine ausstehenden Dokumente';
+        : t('runtime.no_pending');
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
     // Store for modal details
@@ -618,10 +618,10 @@ function showRuntimeDetails() {
 ⏱️ ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)}
 
 💡 RESPONSE-BASED PACING:
-• Nächster Upload startet sofort nach API-Response
-• Kein Zeit-basiertes Warten mehr
+• ${t('runtime.immediate')}
+• ${t('runtime.no_wait')}
 • Overhead = 0.5s Delay + ~1s API-Roundtrip pro Container
-• Schneller als zeit-basiertes Pacing!
+• ${t('runtime.faster')}
     `.trim();
     
     alert(details);
@@ -639,7 +639,7 @@ function displayRecords(records) {
     const tbody = document.getElementById('recordsBody');
     
     if (records.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="20" class="text-center">Keine Datensätze gefunden</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="20" class="text-center">${t('mig.no_records')}</td></tr>`;
         return;
     }
     
@@ -692,7 +692,7 @@ function displayRecords(records) {
                 <td>
                     <button class="btn btn-sm btn-outline-info" 
                             onclick="viewRecordDetail(${record.id})"
-                            title="Details anzeigen">
+                            title="${t('detail.show')}">
                         <i class="fas fa-info-circle"></i>
                     </button>
                 </td>
@@ -706,11 +706,11 @@ function displayRecords(records) {
 
 function getExecutionBadge(status) {
     const map = {
-        'success': '<span class="badge badge-success">Erfolgreich</span>',
-        'failed': '<span class="badge badge-danger">Fehlgeschlagen</span>',
-        'partial': '<span class="badge badge-warning">Teilweise</span>',
-        'pending': '<span class="badge badge-secondary">Ausstehend</span>',
-        'skipped_orphan': '<span class="badge badge-dark" title="Übersprungen: Alle Objektlinks ausgeschlossen">⊘ Verwaist</span>'
+        'success': `<span class="badge badge-success">${t('exec.success')}</span>`,
+        'failed': `<span class="badge badge-danger">${t('exec.failed')}</span>`,
+        'partial': `<span class="badge badge-warning">${t('exec.partial')}</span>`,
+        'pending': `<span class="badge badge-secondary">${t('exec.pending')}</span>`,
+        'skipped_orphan': `<span class="badge badge-dark" title="${t('exec.orphan_tip')}">${t('exec.orphan')}</span>`
     };
     return map[status] || '<span class="badge badge-secondary">' + status + '</span>';
 }
@@ -721,51 +721,51 @@ function getLinkStatusBadge(linkStatus, execStatus, targetDokob) {
         return '<span class="text-muted">—</span>';
     }
     if (!targetDokob) {
-        return '<span class="badge badge-light" title="Kein Objekt-Mapping">—</span>';
+        return `<span class="badge badge-light" title="${t('link.skipped_tip')}">—</span>`;
     }
     const map = {
-        'pending': '<span class="badge badge-secondary" title="Bereit zur Verlinkung"><i class="fas fa-clock"></i> Offen</span>',
-        'linking': '<span class="badge badge-info" title="Wird verlinkt"><i class="fas fa-spinner fa-spin"></i> Verlinkt...</span>',
-        'linked': '<span class="badge badge-success" title="Verlinkt"><i class="fas fa-check"></i> Verlinkt</span>',
-        'link_exists': '<span class="badge badge-success" title="Link existiert bereits"><i class="fas fa-check-double"></i> Existiert</span>',
-        'link_failed': '<span class="badge badge-danger" title="Verlinkung fehlgeschlagen"><i class="fas fa-times"></i> Fehler</span>',
-        'skipped': '<span class="badge badge-light" title="Übersprungen">Übersprungen</span>'
+        'pending': `<span class="badge badge-secondary" title="${t('link.open_tip')}"><i class="fas fa-clock"></i> ${t('link.open')}</span>`,
+        'linking': `<span class="badge badge-info" title="${t('link.linking_tip')}"><i class="fas fa-spinner fa-spin"></i> ${t('link.linking')}</span>`,
+        'linked': `<span class="badge badge-success" title="${t('link.linked_tip')}"><i class="fas fa-check"></i> ${t('link.linked')}</span>`,
+        'link_exists': `<span class="badge badge-success" title="${t('link.exists_tip')}"><i class="fas fa-check-double"></i> ${t('link.exists')}</span>`,
+        'link_failed': `<span class="badge badge-danger" title="${t('link.error_tip')}"><i class="fas fa-times"></i> ${t('link.error')}</span>`,
+        'skipped': `<span class="badge badge-light" title="${t('link.skipped_tip')}">${t('link.skipped')}</span>`
     };
     return map[linkStatus] || '<span class="badge badge-secondary">' + (linkStatus || 'pending') + '</span>';
 }
 
 // Error Category Details (from Python get_error_details)
 const ERROR_CATEGORY_DETAILS = {
-    'API_KEY_INVALID': { desc: 'API-Key ungültig', class: 'badge-danger' },
-    'TOKEN_EXPIRED': { desc: 'Token abgelaufen', class: 'badge-danger' },
-    'TOKEN_INVALID': { desc: 'Token ungültig', class: 'badge-danger' },
-    'CSRF_FAILED': { desc: 'CSRF Fehler', class: 'badge-danger' },
-    'SOURCE_NOT_FOUND': { desc: 'Nicht gefunden', class: 'badge-warning' },
-    'SOURCE_EMPTY': { desc: 'Keine Dateien', class: 'badge-secondary' },
-    'SOURCE_READ_ERROR': { desc: 'Lesefehler', class: 'badge-warning' },
-    'TARGET_CREATE_FAILED': { desc: 'Anlage fehlgeschlagen', class: 'badge-info' },
-    'TARGET_EXISTS': { desc: 'Existiert bereits', class: 'badge-info' },
-    'TARGET_LOCKED': { desc: 'Gesperrt', class: 'badge-info' },
-    'UPLOAD_SIZE_EXCEEDED': { desc: 'Zu groß', class: 'badge-warning' },
-    'UPLOAD_TIMEOUT': { desc: 'Timeout', class: 'badge-secondary' },
-    'GATEWAY_TIMEOUT': { desc: 'Gateway Timeout', class: 'badge-secondary' },
-    'RATE_LIMITED': { desc: 'Rate Limit', class: 'badge-secondary' },
-    'SERVER_ERROR': { desc: 'Serverfehler', class: 'badge-dark' },
-    'BAD_REQUEST': { desc: 'Ungültige Anfrage', class: 'badge-warning' },
-    'UNKNOWN': { desc: 'Unbekannt', class: 'badge-secondary' },
+    'API_KEY_INVALID': { desc: t('err.API_KEY'), class: 'badge-danger' },
+    'TOKEN_EXPIRED': { desc: t('err.TOKEN_EXPIRED'), class: 'badge-danger' },
+    'TOKEN_INVALID': { desc: t('err.INVALID_TOKEN'), class: 'badge-danger' },
+    'CSRF_FAILED': { desc: t('err.CSRF_ERROR'), class: 'badge-danger' },
+    'SOURCE_NOT_FOUND': { desc: t('err.NOT_FOUND'), class: 'badge-warning' },
+    'SOURCE_EMPTY': { desc: t('err.NO_FILES'), class: 'badge-secondary' },
+    'SOURCE_READ_ERROR': { desc: t('err.READ_ERROR'), class: 'badge-warning' },
+    'TARGET_CREATE_FAILED': { desc: t('err.CONTAINER_CREATE_FAIL'), class: 'badge-info' },
+    'TARGET_EXISTS': { desc: t('err.ALREADY_EXISTS'), class: 'badge-info' },
+    'TARGET_LOCKED': { desc: t('err.LOCKED'), class: 'badge-info' },
+    'UPLOAD_SIZE_EXCEEDED': { desc: t('err.PAYLOAD_TOO_LARGE'), class: 'badge-warning' },
+    'UPLOAD_TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-secondary' },
+    'GATEWAY_TIMEOUT': { desc: t('err.GATEWAY_TIMEOUT'), class: 'badge-secondary' },
+    'RATE_LIMITED': { desc: t('err.RATE_LIMIT'), class: 'badge-secondary' },
+    'SERVER_ERROR': { desc: t('err.SERVER_ERROR'), class: 'badge-dark' },
+    'BAD_REQUEST': { desc: t('err.BAD_REQUEST'), class: 'badge-warning' },
+    'UNKNOWN': { desc: t('err.UNKNOWN'), class: 'badge-secondary' },
     // New categories from staging-level errors
-    'READ_EMPTY': { desc: 'Keine Dateien im Quellsystem', class: 'badge-secondary' },
-    'TIMEOUT_RETRY': { desc: 'Timeout (Retry möglich)', class: 'badge-warning' },
-    'API_NOT_IMPLEMENTED': { desc: 'Serverfehler (501)', class: 'badge-dark' },
-    'CODE_BUG_FIXED': { desc: 'Code-Bug behoben', class: 'badge-success' },
+    'READ_EMPTY': { desc: t('err.NO_SOURCE_FILES'), class: 'badge-secondary' },
+    'TIMEOUT_RETRY': { desc: t('err.TIMEOUT_RETRY'), class: 'badge-warning' },
+    'API_NOT_IMPLEMENTED': { desc: t('err.NOT_IMPLEMENTED'), class: 'badge-dark' },
+    'CODE_BUG_FIXED': { desc: t('err.BUG_FIXED'), class: 'badge-success' },
     // Categories from partial records (file-level errors)
-    'CONNECTION_ERROR': { desc: 'Verbindungsfehler', class: 'badge-warning' },
-    'TIMEOUT': { desc: 'Timeout', class: 'badge-warning' },
-    'AUTH_ERROR': { desc: 'Authentifizierung', class: 'badge-danger' },
-    'AUTH_FORBIDDEN': { desc: 'Zugriff verweigert (403)', class: 'badge-danger' },
-    'CODE_BUG': { desc: 'Code-Bug', class: 'badge-dark' },
-    'UPLOAD_ERROR': { desc: 'Upload-Fehler', class: 'badge-warning' },
-    'SIZE_EXCEEDED': { desc: 'Dateigröße überschritten', class: 'badge-warning' }
+    'CONNECTION_ERROR': { desc: t('err.CONNECTION_ERROR'), class: 'badge-warning' },
+    'TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-warning' },
+    'AUTH_ERROR': { desc: t('err.AUTH_ERROR'), class: 'badge-danger' },
+    'AUTH_FORBIDDEN': { desc: t('err.FORBIDDEN'), class: 'badge-danger' },
+    'CODE_BUG': { desc: t('err.CODE_BUG'), class: 'badge-dark' },
+    'UPLOAD_ERROR': { desc: t('err.UPLOAD_FAIL'), class: 'badge-warning' },
+    'SIZE_EXCEEDED': { desc: t('err.FILE_TOO_LARGE'), class: 'badge-warning' }
 };
 
 function getErrorCategoryBadge(category) {
@@ -781,13 +781,13 @@ function formatFileSizeWithColor(bytes) {
     
     if (sizeMB > 99) {
         // Red: high risk of failure (>99MB)
-        return `<span class="text-danger font-weight-bold" title="Hohes Risiko: >99MB kann fehlschlagen">${sizeText} ⚠️</span>`;
+        return `<span class="text-danger font-weight-bold" title="${t('filesize.high_risk')}">${sizeText} ⚠️</span>`;
     } else if (sizeMB > 10) {
         // Orange: moderate risk (10-99MB)
-        return `<span class="text-warning" title="Mittlere Größe: 10-99MB">${sizeText}</span>`;
+        return `<span class="text-warning" title="${t('filesize.medium')}">${sizeText}</span>`;
     } else {
         // Green: safe size (≤10MB)
-        return `<span class="text-success" title="Sichere Größe: ≤10MB">${sizeText}</span>`;
+        return `<span class="text-success" title="${t('filesize.safe')}">${sizeText}</span>`;
     }
 }
 
@@ -798,9 +798,9 @@ function formatFileCount(record) {
     const srcStr = (src !== null && src !== undefined) ? src : '-';
     const tgtStr = (tgt !== null && tgt !== undefined) ? tgt : '-';
     if (src !== null && tgt !== null && src === tgt) {
-        return `<span class="text-success" title="Quelldateien: ${src}, Zieldateien: ${tgt}">${srcStr} / ${tgtStr} ✓</span>`;
+        return `<span class="text-success" title="${t('prev.tip.file_count', {src: src, tgt: tgt})}">${srcStr} / ${tgtStr} ✓</span>`;
     } else if (src !== null && tgt !== null && src !== tgt) {
-        return `<span class="text-danger font-weight-bold" title="Quelldateien: ${src}, Zieldateien: ${tgt} — Mismatch!">${srcStr} / ${tgtStr} ✗</span>`;
+        return `<span class="text-danger font-weight-bold" title="${t('prev.tip.file_count_mismatch', {src: src, tgt: tgt})}">${srcStr} / ${tgtStr} ✗</span>`;
     }
     return `${srcStr} / ${tgtStr}`;
 }
@@ -818,10 +818,10 @@ function formatLinkCount(record) {
     }
     // All links excluded: red — record will be skipped during execute
     if (tgtStr === 0) {
-        return `<span class="text-danger font-weight-bold" title="Alle ${src} Links ausgeschlossen → wird bei Ausführung übersprungen (⊘ Verwaist)">${src} / ${exclStr} / 0 ⊘</span>`;
+        return `<span class="text-danger font-weight-bold" title="${t('prev.tip.all_links_excluded', {n: src})}">${src} / ${exclStr} / 0 ⊘</span>`;
     }
     // Partial exclusion: orange
-    return `<span class="text-warning font-weight-bold" title="Source: ${src}, Excluded: ${exclStr}, Target: ${tgtStr} — Teilweise ausgeschlossen">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
+    return `<span class="text-warning font-weight-bold" title="${t('prev.tip.partial_excluded', {src: src, excl: exclStr, tgt: tgtStr})}">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
 }
 
 function toggleSelection(id) {
@@ -851,7 +851,7 @@ function selectAll() {
 }
 
 function updateSelectionInfo() {
-    document.getElementById('selectionInfo').textContent = `${selectedRecords.size} Datensätze ausgewählt`;
+    document.getElementById('selectionInfo').textContent = t('prev.records_selected', {n: selectedRecords.size});
     document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
 }
 
@@ -875,7 +875,7 @@ function checkAndReconnectExecution() {
                 const cancelBtn = document.getElementById('cancelBtn');
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird ausgeführt...';
+                    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.executing');
                 }
                 if (cancelBtn) cancelBtn.style.display = 'inline-block';
                 // Start progress polling
@@ -898,7 +898,7 @@ function showProgressBar() {
         progressDiv.className = 'alert alert-info mt-2';
         progressDiv.innerHTML = `
             <div class="d-flex justify-content-between align-items-center mb-2">
-                <strong><i class="fas fa-sync fa-spin"></i> Migration läuft...</strong>
+                <strong><i class="fas fa-sync fa-spin"></i> ${t('mig.running')}</strong>
                 <span id="progressStats">0 / 0</span>
             </div>
             <div class="progress" style="height: 25px;">
@@ -906,11 +906,11 @@ function showProgressBar() {
                      role="progressbar" style="width: 0%">0%</div>
             </div>
             <div class="d-flex justify-content-between mt-2">
-                <small id="progressDetails">Starte...</small>
-                <small id="progressETA">ETA: berechne...</small>
+                <small id="progressDetails">${t('mig.starting')}</small>
+                <small id="progressETA">${t('mig.eta_calc')}</small>
             </div>
             <div class="text-end mt-1">
-                <small id="progressPulse" class="text-muted"><i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle"></i> Polling aktiv</small>
+                <small id="progressPulse" class="text-muted"><i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle"></i> ${t('mig.polling')}</small>
             </div>
         `;
         document.getElementById('batchStats').parentNode.appendChild(progressDiv);
@@ -938,7 +938,7 @@ function updateProgressDisplay(data) {
     const pulse = document.getElementById('progressPulse');
     if (pulse) {
         const now = new Date().toLocaleTimeString('de-DE');
-        pulse.innerHTML = `<i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle;animation:pulse 1s infinite"></i> Zuletzt aktualisiert: ${now}`;
+        pulse.innerHTML = `<i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle;animation:pulse 1s infinite"></i> ${t('mig.last_updated', {time: now})}`;
     }
     
     const pct = data.progress_pct || 0;
@@ -957,7 +957,7 @@ function updateProgressDisplay(data) {
     if (data.partial && data.partial > 0) {
         detailsHtml += ` | <span class="text-warning">⚠ ${data.partial}</span>`;
     }
-    detailsHtml += ` | <span class="text-danger">✗ ${data.failed}</span> | Verbleibend: ${data.remaining}`;
+    detailsHtml += ` | <span class="text-danger">✗ ${data.failed}</span> | ${t('mig.remaining', {n: data.remaining})}`;
     details.innerHTML = detailsHtml;
     
     // Calculate ETA
@@ -1000,17 +1000,17 @@ function pollProgress() {
                     // Show final summary
                     if (data.status === 'stopped' && data.background_result && data.background_result.stopped) {
                         const r = data.background_result;
-                        let message = `Migration gestoppt!\n\n`;
-                        message += `Grund: ${r.stop_reason}\n`;
-                        message += `Verarbeitet: ${r.processed}/${r.total}\n`;
-                        message += `Erfolgreich: ${r.successful}\nFehlgeschlagen: ${r.failed}\n`;
-                        message += `Verbleibend: ${r.remaining}`;
+                        let message = t('mig.stopped') + `\n\n`;
+                        message += `${t('mig.reason')} ${r.stop_reason}\n`;
+                        message += `${t('mig.processed')} ${r.processed}/${r.total}\n`;
+                        message += `${t('mig.successful')} ${r.successful}\n${t('mig.failed')} ${r.failed}\n`;
+                        message += `${t('mig.remaining2')} ${r.remaining}`;
                         if (r.circuit_breaker_tripped) {
-                            message += '\n\n⚠️ Token abgelaufen. Bitte neu einloggen.';
+                            message += '\n\n⚠️ ' + t('mig.token_expired');
                         }
                         alert(message);
                     } else if (data.status === 'completed' || data.status === 'completed_with_errors') {
-                        alert(`Migration abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehlgeschlagen: ${data.failed}`);
+                        alert(t('mig.completed') + `\n\n${t('mig.total_label')} ${data.total}\n${t('mig.successful')} ${data.successful}\n${t('mig.failed')} ${data.failed}`);
                     }
                     
                     // Reset UI
@@ -1018,13 +1018,13 @@ function pollProgress() {
                     if (cancelBtn) cancelBtn.style.display = 'none';
                     if (btn) {
                         btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+                        btn.innerHTML = '<i class="fas fa-play"></i> ' + t('prev.btn.execute_all');
                     }
                     // Also reset execute-selected button
                     const selBtn = document.getElementById('executeSelectedBtn');
                     if (selBtn) {
                         selBtn.disabled = selectedRecords.size === 0;
-                        selBtn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+                        selBtn.innerHTML = '<i class="fas fa-play-circle"></i> ' + t('prev.btn.execute_selected');
                     }
                     loadRecords();
                 } else {
@@ -1056,14 +1056,14 @@ function stopProgressPolling() {
 }
 
 function executeAll() {
-    if (!confirm('Migration für alle Datensätze in diesem Batch ausführen?')) {
+    if (!confirm(t('mig.confirm_all'))) {
         return;
     }
     
     const btn = document.getElementById('executeBtn');
     const cancelBtn = document.getElementById('cancelBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird ausgeführt...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.executing');
     
     // Show cancel button during execution
     cancelBtn.style.display = 'inline-block';
@@ -1083,38 +1083,38 @@ function executeAll() {
             startProgressPolling();
             // Frontend will be cleaned up by pollProgress() when batch finishes
         } else if (data.login_required) {
-            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden, bevor die Migration ausgeführt wird.');
+            alert('⚠️ ' + t('mig.not_logged_in'));
             window.location.href = '/';
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+            btn.innerHTML = '<i class="fas fa-play"></i> ' + t('prev.btn.execute_all');
             cancelBtn.style.display = 'none';
         } else if (data.already_running) {
-            alert('⚠️ Migration läuft bereits!\n\n' + data.error + '\n\nBitte warten Sie, bis die aktuelle Migration abgeschlossen ist.');
+            alert('⚠️ ' + t('mig.already_running') + '\n\n' + data.error + '\n\n' + t('mig.wait_for_completion'));
             // Still start polling to show progress of the running migration
             startProgressPolling();
         } else {
-            alert('Migration fehlgeschlagen: ' + data.error);
+            alert(t('mig.failed_msg', {msg: data.error}));
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+            btn.innerHTML = '<i class="fas fa-play"></i> ' + t('prev.btn.execute_all');
             cancelBtn.style.display = 'none';
         }
     })
     .catch(error => {
         cancelBtn.style.display = 'none';
-        alert('Fehler bei der Migration: ' + error);
+        alert(t('mig.error_msg', {msg: error}));
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play"></i> Alle ausführen';
+        btn.innerHTML = '<i class="fas fa-play"></i> ' + t('prev.btn.execute_all');
     });
 }
 
 function cancelMigration() {
-    if (!confirm('Migration wirklich abbrechen?\n\nBereits verarbeitete Datensätze bleiben erhalten.')) {
+    if (!confirm(t('mig.cancel_confirm'))) {
         return;
     }
     
     const cancelBtn = document.getElementById('cancelBtn');
     cancelBtn.disabled = true;
-    cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird abgebrochen...';
+    cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.cancelling');
     
     fetch(`/batch/${batchId}/cancel`, {
         method: 'POST',
@@ -1126,35 +1126,35 @@ function cancelMigration() {
     .then(data => {
         if (data.success) {
             // Update button to show cancellation is in progress
-            cancelBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> Abbruch angefordert...';
+            cancelBtn.innerHTML = '<i class="fas fa-hourglass-half"></i> ' + t('mig.cancel_requested');
             // The actual stop will be handled when executeAll returns
         } else {
-            alert('Abbruch fehlgeschlagen: ' + data.error);
+            alert(t('mig.cancel_failed', {msg: data.error}));
             cancelBtn.disabled = false;
-            cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Migration abbrechen';
+            cancelBtn.innerHTML = '<i class="fas fa-stop"></i> ' + t('prev.btn.cancel_migration');
         }
     })
     .catch(error => {
-        alert('Fehler beim Abbrechen: ' + error);
+        alert(t('mig.cancel_error', {msg: error}));
         cancelBtn.disabled = false;
-        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Migration abbrechen';
+        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> ' + t('prev.btn.cancel_migration');
     });
 }
 
 function executeSelected() {
     if (selectedRecords.size === 0) {
-        alert('Bitte Datensätze auswählen');
+        alert(t('mig.select_records'));
         return;
     }
     
-    if (!confirm(`Migration für ${selectedRecords.size} ausgewählte Datensätze ausführen?`)) {
+    if (!confirm(t('mig.confirm_selected', {n: selectedRecords.size}))) {
         return;
     }
     
     const btn = document.getElementById('executeSelectedBtn');
     btn.disabled = true;
     const totalSelected = selectedRecords.size;
-    btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Führe ${totalSelected} aus...`;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${t('mig.executing_n', {n: totalSelected})}`;
     
     const cancelBtn = document.getElementById('cancelBtn');
     cancelBtn.style.display = 'inline-block';
@@ -1177,32 +1177,32 @@ function executeSelected() {
             startProgressPolling();
             selectedRecords.clear();
         } else if (data.login_required) {
-            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+            alert('⚠️ ' + t('mig.not_logged_in'));
             window.location.href = '/';
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+            btn.innerHTML = '<i class="fas fa-play-circle"></i> ' + t('prev.btn.execute_selected');
             cancelBtn.style.display = 'none';
         } else if (data.already_running) {
-            alert('⚠️ Migration läuft bereits!\n\n' + data.error);
+            alert('⚠️ ' + t('mig.already_running') + '\n\n' + data.error);
             startProgressPolling();
         } else {
-            alert('Migration fehlgeschlagen: ' + data.error);
+            alert(t('mig.failed_msg', {msg: data.error}));
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+            btn.innerHTML = '<i class="fas fa-play-circle"></i> ' + t('prev.btn.execute_selected');
             cancelBtn.style.display = 'none';
         }
     })
     .catch(error => {
         cancelBtn.style.display = 'none';
-        alert('Fehler bei der Migration: ' + error);
+        alert(t('mig.error_msg', {msg: error}));
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-play-circle"></i> Ausgewählte ausführen';
+        btn.innerHTML = '<i class="fas fa-play-circle"></i> ' + t('prev.btn.execute_selected');
     });
 }
 
 function viewRecordDetail(recordId) {
     $('#detailModal').modal('show');
-    $('#detailContent').html('<div class="text-center"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Lade Details...</p></div>');
+    $('#detailContent').html(`<div class="text-center"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">${t('detail.loading')}</p></div>`);
     
     // Fetch record details from results API
     fetch(`/batch/${batchId}/results`)
@@ -1213,14 +1213,14 @@ function viewRecordDetail(recordId) {
                 if (record) {
                     displayRecordDetail(record);
                 } else {
-                    $('#detailContent').html('<div class="alert alert-warning">Datensatz nicht in den Ausführungsergebnissen gefunden</div>');
+                    $('#detailContent').html(`<div class="alert alert-warning">${t('detail.record_not_found')}</div>`);
                 }
             } else {
-                $('#detailContent').html(`<div class="alert alert-danger">Fehler beim Laden: ${data.error}</div>`);
+                $('#detailContent').html(`<div class="alert alert-danger">${t('detail.load_error', {msg: data.error})}</div>`);
             }
         })
         .catch(error => {
-            $('#detailContent').html(`<div class="alert alert-danger">Fehler beim Laden: ${error}</div>`);
+            $('#detailContent').html(`<div class="alert alert-danger">${t('detail.load_error', {msg: error})}</div>`);
         });
 }
 
@@ -1228,33 +1228,33 @@ function displayRecordDetail(record) {
     let html = '<div class="row">';
     
     // Document Information
-    html += '<div class="col-md-6"><h6 class="text-primary">Dokumentinformationen</h6>';
+    html += `<div class="col-md-6"><h6 class="text-primary">${t('detail.doc_info')}</h6>`;
     html += `<table class="table table-sm table-bordered">`;
     html += `<tr><th>ID</th><td>${record.id}</td></tr>`;
-    html += `<tr><th>Quelldokument</th><td><code>${record.source_documentnumber}</code></td></tr>`;
-    html += `<tr><th>Zieldokument</th><td><code>${record.target_documentnumber || '-'}</code></td></tr>`;
-    html += `<tr><th>Dokumentart</th><td>${record.source_documenttype}</td></tr>`;
-    html += `<tr><th>Beschreibung</th><td>${record.source_description || '-'}</td></tr>`;
-    html += `<tr><th>Ber.-Gruppe</th><td>${record.authorization_group || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.source_doc')}</th><td><code>${record.source_documentnumber}</code></td></tr>`;
+    html += `<tr><th>${t('detail.target_doc')}</th><td><code>${record.target_documentnumber || '-'}</code></td></tr>`;
+    html += `<tr><th>${t('detail.doc_type')}</th><td>${record.source_documenttype}</td></tr>`;
+    html += `<tr><th>${t('detail.description')}</th><td>${record.source_description || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.auth_group')}</th><td>${record.authorization_group || '-'}</td></tr>`;
     html += `</table></div>`;
     
     // Execution Information
-    html += '<div class="col-md-6"><h6 class="text-primary">Ausführungsinformationen</h6>';
+    html += `<div class="col-md-6"><h6 class="text-primary">${t('detail.exec_info')}</h6>`;
     html += `<table class="table table-sm table-bordered">`;
     html += `<tr><th>Status</th><td>${getExecutionBadge(record.execution_status)}</td></tr>`;
-    html += `<tr><th>Gestartet</th><td>${record.execution_started_at ? new Date(record.execution_started_at).toLocaleString() : '-'}</td></tr>`;
-    html += `<tr><th>Abgeschlossen</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
-    html += `<tr><th>Datei</th><td>${record.filename || '-'}</td></tr>`;
-    html += `<tr><th>Dateien (Quelle/Ziel)</th><td>${formatFileCount(record)}</td></tr>`;
-    html += `<tr><th>Objektlinks (S/E/T)</th><td>${formatLinkCount(record)}</td></tr>`;
-    html += `<tr><th>MIME-Typ</th><td>${record.mime_type || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.started')}</th><td>${record.execution_started_at ? new Date(record.execution_started_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.completed')}</th><td>${record.execution_completed_at ? new Date(record.execution_completed_at).toLocaleString() : '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.file')}</th><td>${record.filename || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.files')}</th><td>${formatFileCount(record)}</td></tr>`;
+    html += `<tr><th>${t('detail.objlinks')}</th><td>${formatLinkCount(record)}</td></tr>`;
+    html += `<tr><th>${t('detail.mime_type')}</th><td>${record.mime_type || '-'}</td></tr>`;
     html += `</table></div>`;
     
     html += '</div>';
     
     // Execution Error
     if (record.execution_error) {
-        html += '<div class="row mt-3"><div class="col-12"><h6 class="text-danger">Ausführungsfehler</h6>';
+        html += `<div class="row mt-3"><div class="col-12"><h6 class="text-danger">${t('detail.exec_error')}</h6>`;
         let errorContent = '';
         if (typeof record.execution_error === 'object') {
             errorContent = JSON.stringify(record.execution_error, null, 2);
@@ -1275,7 +1275,7 @@ function excludeLargeFiles(checked) {
     });
     
     if (largeRecords.length === 0) {
-        alert('Keine Dateien größer als 99MB in diesem Batch gefunden.');
+        alert(t('mig.no_99mb'));
         document.getElementById('excludeLargeCheckbox').checked = false;
         return;
     }
@@ -1283,12 +1283,12 @@ function excludeLargeFiles(checked) {
     const totalMB = largeRecords.reduce((sum, r) => sum + (r.file_size_bytes / (1024 * 1024)), 0);
     
     if (checked) {
-        if (!confirm(`${largeRecords.length} Dateien größer als 99MB ausschließen?\n\nGesamtgröße: ${totalMB.toFixed(1)} MB\n\nDiese Dateien werden als übersprungen markiert und nicht migriert.`)) {
+        if (!confirm(t('mig.exclude_99mb', {n: largeRecords.length}) + `\n\nGesamtgr\u00f6\u00dfe: ${totalMB.toFixed(1)} MB\n\n` + t('mig.excluded_ok'))) {
             document.getElementById('excludeLargeCheckbox').checked = false;
             return;
         }
     } else {
-        if (!confirm(`${largeRecords.length} Dateien größer als 99MB wieder einschließen?`)) {
+        if (!confirm(t('mig.include_99mb', {n: largeRecords.length}))) {
             document.getElementById('excludeLargeCheckbox').checked = true;
             return;
         }
@@ -1315,29 +1315,29 @@ function excludeLargeFiles(checked) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(checked ? `${data.updated} Datensätze als übersprungen markiert.` : `${data.updated} Datensätze wieder eingeschlossen.`);
+            alert(checked ? `${data.updated} ${t('mig.excluded_ok')}` : `${data.updated} ${t('mig.included_ok')}`);
             loadRecords();
         } else {
-            alert('Fehler: ' + data.error);
+            alert(t('error_prefix') + data.error);
             checkbox.checked = !checked; // revert
         }
         checkbox.disabled = false;
     })
     .catch(error => {
-        alert('Fehler beim Ausschließen: ' + error);
+        alert(t('mig.exclude_error', {msg: error}));
         checkbox.checked = !checked; // revert
         checkbox.disabled = false;
     });
 }
 
 function resetFailed() {
-    if (!confirm('Alle fehlgeschlagenen und teilweise migrierten Datensätze auf "Ausstehend" zurücksetzen?\n\nBei teilweise migrierten werden nur die fehlenden Dateien erneut versucht.')) {
+    if (!confirm(t('mig.reset_confirm'))) {
         return;
     }
     
     const btn = document.getElementById('resetBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird zurückgesetzt...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.resetting');
     
     fetch('/reset_failed', {
         method: 'POST',
@@ -1349,29 +1349,29 @@ function resetFailed() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(`Zurücksetzen abgeschlossen!\n\n${data.reset_count} fehlgeschlagene/teilweise Datensätze zurückgesetzt.`);
+            alert(t('mig.reset_done') + `\n\n${data.reset_count} ${t('prev.btn.reset_failed')}`);
             loadRecords();
         } else {
-            alert('Zurücksetzen fehlgeschlagen: ' + data.error);
+            alert(t('mig.reset_failed', {msg: data.error}));
         }
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler/Partial zurücksetzen';
+        btn.innerHTML = '<i class="fas fa-undo"></i> ' + t('prev.btn.reset_failed');
     })
     .catch(error => {
-        alert('Fehler beim Zurücksetzen: ' + error);
+        alert(t('mig.reset_error', {msg: error}));
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-undo"></i> Fehler/Partial zurücksetzen';
+        btn.innerHTML = '<i class="fas fa-undo"></i> ' + t('prev.btn.reset_failed');
     });
 }
 
 function refreshData() {
-    if (!confirm('Daten aktualisieren?\n\nDies führt folgende Schritte aus:\n1. Metadata (LOIO, Dateigröße) aus DIL holen\n2. Dateinamen aus DIL.DRAW holen (für Dateiendungen)\n3. Migration Rules anwenden')) {
+    if (!confirm(t('mig.refresh_confirm'))) {
         return;
     }
     
     const btn = document.getElementById('refreshDataBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Verbinde...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('loading');
     
     // Use SSE for progress updates
     const eventSource = new EventSource(`/batch/${batchId}/refresh-data-stream`);
@@ -1390,20 +1390,20 @@ function refreshData() {
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
             
             let message = `Refresh Complete!\n\n`;
-            message += `✓ Metadata aktualisiert: ${data.metadata_updated || 0}\n`;
-            message += `✓ Dateinamen gefunden: ${data.filenames_found || 0}\n`;
-            message += `✓ Regeln angewendet: ${data.rules_applied || 0}\n`;
+            message += `✓ ${t('mig.metadata_updated')} ${data.metadata_updated || 0}\n`;
+            message += `✓ ${t('mig.filenames_found')} ${data.filenames_found || 0}\n`;
+            message += `✓ ${t('mig.rules_applied')} ${data.rules_applied || 0}\n`;
             
             if (data.links_excluded !== undefined) {
-                message += `✓ Objektlinks geprüft: ${data.links_excluded || 0} exkludiert\n`;
+                message += `✓ ${t('mig.objlinks_checked')} ${data.links_excluded || 0} exkludiert\n`;
                 if (data.records_zero_links > 0) {
-                    message += `⚠ ${data.records_zero_links} Datensätze haben keine verbleibenden Links (Waisen-Warnung)\n`;
+                    message += `⚠ ${data.records_zero_links} ${t('mig.orphan_warning')}\n`;
                 }
             }
             
             if (data.total_size_mb) {
-                message += `\n📊 Gesamtgröße: ${data.total_size_mb} MB\n`;
-                message += `📊 Größte Datei: ${data.max_file_mb} MB\n`;
+                message += `\n📊 ${t('mig.total_size')} ${data.total_size_mb} MB\n`;
+                message += `📊 ${t('mig.largest_file')} ${data.max_file_mb} MB\n`;
             }
             
             alert(message);
@@ -1412,7 +1412,7 @@ function refreshData() {
             eventSource.close();
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
-            alert('Refresh fehlgeschlagen: ' + data.message);
+            alert(t('mig.refresh_failed', {msg: data.message}));
         }
     };
     
@@ -1420,18 +1420,18 @@ function refreshData() {
         eventSource.close();
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
-        alert('Verbindungsfehler beim Refresh');
+        alert(t('mig.refresh_conn_error'));
     };
 }
 
 function retryFailed() {
-    if (!confirm('Alle fehlgeschlagenen und teilweise migrierten Datensätze erneut ausführen?\n\nBei teilweise migrierten werden nur die fehlenden Dateien hochgeladen.')) {
+    if (!confirm(t('mig.retry_confirm'))) {
         return;
     }
     
     const btn = document.getElementById('retryBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wird zurückgesetzt...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.resetting');
     
     // Step 1: Reset failed records to pending
     fetch('/reset_failed', {
@@ -1449,21 +1449,21 @@ function retryFailed() {
         
         const resetCount = data.reset_count;
         if (resetCount === 0) {
-            alert('Keine fehlgeschlagenen oder teilweise migrierten Datensätze zum Wiederholen.');
+            alert(t('mig.retry_none'));
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
+            btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
             return;
         }
         
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Wiederhole ' + resetCount + '...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + t('mig.retrying_n', {n: resetCount});
         
         // Step 2: Show progress bar and start polling
         showProgressBar();
-        document.getElementById('progressStats').textContent = `Starte ${resetCount} fehlgeschlagene/teilweise Dokumente...`;
+        document.getElementById('progressStats').textContent = t('mig.retry_starting', {n: resetCount});
         document.getElementById('progressBar').style.width = '0%';
         document.getElementById('progressBar').textContent = '0%';
-        document.getElementById('progressDetails').textContent = 'Initialisiere Retry...';
-        document.getElementById('progressETA').textContent = 'ETA: berechne...';
+        document.getElementById('progressDetails').textContent = t('mig.retry_init');
+        document.getElementById('progressETA').textContent = t('mig.eta_calc');
         startProgressPolling();
         
         // Step 3: Execute the pending (reset) records
@@ -1485,25 +1485,25 @@ function retryFailed() {
         hideProgressBar();
         
         if (data.success) {
-            alert(`Wiederholung abgeschlossen!\n\nGesamt: ${data.total}\nErfolgreich: ${data.successful}\nFehlgeschlagen: ${data.failed}`);
+            alert(t('mig.retry_done') + `\n\n${t('mig.total_label')} ${data.total}\n${t('mig.successful')} ${data.successful}\n${t('mig.failed')} ${data.failed}`);
             loadRecords();
         } else if (data.login_required) {
-            alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+            alert('⚠️ ' + t('mig.not_logged_in'));
             window.location.href = '/';
         } else if (data.already_running) {
-            alert('⚠️ Migration läuft bereits!\n\n' + data.error);
+            alert('⚠️ ' + t('mig.already_running') + '\n\n' + data.error);
         } else {
-            alert('Wiederholung fehlgeschlagen: ' + data.error);
+            alert(t('mig.retry_failed', {msg: data.error}));
         }
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
+        btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
     })
     .catch(error => {
         stopProgressPolling();
         hideProgressBar();
-        alert('Fehler bei der Wiederholung: ' + error);
+        alert(t('mig.retry_error', {msg: error}));
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-redo"></i> Fehler/Partial wiederholen';
+        btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
     });
 }
 
@@ -1561,9 +1561,9 @@ function applyFilters() {
     // Update filter info on the left side
     const filterInfo = document.getElementById('filterInfo');
     if (filtered.length < allRecords.length) {
-        filterInfo.textContent = `Zeige ${filtered.length} von ${allRecords.length}`;
+        filterInfo.textContent = t('prev.showing_filtered', {n: filtered.length, total: allRecords.length});
     } else {
-        filterInfo.textContent = `${allRecords.length} Datensätze`;
+        filterInfo.textContent = t('prev.n_records', {n: allRecords.length});
     }
 }
 

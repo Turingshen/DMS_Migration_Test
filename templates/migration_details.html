@@ -262,15 +262,15 @@
     <div id="loadingOverlay" class="loading-overlay">
         <div class="text-center">
             <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;"></div>
-            <p class="mt-3">Lade Details...</p>
+            <p class="mt-3" data-i18n="det.loading">Lade Details...</p>
         </div>
     </div>
     
     <!-- Header with batch selector -->
     <div class="row mb-3">
         <div class="col-md-8">
-            <h4><i class="fas fa-list-alt"></i> Migrationsdetails</h4>
-            <p class="text-muted mb-0">Dokument- und Datei-Ergebnisse der Migration</p>
+            <h4><i class="fas fa-list-alt"></i> <span data-i18n="det.title">Migrationsdetails</span></h4>
+            <p class="text-muted mb-0" data-i18n="det.subtitle">Dokument- und Datei-Ergebnisse der Migration</p>
         </div>
         <div class="col-md-4">
             <div class="input-group">
@@ -278,7 +278,7 @@
                     <span class="input-group-text"><i class="fas fa-folder"></i></span>
                 </div>
                 <select id="batchSelect" class="form-control">
-                    <option value="">Batch auswählen...</option>
+                    <option value="" data-i18n="det.select_batch">Batch auswählen...</option>
                 </select>
                 <div class="input-group-append">
                     <button class="btn btn-outline-secondary" type="button" onclick="loadBatches()">
@@ -318,31 +318,31 @@
         <div class="summary-stats">
             <div class="stat-box">
                 <div class="number" id="statDocuments">-</div>
-                <div class="label">Dokumente</div>
+                <div class="label" data-i18n="det.summary.docs">Dokumente</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statFiles">-</div>
-                <div class="label">Dateien</div>
+                <div class="label" data-i18n="det.summary.files">Dateien</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statSuccess">-</div>
-                <div class="label">✓ Erfolgreich</div>
+                <div class="label" data-i18n="det.summary.success">✓ Erfolgreich</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statPartial">-</div>
-                <div class="label">⚠ Teilweise</div>
+                <div class="label" data-i18n="det.summary.partial">⚠ Teilweise</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statFailed">-</div>
-                <div class="label">✗ Fehlgeschlagen</div>
+                <div class="label" data-i18n="det.summary.failed">✗ Fehlgeschlagen</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statSize">-</div>
-                <div class="label">Gesamtgröße</div>
+                <div class="label" data-i18n="det.summary.total_size">Gesamtgröße</div>
             </div>
             <div class="stat-box">
                 <div class="number" id="statAvgTime">-</div>
-                <div class="label">Ø Zeit</div>
+                <div class="label" data-i18n="det.summary.avg_time">Ø Zeit</div>
             </div>
         </div>
     </div>
@@ -352,7 +352,7 @@
         <div class="col-12">
             <div class="card border-danger">
                 <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center" style="cursor: pointer;" onclick="toggleErrorPanel()">
-                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> Fehlerübersicht</h5>
+                    <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> <span data-i18n="det.errors.title">Fehlerübersicht</span></h5>
                     <i class="fas fa-chevron-down" id="errorPanelToggle"></i>
                 </div>
                 <div class="card-body" id="errorPanelBody" style="display: none;">
@@ -373,7 +373,7 @@
                     </div>
                     <div class="mt-2">
                         <button class="btn btn-warning" onclick="retryAllErrors()" id="retryAllBtn">
-                            <i class="fas fa-redo"></i> Alle Fehler erneut versuchen
+                            <i class="fas fa-redo"></i> <span data-i18n="det.errors.retry_all">Alle Fehler erneut versuchen</span>
                         </button>
                     </div>
                 </div>
@@ -461,15 +461,15 @@
     <!-- Empty State -->
     <div id="emptyState" class="text-center py-5" style="display: none;">
         <i class="fas fa-inbox fa-3x text-muted"></i>
-        <h5 class="mt-3">Keine Datensätze gefunden</h5>
-        <p class="text-muted">Keine passenden Dokumente für die aktuellen Filter gefunden.</p>
+        <h5 class="mt-3" data-i18n="det.empty.no_records">Keine Datensätze gefunden</h5>
+        <p class="text-muted" data-i18n="det.empty.no_match">Keine passenden Dokumente für die aktuellen Filter gefunden.</p>
     </div>
     
     <!-- No Batch Selected State -->
     <div id="noBatchState" class="text-center py-5">
         <i class="fas fa-folder-open fa-3x text-muted"></i>
-        <h5 class="mt-3">Batch auswählen</h5>
-        <p class="text-muted">Wähle einen Migration-Batch aus dem Dropdown oben, um Details anzuzeigen.</p>
+        <h5 class="mt-3" data-i18n="det.empty.select">Batch auswählen</h5>
+        <p class="text-muted" data-i18n="det.empty.select_info">Wähle einen Migration-Batch aus dem Dropdown oben, um Details anzuzeigen.</p>
     </div>
 </div>
 

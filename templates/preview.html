@@ -22,26 +22,26 @@
     <!-- Workflow Step Indicator -->
     <div class="workflow-steps">
         <a href="/prepare" class="workflow-step done text-decoration-none" title="Neuen Batch erstellen">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> Batch erstellen
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> <span data-i18n="wf.step1">Batch erstellen</span>
         </a>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <div class="workflow-step active">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Vorschau und Vorbereitung
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> <span data-i18n="wf.step2">Vorschau und Vorbereitung</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <a href="/batch/{{ batch_id }}/object-mapping" class="workflow-step text-decoration-none" title="Objekt Link &amp; Verlinkung">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Objekt Link
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> <span data-i18n="wf.step3">Objekt Link</span>
         </a>
         <i class="fas fa-chevron-right workflow-arrow"></i>
         <a href="/details?batch_id={{ batch_id }}" class="workflow-step text-decoration-none" title="Auswertung &amp; Details">
-            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Auswertung
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> <span data-i18n="wf.step4">Auswertung</span>
         </a>
     </div>
 
     <div class="row">
         <div class="col-12">
-            <h2>Batch-Vorschau</h2>
-            <p class="text-muted">Vorschau der Daten, die bei der Migration übertragen werden</p>
+            <h2 data-i18n="prev.title">Batch-Vorschau</h2>
+            <p class="text-muted" data-i18n="prev.subtitle">Vorschau der Daten, die bei der Migration übertragen werden</p>
             <p><strong>Batch ID:</strong> <code>{{ batch_id }}</code></p>
         </div>
     </div>
@@ -115,34 +115,34 @@
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <div>
-                        <h5 class="mb-0">Staging-Datensätze</h5>
+                        <h5 class="mb-0" data-i18n="prev.staging_records">Staging-Datensätze</h5>
                         <small id="selectionInfo" class="text-muted">0 Datensätze ausgewählt</small>
                     </div>
                     <div class="btn-group">
                         <button onclick="$('#columnModal').modal('show')" class="btn btn-secondary" title="Spalten ein-/ausblenden">
-                            <i class="fas fa-columns"></i> Spalten
+                            <i class="fas fa-columns"></i> <span data-i18n="prev.btn.columns">Spalten</span>
                         </button>
                         <button onclick="refreshData()" class="btn btn-info" id="refreshDataBtn" title="Metadaten, Dateinamen abrufen und Regeln anwenden">
-                            <i class="fas fa-sync-alt"></i> Daten aktualisieren
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="prev.btn.refresh">Daten aktualisieren</span>
                         </button>
                         <label class="btn btn-outline-warning mb-0" id="excludeLargeLabel" title="Dateien größer als 99MB ausschließen">
                             <input type="checkbox" id="excludeLargeCheckbox" onchange="excludeLargeFiles(this.checked)" style="margin-right: 5px;">
-                            <i class="fas fa-ban"></i> &gt;99MB ausschließen
+                            <i class="fas fa-ban"></i> <span data-i18n="prev.btn.exclude_99mb">&gt;99MB ausschließen</span>
                         </label>
                         <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
-                            <i class="fas fa-play-circle"></i> Ausgewählte ausführen
+                            <i class="fas fa-play-circle"></i> <span data-i18n="prev.btn.execute_selected">Ausgewählte ausführen</span>
                         </button>
                         <button onclick="executeAll()" class="btn btn-primary" id="executeBtn">
-                            <i class="fas fa-play"></i> Alle ausführen
+                            <i class="fas fa-play"></i> <span data-i18n="prev.btn.execute_all">Alle ausführen</span>
                         </button>
                         <button onclick="cancelMigration()" class="btn btn-danger" id="cancelBtn" style="display: none;">
-                            <i class="fas fa-stop"></i> Migration abbrechen
+                            <i class="fas fa-stop"></i> <span data-i18n="prev.btn.cancel_migration">Migration abbrechen</span>
                         </button>
                         <button onclick="resetFailed()" class="btn btn-warning" id="resetBtn">
-                            <i class="fas fa-undo"></i> Fehler/Partial zurücksetzen
+                            <i class="fas fa-undo"></i> <span data-i18n="prev.btn.reset_failed">Fehler/Partial zurücksetzen</span>
                         </button>
                         <button onclick="retryFailed()" class="btn btn-danger" id="retryBtn">
-                            <i class="fas fa-redo"></i> Fehler/Partial wiederholen
+                            <i class="fas fa-redo"></i> <span data-i18n="prev.btn.retry_failed">Fehler/Partial wiederholen</span>
                         </button>
                     </div>
                 </div>
@@ -156,7 +156,7 @@
                         </div>
                         <small id="filterInfo" class="text-muted" style="min-width: 180px; text-align: right;"></small>
                         <select id="statusFilter" class="form-select" style="width: auto;">
-                            <option value="">Alle Status</option>
+                            <option value="" data-i18n="prev.filter.all_status">Alle Status</option>
                             <option value="pending" id="statusPending">⏳ Pending</option>
                             <option value="success" id="statusSuccess">✅ Erfolgreich</option>
                             <option value="failed" id="statusFailed">❌ Fehlgeschlagen</option>
@@ -165,7 +165,7 @@
                             <option value="hide_completed">📋 Nur unbearbeitet</option>
                         </select>
                         <select id="errorCategoryFilter" class="form-select" style="width: auto;">
-                            <option value="">Alle Fehlerkategorien</option>
+                            <option value="" data-i18n="prev.filter.all_errors">Alle Fehlerkategorien</option>
                         </select>
                     </div>
                     

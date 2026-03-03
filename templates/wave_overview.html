@@ -73,12 +73,12 @@
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <div>
-                    <h2><i class="fas fa-stream"></i> Wellen-Übersicht</h2>
-                    <p class="text-muted mb-0">Überblick über alle Migrationswellen und deren Fortschritt</p>
+                    <h2><i class="fas fa-stream"></i> <span data-i18n="waves.title">Wellen-Übersicht</span></h2>
+                    <p class="text-muted mb-0" data-i18n="waves.subtitle">Überblick über alle Migrationswellen und deren Fortschritt</p>
                 </div>
                 <div>
                     <button class="btn btn-outline-secondary" onclick="loadWaveData()" title="Aktualisieren">
-                        <i class="fas fa-sync-alt"></i> Aktualisieren
+                        <i class="fas fa-sync-alt"></i> <span data-i18n="waves.refresh">Aktualisieren</span>
                     </button>
                 </div>
             </div>
@@ -91,7 +91,7 @@
             <div class="card text-center">
                 <div class="card-body py-2">
                     <h4 id="totalBatches" class="mb-0">-</h4>
-                    <small class="text-muted">Batches</small>
+                    <small class="text-muted" data-i18n="waves.stat.batches">Batches</small>
                 </div>
             </div>
         </div>
@@ -99,7 +99,7 @@
             <div class="card text-center">
                 <div class="card-body py-2">
                     <h4 id="totalDocs" class="mb-0">-</h4>
-                    <small class="text-muted">Dokumente</small>
+                    <small class="text-muted" data-i18n="waves.stat.docs">Dokumente</small>
                 </div>
             </div>
         </div>
@@ -107,7 +107,7 @@
             <div class="card text-center border-success">
                 <div class="card-body py-2">
                     <h4 id="totalUploaded" class="mb-0 text-success">-</h4>
-                    <small class="text-muted">Hochgeladen</small>
+                    <small class="text-muted" data-i18n="waves.stat.uploaded">Hochgeladen</small>
                 </div>
             </div>
         </div>
@@ -115,7 +115,7 @@
             <div class="card text-center border-info">
                 <div class="card-body py-2">
                     <h4 id="totalLinked" class="mb-0 text-info">-</h4>
-                    <small class="text-muted">Verlinkt</small>
+                    <small class="text-muted" data-i18n="waves.stat.linked">Verlinkt</small>
                 </div>
             </div>
         </div>
@@ -123,7 +123,7 @@
             <div class="card text-center border-danger">
                 <div class="card-body py-2">
                     <h4 id="totalFailed" class="mb-0 text-danger">-</h4>
-                    <small class="text-muted">Fehler</small>
+                    <small class="text-muted" data-i18n="waves.stat.errors">Fehler</small>
                 </div>
             </div>
         </div>
@@ -131,7 +131,7 @@
             <div class="card text-center border-warning">
                 <div class="card-body py-2">
                     <h4 id="totalPending" class="mb-0 text-warning">-</h4>
-                    <small class="text-muted">Ausstehend</small>
+                    <small class="text-muted" data-i18n="waves.stat.pending">Ausstehend</small>
                 </div>
             </div>
         </div>
@@ -143,7 +143,7 @@
             <div class="spinner-border" role="status">
                 <span class="sr-only">Laden...</span>
             </div>
-            <p class="text-muted mt-2">Lade Wellen-Daten...</p>
+            <p class="text-muted mt-2" data-i18n="waves.loading">Lade Wellen-Daten...</p>
         </div>
     </div>
 </div>

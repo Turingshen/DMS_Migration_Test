@@ -103,15 +103,15 @@
     <div class="row mb-3">
         <div class="col-12 d-flex justify-content-between align-items-start">
             <div>
-                <h2><i class="fas fa-tachometer-alt"></i> Dashboard</h2>
+                <h2><i class="fas fa-tachometer-alt"></i> <span data-i18n="dash.title">Dashboard</span></h2>
                 <div class="workflow-info mt-1">
-                    <a href="/prepare" class="step">1. Batch erstellen</a>
+                    <a href="/prepare" class="step" data-i18n="wf.step1">1. Batch erstellen</a>
                     <i class="fas fa-chevron-right arrow"></i>
-                    <span class="step">2. Vorschau und Vorbereitung</span>
+                    <span class="step" data-i18n="wf.step2">2. Vorschau und Vorbereitung</span>
                     <i class="fas fa-chevron-right arrow"></i>
-                    <span class="step">3. Objekt Link</span>
+                    <span class="step" data-i18n="wf.step3">3. Objekt Link</span>
                     <i class="fas fa-chevron-right arrow"></i>
-                    <span class="step">4. Auswertung</span>
+                    <span class="step" data-i18n="wf.step4">4. Auswertung</span>
                 </div>
             </div>
 
@@ -124,7 +124,7 @@
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiWaves">-</div>
-                    <div class="kpi-label" data-inline-help="Anzahl verschiedener Migrationswellen. Jede Welle gruppiert mehrere Batches und hat einen eigenen Zeitplan." data-help-position="bottom">Wellen</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.waves" data-i18n-help="dash.kpi.waves_tip" data-inline-help="Anzahl verschiedener Migrationswellen. Jede Welle gruppiert mehrere Batches und hat einen eigenen Zeitplan." data-help-position="bottom">Wellen</div>
                 </div>
             </div>
         </div>
@@ -132,7 +132,7 @@
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiBatches">-</div>
-                    <div class="kpi-label" data-inline-help="Gesamtanzahl aller erstellten Migrationsbatches über alle Wellen hinweg." data-help-position="bottom">Batches</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.batches" data-i18n-help="dash.kpi.batches_tip" data-inline-help="Gesamtanzahl aller erstellten Migrationsbatches über alle Wellen hinweg." data-help-position="bottom">Batches</div>
                 </div>
             </div>
         </div>
@@ -140,7 +140,7 @@
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiDocs">-</div>
-                    <div class="kpi-label" data-inline-help="Gesamtzahl aller DMS-Dokumente (Infosätze) in allen Batches zusammen." data-help-position="bottom">Dokumente</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.docs" data-i18n-help="dash.kpi.docs_tip" data-inline-help="Gesamtzahl aller DMS-Dokumente (Infosätze) in allen Batches zusammen." data-help-position="bottom">Dokumente</div>
                 </div>
             </div>
         </div>
@@ -148,7 +148,7 @@
             <div class="card kpi-card text-center border-success">
                 <div class="card-body py-2">
                     <div class="kpi-value text-success" id="kpiUploaded">-</div>
-                    <div class="kpi-label" data-inline-help="Erfolgreich ins Zielsystem hochgeladene Dokumente (Container + Dateien)." data-help-position="bottom">Hochgeladen</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.uploaded" data-i18n-help="dash.kpi.uploaded_tip" data-inline-help="Erfolgreich ins Zielsystem hochgeladene Dokumente (Container + Dateien)." data-help-position="bottom">Hochgeladen</div>
                 </div>
             </div>
         </div>
@@ -156,7 +156,7 @@
             <div class="card kpi-card text-center border-info">
                 <div class="card-body py-2">
                     <div class="kpi-value text-info" id="kpiLinked">-</div>
-                    <div class="kpi-label" data-inline-help="Dokumente, die erfolgreich mit Geschäftsobjekten im Zielsystem verknüpft wurden." data-help-position="bottom">Verlinkt</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.linked" data-i18n-help="dash.kpi.linked_tip" data-inline-help="Dokumente, die erfolgreich mit Geschäftsobjekten im Zielsystem verknüpft wurden." data-help-position="bottom">Verlinkt</div>
                 </div>
             </div>
         </div>
@@ -164,7 +164,7 @@
             <div class="card kpi-card text-center border-danger">
                 <div class="card-body py-2">
                     <div class="kpi-value text-danger" id="kpiFailed">-</div>
-                    <div class="kpi-label" data-inline-help="Fehlgeschlagene Uploads oder Verlinkungen. Können zurückgesetzt und erneut versucht werden." data-help-position="bottom">Fehler</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.failed" data-i18n-help="dash.kpi.failed_tip" data-inline-help="Fehlgeschlagene Uploads oder Verlinkungen. Können zurückgesetzt und erneut versucht werden." data-help-position="bottom">Fehler</div>
                 </div>
             </div>
         </div>
@@ -174,9 +174,9 @@
     <div class="row mb-2">
         <div class="col-12">
             <div class="d-flex align-items-center gap-2">
-                <label class="mb-0 font-weight-bold mr-2"><i class="fas fa-filter"></i> Welle:</label>
+                <label class="mb-0 font-weight-bold mr-2"><i class="fas fa-filter"></i> <span data-i18n="dash.wave_filter">Welle:</span></label>
                 <select class="form-control form-control-sm" id="waveFilter" style="max-width: 200px;" onchange="applyWaveFilter()">
-                    <option value="">Alle Wellen</option>
+                    <option value="" data-i18n="dash.all_waves">Alle Wellen</option>
                 </select>
                 <span class="text-muted ml-2" id="waveFilterInfo" style="font-size: 0.85rem;"></span>
             </div>
@@ -190,13 +190,13 @@
             <!-- Kanban Board (Wave-oriented) -->
             <div class="card mb-3">
                 <div class="card-header py-2">
-                    <h6 class="mb-0"><i class="fas fa-columns"></i> Batches</h6>
+                    <h6 class="mb-0"><i class="fas fa-columns"></i> <span data-i18n="dash.card.batches">Batches</span></h6>
                 </div>
                 <div class="card-body p-2" style="max-height: 420px; overflow-y: auto;">
                     <div id="kanbanBoard">
                         <div class="text-center py-4">
                             <div class="spinner-border spinner-border-sm" role="status"></div>
-                            <span class="text-muted ml-2">Lade...</span>
+                            <span class="text-muted ml-2" data-i18n="loading">Lade...</span>
                         </div>
                     </div>
                 </div>
@@ -205,19 +205,19 @@
             <!-- Task List -->
             <div class="card">
                 <div class="card-header py-2">
-                    <h6 class="mb-0"><i class="fas fa-tasks"></i> Aufgaben</h6>
+                    <h6 class="mb-0"><i class="fas fa-tasks"></i> <span data-i18n="dash.card.tasks">Aufgaben</span></h6>
                 </div>
                 <div class="card-body p-0" style="max-height: 350px; overflow-y: auto;">
                     <table class="table table-sm mb-0" id="taskListTable">
                         <thead class="thead-light">
                             <tr>
-                                <th style="width:35%">Welle / Aufgabe</th>
-                                <th style="width:30%">Zeitraum</th>
-                                <th style="width:15%">Status</th>
+                                <th style="width:35%" data-i18n="dash.task.wave_task">Welle / Aufgabe</th>
+                                <th style="width:30%" data-i18n="dash.task.period">Zeitraum</th>
+                                <th style="width:15%" data-i18n="dash.task.status">Status</th>
                             </tr>
                         </thead>
                         <tbody id="taskListBody">
-                            <tr><td colspan="3" class="text-center text-muted py-3">Lade...</td></tr>
+                            <tr><td colspan="3" class="text-center text-muted py-3" data-i18n="loading">Lade...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -228,9 +228,9 @@
         <div class="col-lg-9">
             <div class="card" style="height: 100%;">
                 <div class="card-header d-flex justify-content-between align-items-center py-2">
-                    <h6 class="mb-0"><i class="fas fa-project-diagram"></i> Wellen-Zeitplan</h6>
+                    <h6 class="mb-0"><i class="fas fa-project-diagram"></i> <span data-i18n="dash.card.wave_schedule">Wellen-Zeitplan</span></h6>
                     <button class="btn btn-sm btn-outline-primary" onclick="openWavePlanModal()">
-                        <i class="fas fa-plus"></i> Welle planen
+                        <i class="fas fa-plus"></i> <span data-i18n="dash.card.plan_wave">Welle planen</span>
                     </button>
                 </div>
                 <div class="card-body p-2" style="overflow-x: auto;">
@@ -249,7 +249,7 @@
         <div class="col-12">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center" style="cursor: pointer;" onclick="toggleBatchTable()">
-                    <h5 class="mb-0"><i class="fas fa-table"></i> Alle Batches</h5>
+                    <h5 class="mb-0"><i class="fas fa-table"></i> <span data-i18n="dash.card.all_batches">Alle Batches</span></h5>
                     <i class="fas fa-chevron-down" id="batchTableToggle"></i>
                 </div>
                 <div class="card-body" id="batchTableBody" style="display: none;">
@@ -257,17 +257,17 @@
                         <table class="table table-striped table-hover table-sm" id="batchesTable">
                             <thead>
                                 <tr>
-                                    <th>Batch-ID</th>
-                                    <th>Welle</th>
-                                    <th>Beschreibung</th>
-                                    <th>Erstellt</th>
-                                    <th>Erstellt von</th>
-                                    <th>Gesamt</th>
-                                    <th>Hochgeladen</th>
-                                    <th>Fehler</th>
-                                    <th>Phase</th>
-                                    <th>Verlinkung</th>
-                                    <th>Aktionen</th>
+                                    <th data-i18n="dash.batch.id">Batch-ID</th>
+                                    <th data-i18n="dash.batch.wave">Welle</th>
+                                    <th data-i18n="dash.batch.description">Beschreibung</th>
+                                    <th data-i18n="dash.batch.created">Erstellt</th>
+                                    <th data-i18n="dash.batch.created_by">Erstellt von</th>
+                                    <th data-i18n="dash.batch.total">Gesamt</th>
+                                    <th data-i18n="dash.batch.uploaded">Hochgeladen</th>
+                                    <th data-i18n="dash.batch.failed">Fehler</th>
+                                    <th data-i18n="dash.batch.phase">Phase</th>
+                                    <th data-i18n="dash.batch.linking">Verlinkung</th>
+                                    <th data-i18n="dash.batch.actions">Aktionen</th>
                                 </tr>
                             </thead>
                             <tbody id="batchesBody">

@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // File label
     document.getElementById('fileInput').addEventListener('change', function() {
-        this.nextElementSibling.textContent = this.files[0] ? this.files[0].name : 'Datei wählen...';
+        this.nextElementSibling.textContent = this.files[0] ? this.files[0].name : t('prep.excel.choose_file');
     });
 
     // Char counter
@@ -77,7 +77,7 @@ function createBatch() {
     const activeTab = document.querySelector('#sourceTabs .nav-link.active').id;
     const wave = document.getElementById('batchWave').value;
 
-    if (!wave) { alert('Bitte eine Wave auswählen!'); return; }
+    if (!wave) { alert(t('prep.msg.choose_wave')); return; }
 
     if (activeTab === 'tab-dms')       createDMSBatch();
     else if (activeTab === 'tab-sql')  createSQLBatch();
@@ -90,7 +90,7 @@ function createBatch() {
 function createDMSBatch() {
     const count = parseInt($('#dbCount').text().replace(/[,.]/g, '')) || 0;
     if (count === 0) {
-        alert('Keine DMS-Objekte in der lokalen Datenbank. Bitte zuerst Daten laden!');
+        alert(t('prep.msg.no_dms_objects'));
         return;
     }
     // Sync modal summary
@@ -100,7 +100,7 @@ function createDMSBatch() {
 }
 
 function createDMSBatchConfirmed() {
-    if (selectedDokobs.length === 0) { alert('Bitte mindestens einen Objekttyp auswählen!'); return; }
+    if (selectedDokobs.length === 0) { alert(t('prep.msg.choose_dokob')); return; }
 
     const wave = document.getElementById('batchWave').value;
     const description = document.getElementById('batchDescription').value.trim();
@@ -110,7 +110,7 @@ function createDMSBatchConfirmed() {
     const btn = document.getElementById('createBatchBtn');
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 0%';
-    showDmsProgress(5, 'Starte Batch-Erstellung...');
+    showDmsProgress(5, t('prep.msg.creating'));
 
     const params = new URLSearchParams({ wave, description, notes, dokob_filter: selectedDokobs.join(',') });
     const es = new EventSource(`/api/dms/create-batch-stream?${params}`);
@@ -118,7 +118,7 @@ function createDMSBatchConfirmed() {
     es.onmessage = function(event) {
         const data = JSON.parse(event.data);
         if (data.type === 'status' || data.type === 'progress') {
-            showDmsProgress(data.percent || 50, data.message || 'Verarbeite...');
+            showDmsProgress(data.percent || 50, data.message || t('prep.msg.processing'));
             btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${data.percent || 0}%`;
         } else if (data.type === 'complete') {
             es.close();
@@ -134,7 +134,7 @@ function createDMSBatchConfirmed() {
     };
     es.onerror = function() {
         es.close(); hideDmsProgress(); resetBtn();
-        showBatchResult(false, { error: 'Verbindungsfehler' });
+        showBatchResult(false, { error: t('prep.msg.connection_error') });
     };
 }
 
@@ -143,7 +143,7 @@ function createDMSBatchConfirmed() {
 // ═══════════════════════════════════════════════════════════════
 function createSQLBatch() {
     const query = editor.getValue().trim();
-    if (!query) { alert('Bitte eine SQL-Query eingeben'); return; }
+    if (!query) { alert(t('prep.msg.enter_sql')); return; }
 
     const formData = new FormData();
     formData.append('use_file', 'false');
@@ -158,7 +158,7 @@ function createSQLBatch() {
 // ═══════════════════════════════════════════════════════════════
 function createFileBatch() {
     const fileInput = document.getElementById('fileInput');
-    if (!fileInput.files[0]) { alert('Bitte eine Datei auswählen'); return; }
+    if (!fileInput.files[0]) { alert(t('prep.msg.choose_file')); return; }
 
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
@@ -179,7 +179,7 @@ function appendMetadata(formData) {
 function submitPrepare(formData) {
     const btn = document.getElementById('createBatchBtn');
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Wird erstellt...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + t('prep.msg.creating2');
     document.getElementById('resultSection').style.display = 'none';
 
     fetch('/prepare', { method: 'POST', body: formData })
@@ -191,7 +191,7 @@ function submitPrepare(formData) {
 function resetBtn() {
     const btn = document.getElementById('createBatchBtn');
     btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-rocket"></i> Migration Batch erstellen';
+    btn.innerHTML = '<i class="fas fa-rocket"></i> ' + t('prep.create_batch');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -206,7 +206,7 @@ function showBatchResult(success, data) {
 
     if (success) {
         alertEl.className = 'alert alert-success';
-        alertEl.innerHTML = '<i class="fas fa-check-circle"></i> <strong>Migration Batch erfolgreich erstellt!</strong>';
+        alertEl.innerHTML = '<i class="fas fa-check-circle"></i> <strong>' + t('prep.msg.created_ok') + '</strong>';
         let exclInfo = '';
         if (data.excluded_count > 0) {
             let exclParts = [];
@@ -215,30 +215,30 @@ function showBatchResult(success, data) {
                     exclParts.push(`${dk}: ${cnt.toLocaleString()}`);
                 }
             }
-            exclInfo = `<tr><th>Ausgeschlossen:</th><td><span class="badge badge-warning">${data.excluded_count.toLocaleString()} Objekte</span> <small class="text-muted">(${exclParts.join(', ')})</small></td></tr>`;
+            exclInfo = `<tr><th>${t('prep.msg.excluded')}</th><td><span class="badge badge-warning">${data.excluded_count.toLocaleString()} ${t('prep.msg.objects')}</span> <small class="text-muted">(${exclParts.join(', ')})</small></td></tr>`;
         }
         details.innerHTML = `
             <div class="card">
                 <div class="card-body">
                     <table class="table table-sm">
-                        <tr><th>Batch ID:</th><td><code>${data.batch_id}</code></td></tr>
-                        <tr><th>Datensätze:</th><td>${(data.record_count || 0).toLocaleString()}</td></tr>
+                        <tr><th>${t('prep.result.batch_id')}</th><td><code>${data.batch_id}</code></td></tr>
+                        <tr><th>${t('prep.result.records')}</th><td>${(data.record_count || 0).toLocaleString()}</td></tr>
                         ${exclInfo}
                     </table>
                     <div class="mt-3">
                         <a href="/preview?batch_id=${data.batch_id}" class="btn btn-primary btn-lg">
-                            <i class="fas fa-arrow-right"></i> Weiter: Anreichern &amp; Vorschau
+                            <i class="fas fa-arrow-right"></i> ${t('prep.msg.continue')}
                         </a>
                         <a href="/" class="btn btn-secondary btn-lg ml-2">
-                            <i class="fas fa-home"></i> Übersicht
+                            <i class="fas fa-home"></i> ${t('prep.result.overview')}
                         </a>
                     </div>
                 </div>
             </div>`;
     } else {
         alertEl.className = 'alert alert-danger';
-        alertEl.innerHTML = `<i class="fas fa-exclamation-circle"></i> <strong>Fehler:</strong> ${data.error || 'Unbekannter Fehler'}`;
-        details.innerHTML = '<button onclick="document.getElementById(\'resultSection\').style.display=\'none\'" class="btn btn-secondary"><i class="fas fa-redo"></i> Erneut versuchen</button>';
+        alertEl.innerHTML = `<i class="fas fa-exclamation-circle"></i> <strong>${t('error_prefix')}</strong> ${data.error || t('prep.msg.unknown_error')}`;
+        details.innerHTML = '<button onclick="document.getElementById(\'resultSection\').style.display=\'none\'" class="btn btn-secondary"><i class="fas fa-redo"></i> ' + t('prep.msg.retry') + '</button>';
     }
 }
 
@@ -251,7 +251,7 @@ function loadWaves() {
         .then(data => {
             if (data.success && data.waves) {
                 const select = document.getElementById('batchWave');
-                select.innerHTML = '<option value="">-- Wave auswählen --</option>';
+                select.innerHTML = '<option value="">' + t('prep.meta.choose_wave') + '</option>';
                 data.waves.forEach(w => {
                     select.innerHTML += `<option value="${w.wave_name}">${w.wave_name}</option>`;
                 });
@@ -273,7 +273,7 @@ function loadWerke() {
                 if (data.generated_at) {
                     try {
                         const d = new Date(data.generated_at);
-                        $('#werkeCacheAge').text('(Stand: ' + d.toLocaleDateString('de-DE') + ')');
+                        $('#werkeCacheAge').text(t('prep.msg.cache_date', {date: d.toLocaleDateString('de-DE')}));
                     } catch(e) { $('#werkeCacheAge').text(''); }
                 }
             }
@@ -286,7 +286,7 @@ function refreshWerkeCache() {
     const icon = $('#iconRefreshWerke');
     btn.prop('disabled', true);
     icon.addClass('fa-spin');
-    btn.attr('title', 'Lade...');
+    btn.attr('title', t('loading'));
 
     const es = new EventSource('/api/dms/refresh-werke-cache');
     es.onmessage = function(e) {
@@ -294,19 +294,19 @@ function refreshWerkeCache() {
         if (msg.type === 'complete') {
             es.close();
             icon.removeClass('fa-spin');
-            btn.prop('disabled', false).attr('title', `Aktualisiert (${msg.total_werke} Werke, ${msg.time})`);
+            btn.prop('disabled', false).attr('title', t('prep.msg.cache_updated', {n: msg.total_werke, time: msg.time}));
             loadWerke();  // reload grid with fresh data
         } else if (msg.type === 'error') {
             es.close();
             icon.removeClass('fa-spin');
-            btn.prop('disabled', false).attr('title', 'Fehler: ' + msg.message);
-            alert('Werke-Cache Fehler: ' + msg.message);
+            btn.prop('disabled', false).attr('title', t('error_prefix') + msg.message);
+            alert(t('prep.msg.cache_error') + ': ' + msg.message);
         }
     };
     es.onerror = function() {
         es.close();
         icon.removeClass('fa-spin');
-        btn.prop('disabled', false).attr('title', 'Verbindungsfehler');
+        btn.prop('disabled', false).attr('title', t('prep.msg.connection_error'));
     };
 }
 
@@ -337,7 +337,7 @@ function initWerkeGrid(werke) {
 }
 
 function updateSelectedCount() {
-    $('#selectedCount').text(`${$('#werkeContainer .werke-checkbox.selected').length} ausgewählt`);
+    $('#selectedCount').text(t('prep.plants.selected', {n: $('#werkeContainer .werke-checkbox.selected').length}));
 }
 
 function filterWerke(term) {
@@ -370,13 +370,13 @@ function clearSelection() {
 // ═══════════════════════════════════════════════════════════════
 function loadDMSObjects() {
     const selected = getSelectedWerke();
-    if (!selected.length) { alert('Bitte mindestens ein Werk auswählen!'); return; }
+    if (!selected.length) { alert(t('prep.msg.select_plant')); return; }
 
     $('#resultsBody').empty();
     loadedData = [];
     $('#detailedStats').empty();
     $('#dmsStatsRow, #dmsResultsRow').hide();
-    showDmsProgress(5, 'Verbinde mit DIL...');
+    showDmsProgress(5, t('prep.msg.connecting_dil'));
     $('#btnLoadData').prop('disabled', true);
 
     const params = new URLSearchParams({ werke: selected.join(','), auto_save: 'true' });
@@ -403,7 +403,7 @@ function loadDMSObjects() {
                 es.close();
                 $('#btnLoadData').prop('disabled', false);
                 loadedData = data.data;
-                showDmsProgress(100, 'Fertig!');
+                showDmsProgress(100, t('prep.msg.done'));
                 setTimeout(() => {
                     hideDmsProgress();
                     displayResults(data.data);
@@ -415,13 +415,13 @@ function loadDMSObjects() {
                 es.close();
                 $('#btnLoadData').prop('disabled', false);
                 hideDmsProgress();
-                alert('Fehler: ' + data.message);
+                alert(t('error_prefix') + data.message);
                 break;
         }
     };
     es.onerror = function() {
         es.close(); $('#btnLoadData').prop('disabled', false);
-        hideDmsProgress(); alert('Verbindungsfehler zum Server');
+        hideDmsProgress(); alert(t('prep.msg.server_conn_error'));
     };
 }
 
@@ -456,7 +456,7 @@ function applyTableFilter() {
     const searchTerm = ($('#tableSearchInput').val() || '').toLowerCase().trim();
     const tbody = $('#resultsBody'); tbody.empty();
     if (!loadedData || !loadedData.length) {
-        tbody.append('<tr><td colspan="8" class="text-center">Keine Daten</td></tr>');
+        tbody.append('<tr><td colspan="8" class="text-center">' + t('prep.msg.no_data') + '</td></tr>');
         $('#tableInfo').html('');
         return;
     }
@@ -484,9 +484,9 @@ function applyTableFilter() {
     });
     const showing = Math.min(200, filtered.length);
     const filterInfo = (searchTerm || currentAblageFilter !== 'ALL')
-        ? ` (gefiltert aus ${loadedData.length.toLocaleString()})`
+        ? ' ' + t('prep.msg.filtered_from', {n: loadedData.length.toLocaleString()})
         : '';
-    $('#tableInfo').html(`${showing.toLocaleString()} von ${filtered.length.toLocaleString()} Einträgen${filterInfo}`);
+    $('#tableInfo').html(t('prep.msg.entries_shown', {shown: showing.toLocaleString(), total: filtered.length.toLocaleString(), filter: filterInfo}));
 }
 
 function renderDokobBadges(stats, excluded, noFile) {
@@ -505,21 +505,21 @@ function renderDokobBadges(stats, excluded, noFile) {
     summaryHtml += `<div class="stats-summary-card summary-batch">
         <i class="fas fa-rocket"></i>
         <span class="summary-count">${totalCount.toLocaleString()}</span>
-        <span>Batch</span>
-        <span class="summary-sub">von ${grandTotal.toLocaleString()}</span>
+        <span>${t('prep.stats.batch_label')}</span>
+        <span class="summary-sub">${t('prep.stats.of_total', {n: grandTotal.toLocaleString()})}</span>
     </div>`;
     if (totalNoFile > 0) {
         summaryHtml += `<div class="stats-summary-card summary-nofile">
             <i class="fas fa-file-excel"></i>
             <span class="summary-count">${totalNoFile.toLocaleString()}</span>
-            <span>Ohne Datei</span>
+            <span>${t('prep.stats.no_file')}</span>
         </div>`;
     }
     if (totalExcl > 0) {
         summaryHtml += `<div class="stats-summary-card summary-status">
             <i class="fas fa-ban"></i>
             <span class="summary-count">${totalExcl.toLocaleString()}</span>
-            <span>Status</span>
+            <span>${t('prep.stats.status_excl')}</span>
         </div>`;
     }
     summaryHtml += '</div>';
@@ -547,9 +547,9 @@ function renderDokobBadges(stats, excluded, noFile) {
             const selClass = isSel ? 'dokob-selected' : 'dokob-deselected';
             const checkIcon = isSel ? '\u2611' : '\u2610';
             let nums = `<span class="dokob-num batch">${count.toLocaleString()}</span>`;
-            if (nf > 0) nums += `<span class="dokob-num nofile" title="${nf.toLocaleString()} ohne Datei"><i class="fas fa-file-excel"></i> ${nf.toLocaleString()}</span>`;
-            if (excl > 0) nums += `<span class="dokob-num status" title="${excl.toLocaleString()} Status-ausgeschlossen"><i class="fas fa-ban"></i> ${excl.toLocaleString()}</span>`;
-            rowHtml += `<div class="dokob-card dokob-selectable ${selClass}" data-dokob="${dokob}" onclick="toggleDokobCard('${dokob}')" title="Klicken zum An-/Abw\u00e4hlen f\u00fcr Batch">
+            if (nf > 0) nums += `<span class="dokob-num nofile" title="${t('prep.stats.no_file_tip', {n: nf.toLocaleString()})}"><i class="fas fa-file-excel"></i> ${nf.toLocaleString()}</span>`;
+            if (excl > 0) nums += `<span class="dokob-num status" title="${t('prep.stats.status_excl_tip', {n: excl.toLocaleString()})}"><i class="fas fa-ban"></i> ${excl.toLocaleString()}</span>`;
+            rowHtml += `<div class="dokob-card dokob-selectable ${selClass}" data-dokob="${dokob}" onclick="toggleDokobCard('${dokob}')" title="${t('prep.stats.toggle_tip')}">
                 <div class="dokob-card-name"><span class="dokob-check">${checkIcon}</span>${dokob}</div>
                 <div class="dokob-card-numbers">${nums}</div>
             </div>`;
@@ -578,14 +578,14 @@ function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
     for (const v of Object.values(statsNoFile || {})) { if (typeof v === 'number') totalNoFile += v; }
     for (const v of Object.values(statsExcluded || {})) { if (typeof v === 'number') totalExcluded += v; }
     let parts = [];
-    if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${totalNoFile.toLocaleString()} ohne Datei</span>`);
-    if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${totalExcluded.toLocaleString()} Status</span>`);
+    if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${t('prep.msg.db_no_file', {n: totalNoFile.toLocaleString()})}</span>`);
+    if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${t('prep.msg.db_status', {n: totalExcluded.toLocaleString()})}</span>`);
     if (parts.length > 0) { $('#dbExcludedInfo').html(parts.join(' ')).show(); }
     else { $('#dbExcludedInfo').hide(); }
 }
 
 function exportData() {
-    if (!loadedData.length) { alert('Keine Daten zum Exportieren!'); return; }
+    if (!loadedData.length) { alert(t('prep.msg.no_export_data')); return; }
     const headers = ['dokar','doknr','dokvr','doktl','dokob','objky','werk','ablage'];
     let csv = headers.map(h => h.toUpperCase()).join(';') + '\n';
     loadedData.forEach(r => { csv += headers.map(h => r[h]||'').join(';') + '\n'; });
@@ -638,9 +638,9 @@ function selectAllDokob(selectAll) {
 function updateDokobInfo() {
     const total = document.querySelectorAll('.dokob-selectable').length;
     const sel = selectedDokobs.length;
-    if (sel === 0) $('#selectedDokobInfo').html('<span class="text-danger">\u26a0\ufe0f Keine Objekttypen!</span>');
-    else if (sel === total) $('#selectedDokobInfo').text('Alle Objekttypen ausgewählt');
-    else $('#selectedDokobInfo').text(`${sel} von ${total} Objekttypen`);
+    if (sel === 0) $('#selectedDokobInfo').html('<span class="text-danger">\u26a0\ufe0f ' + t('prep.msg.no_dokob') + '</span>');
+    else if (sel === total) $('#selectedDokobInfo').text(t('prep.dokob.all_selected'));
+    else $('#selectedDokobInfo').text(t('prep.msg.n_of_total_dokob', {n: sel, total: total}));
     updateFilteredCount();
 }
 
@@ -654,7 +654,7 @@ function updateModalDokobSummary() {
     const container = document.getElementById('modalDokobSummary');
     if (!container) return;
     if (Object.keys(dokobCounts).length === 0) {
-        container.innerHTML = '<span class="text-muted">Noch keine Daten geladen — bitte zuerst Daten laden.</span>';
+        container.innerHTML = '<span class="text-muted">' + t('prep.msg.no_data_loaded') + '</span>';
         return;
     }
     let html = '';
@@ -682,7 +682,7 @@ function uploadExclusionFile(input) {
 
     const resultDiv = document.getElementById('exclusionResult');
     resultDiv.style.display = 'block';
-    resultDiv.innerHTML = '<div class="text-muted"><i class="fas fa-spinner fa-spin"></i> Datei wird verarbeitet...</div>';
+    resultDiv.innerHTML = '<div class="text-muted"><i class="fas fa-spinner fa-spin"></i> ' + t('prep.msg.file_processing') + '</div>';
 
     fetch('/api/exclusion-template/upload', { method: 'POST', body: formData })
         .then(r => r.json())
@@ -694,8 +694,7 @@ function uploadExclusionFile(input) {
 
                 // Build summary
                 let html = '<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>' +
-                    totalKeys.toLocaleString() + ' Ausschluss-Keys</strong> aus ' +
-                    sheets.length + ' Objekttypen geladen:<br>';
+                    t('prep.msg.excl_keys_loaded', {n: totalKeys.toLocaleString(), sheets: sheets.length}) + '</strong><br>';
                 html += '<div class="d-flex flex-wrap mt-2" style="gap:6px;">';
                 for (const dokob of sheets) {
                     const info = data.exclusions[dokob];
@@ -712,7 +711,7 @@ function uploadExclusionFile(input) {
                 document.getElementById('btnClearExclusion').style.display = 'inline-block';
             } else {
                 resultDiv.innerHTML = '<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle"></i> ' +
-                    (data.error || 'Unbekannter Fehler') + '</div>';
+                    (data.error || t('prep.msg.unknown_error')) + '</div>';
                 pendingExclusions = null;
             }
         })
@@ -726,7 +725,7 @@ function uploadExclusionFile(input) {
 function clearExclusionUpload() {
     pendingExclusions = null;
     document.getElementById('exclusionFileInput').value = '';
-    document.getElementById('exclusionFileLabel').textContent = 'Ausschluss-Excel wählen...';
+    document.getElementById('exclusionFileLabel').textContent = t('prep.excl.choose_file');
     document.getElementById('exclusionResult').style.display = 'none';
     document.getElementById('exclusionResult').innerHTML = '';
     document.getElementById('exclusionBadge').style.display = 'none';

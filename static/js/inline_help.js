@@ -15,7 +15,7 @@
 
     // ── Tooltip Definitions per Page ─────────────────────────────────
     // Key = page identifier (matched via URL), value = array of definitions
-    const TOOLTIP_DEFS = {
+    const TOOLTIP_DEFS_DE = {
 
         // ── Dashboard ────────────────────────────────────────────────
         dashboard: [
@@ -93,6 +93,79 @@
             }
         ]
     };
+
+    const TOOLTIP_DEFS_EN = {
+        dashboard: [
+            {
+                selector: '#kpiRow',
+                text: 'Overall statistics across all batches: Waves, batches, documents, upload successes, linkings, and errors.',
+                position: 'bottom'
+            },
+            {
+                selector: '.phase-progress',
+                text: '3 phase bars: Preparation → Upload → Linking.\n■ Green = done, ■ Blue (pulsing) = active, ■ Grey = pending, ■ Red = error',
+                position: 'top',
+                attachTo: 'each'
+            }
+        ],
+        preview: [
+            {
+                selector: '#btnRefreshData',
+                text: 'IMPORTANT! Loads LOIO IDs, file sizes, filenames and applies migration rules. Must be run before upload.',
+                position: 'bottom'
+            },
+            {
+                selector: '#btnStartMigration',
+                text: 'Starts the upload: For each record, a container is created in the target system and the file(s) are transferred.',
+                position: 'bottom'
+            },
+            {
+                selector: '#btnResetFailed',
+                text: 'Resets failed records so they can be retried.',
+                position: 'bottom'
+            }
+        ],
+        prepare: [
+            {
+                selector: '#btnLoadDmsObjects',
+                text: 'Queries 11 DMS object types (EQUI, IFLOT, MPLA, etc.) from the DIL database. Deleted/closed objects are automatically excluded.',
+                position: 'bottom'
+            },
+            {
+                selector: '#btnCreateBatch',
+                text: 'Creates the batch: Reads DMS objects, applies filters/exclusions, generates target document numbers.',
+                position: 'top'
+            }
+        ],
+        mapping: [
+            {
+                selector: '#btnDownloadTemplate',
+                text: 'Excel template with sheets: Mappings, Batch Objects, Unmapped, Info. Fill in the target columns.',
+                position: 'bottom'
+            },
+            {
+                selector: '#btnStartLinking',
+                text: 'Creates object links in the target system. Only for records with status "success" and created container.',
+                position: 'bottom'
+            }
+        ],
+        settings: [
+            {
+                selector: '#maxWorkers',
+                text: 'Number of parallel API calls (1–50). More = faster, but higher load on target system. Default: 7',
+                position: 'right'
+            },
+            {
+                selector: '#pacing',
+                text: '0 = Dynamic pacing (recommended): Adjusts delay automatically based on file size. Fixed value = constant delay in seconds.',
+                position: 'right'
+            }
+        ]
+    };
+
+    function getTooltipDefs() {
+        return (typeof I18n !== 'undefined' && I18n.getLang() === 'en') ? TOOLTIP_DEFS_EN : TOOLTIP_DEFS_DE;
+    }
 
     // ── State ────────────────────────────────────────────────────────
     let activeTooltip = null;
@@ -366,7 +439,7 @@
     // ── Auto-attach for current page ─────────────────────────────────
     function autoAttach() {
         const page = detectPage();
-        const defs = TOOLTIP_DEFS[page];
+        const defs = getTooltipDefs()[page];
         if (!defs) return;
 
         defs.forEach(def => {
@@ -481,5 +554,13 @@
     } else {
         init();
     }
+
+    // Re-attach tooltips when language changes
+    document.addEventListener('languageChanged', function() {
+        if (window.InlineHelp) {
+            window.InlineHelp.removeAll();
+            autoAttach();
+        }
+    });
 
 })();

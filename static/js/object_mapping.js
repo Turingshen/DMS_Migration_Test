@@ -14,7 +14,7 @@
             fetch(`/batch/${BATCH_ID}/object-mapping/list`).then(r => r.json()).then(data => {
                 allMappings = data.mappings || [];
                 renderMappings(allMappings);
-                document.getElementById('mappingCount').textContent = allMappings.length + ' Zuordnungen';
+                document.getElementById('mappingCount').textContent = t('map.mappings.count', {n: allMappings.length});
             }),
             fetch(`/batch/${BATCH_ID}/object-mapping/unmapped`).then(r => r.json()).then(data => {
                 allUnmapped = data.unmapped || [];
@@ -33,7 +33,7 @@
                     // Linking is still running — reconnect UI
                     const btn = document.getElementById('linkAllBtn');
                     const cancelBtn = document.getElementById('cancelLinkBtn');
-                    if (btn) { btn.disabled = true; btn.textContent = '⏳ Wird verlinkt...'; }
+                    if (btn) { btn.disabled = true; btn.textContent = t('map.linking_status'); }
                     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
                     startLinkProgressPolling();
                 }
@@ -48,7 +48,7 @@
             .then(data => {
                 if (data.success && data.batch) {
                     document.getElementById('batchWave').textContent = data.batch.wave || '-';
-                    document.getElementById('batchDescription').textContent = data.batch.description || 'Keine Beschreibung';
+                    document.getElementById('batchDescription').textContent = data.batch.description || t('map.no_description');
                     document.getElementById('batchRecordCount').textContent = data.batch.total_records || '0';
                 }
             })
@@ -82,12 +82,12 @@
             .then(data => {
                 allMappings = data.mappings || [];
                 renderMappings(allMappings);
-                document.getElementById('mappingCount').textContent = allMappings.length + ' Zuordnungen';
+                document.getElementById('mappingCount').textContent = t('map.mappings.count', {n: allMappings.length});
             })
             .catch(err => {
                 console.error('Error loading mappings:', err);
                 document.getElementById('mappingsBody').innerHTML = 
-                    '<tr><td colspan="7" class="empty-state">Fehler beim Laden der Zuordnungen</td></tr>';
+                    '<tr><td colspan="7" class="empty-state">' + t('map.load_error') + '</td></tr>';
             });
     }
 
@@ -101,8 +101,8 @@
                     <td colspan="7">
                         <div class="empty-state">
                             <div class="empty-state-icon">📋</div>
-                            <div>Keine Zuordnungen für diesen Batch definiert</div>
-                            <div style="margin-top: 10px; color: #999;">Excel-Datei hochladen oder Zuordnungen manuell hinzufügen</div>
+                            <div>${t('map.empty')}</div>
+                            <div style="margin-top: 10px; color: #999;">${t('map.empty_hint')}</div>
                         </div>
                     </td>
                 </tr>
@@ -119,8 +119,8 @@
                 <td><code>${escapeHtml(m.target_objky)}</code></td>
                 <td>${formatDateTime(m.created_at)}</td>
                 <td>
-                    <button class="action-btn edit" onclick="editMapping(${m.id}, '${escapeJs(m.source_dokob)}', '${escapeJs(m.source_objky)}', '${escapeJs(m.target_dokob)}', '${escapeJs(m.target_objky)}')">Edit</button>
-                    <button class="action-btn delete" onclick="deleteMapping(${m.id})">Delete</button>
+                    <button class="action-btn edit" onclick="editMapping(${m.id}, '${escapeJs(m.source_dokob)}', '${escapeJs(m.source_objky)}', '${escapeJs(m.target_dokob)}', '${escapeJs(m.target_objky)}')">${t('batch_action.edit')}</button>
+                    <button class="action-btn delete" onclick="deleteMapping(${m.id})">${t('batch_action.delete')}</button>
                 </td>
             </tr>
         `).join('');
@@ -157,7 +157,7 @@
 
     function loadUnmapped() {
         const tbody = document.getElementById('unmappedBody');
-        tbody.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div> Lade...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div> ' + t('loading') + '</td></tr>';
 
         fetch(`/batch/${BATCH_ID}/object-mapping/unmapped`)
             .then(r => r.json())
@@ -169,7 +169,7 @@
             })
             .catch(err => {
                 console.error('Error loading unmapped:', err);
-                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Fehler beim Laden der nicht zugeordneten Objekte</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">' + t('map.unmapped_load_error') + '</td></tr>';
             });
     }
 
@@ -185,7 +185,7 @@
         // "Alle" badge
         const allBadge = document.createElement('span');
         allBadge.className = 'dokob-badge active';
-        allBadge.textContent = `Alle (${unmapped.length})`;
+        allBadge.textContent = t('map.all_count', {n: unmapped.length});
         allBadge.onclick = () => filterByDokob(null);
         bar.appendChild(allBadge);
         // Per-DOKOB badges
@@ -221,7 +221,7 @@
                     <td colspan="4">
                         <div class="empty-state">
                             <div class="empty-state-icon">✅</div>
-                            <div>Alle Objekte in diesem Batch sind zugeordnet!</div>
+                            <div>${t('map.all_mapped')}</div>
                         </div>
                     </td>
                 </tr>
@@ -235,7 +235,7 @@
                 <td><span class="badge badge-warning">${u.count}</span></td>
                 <td>
                     <button class="action-btn edit" onclick="quickAddMapping('${escapeJs(u.dokob)}', '${escapeJs(u.objky)}')">
-                        Zuordnung hinzufügen
+                        ${t('map.add_mapping')}
                     </button>
                 </td>
             </tr>
@@ -250,7 +250,7 @@
     // Edit mapping - addMapping/quickAddMapping removed (use Template + Upload instead)
     // Placeholder kept so existing unmapped-table "Aktion" column still works gracefully
     function quickAddMapping(dokob, objky) {
-        alert('Bitte verwenden Sie "Vorlage herunterladen" und "Excel hochladen" um Zuordnungen hinzuzufügen.');
+        alert(t('map.add_via_upload'));
     }
 
 
@@ -289,15 +289,15 @@
                 loadMappings();
                 loadStats();
             } else {
-                alert('Fehler: ' + (result.error || 'Unbekannter Fehler'));
+                alert(t('error_prefix') + (result.error || t('map.error_unknown')));
             }
         })
-        .catch(err => alert('Fehler beim Aktualisieren der Zuordnung: ' + err));
+        .catch(err => alert(t('map.update_error', {msg: err})));
     }
 
     // Delete mapping
     function deleteMapping(id) {
-        if (!confirm('M\u00f6chten Sie diese Zuordnung wirklich l\u00f6schen?')) return;
+        if (!confirm(t('map.delete_confirm'))) return;
 
         fetch(`/batch/${BATCH_ID}/object-mapping/${id}/delete`, {
             method: 'DELETE'
@@ -308,10 +308,10 @@
                 loadMappings();
                 loadStats();
             } else {
-                alert('Error: ' + (result.error || 'Unknown error'));
+                alert(t('error_prefix') + (result.error || t('map.error_unknown')));
             }
         })
-        .catch(err => alert('Fehler beim L\u00f6schen der Zuordnung: ' + err));
+        .catch(err => alert(t('map.delete_error', {msg: err})));
     }
 
     // Upload functionality
@@ -346,7 +346,7 @@
             if (file) {
                 selectedFile = file;
                 document.getElementById('uploadStatus').innerHTML = 
-                    `<div class="alert alert-success">Ausgewählt: ${file.name}</div>`;
+                    `<div class="alert alert-success">${t('map.file_selected', {name: file.name})}</div>`;
                 document.getElementById('uploadBtn').disabled = false;
             }
         });
@@ -357,7 +357,7 @@
         if (file) {
             selectedFile = file;
             document.getElementById('uploadStatus').innerHTML = 
-                `<div class="alert alert-success">Ausgewählt: ${file.name}</div>`;
+                `<div class="alert alert-success">${t('map.file_selected', {name: file.name})}</div>`;
             document.getElementById('uploadBtn').disabled = false;
         }
     }
@@ -370,7 +370,7 @@
 
         document.getElementById('uploadBtn').disabled = true;
         document.getElementById('uploadStatus').innerHTML = 
-            '<div class="loading"><div class="spinner"></div> Wird hochgeladen...</div>';
+            '<div class="loading"><div class="spinner"></div> ' + t('map.uploading') + '</div>';
 
         fetch(`/batch/${BATCH_ID}/object-mapping/upload`, {
             method: 'POST',
@@ -380,7 +380,7 @@
         .then(result => {
             if (result.success) {
                 document.getElementById('uploadStatus').innerHTML = 
-                    `<div class="alert alert-success">✅ ${result.count} Zuordnungen hochgeladen!</div>`;
+                    `<div class="alert alert-success">${t('map.upload_success', {n: result.count})}</div>`;
                 setTimeout(() => {
                     closeUploadModal();
                     loadMappings();
@@ -388,13 +388,13 @@
                 }, 1500);
             } else {
                 document.getElementById('uploadStatus').innerHTML = 
-                    `<div class="alert alert-warning">❌ Fehler: ${result.error}</div>`;
+                    `<div class="alert alert-warning">${t('map.upload_error_msg', {msg: result.error})}</div>`;
                 document.getElementById('uploadBtn').disabled = false;
             }
         })
         .catch(err => {
             document.getElementById('uploadStatus').innerHTML = 
-                `<div class="alert alert-warning">❌ Hochladen fehlgeschlagen: ${err}</div>`;
+                `<div class="alert alert-warning">${t('map.upload_failed', {msg: err})}</div>`;
             document.getElementById('uploadBtn').disabled = false;
         });
     }
@@ -410,10 +410,7 @@
 
     // Apply mappings to staging
     function applyMappings() {
-        if (!confirm('Alle Zuordnungen auf Staging-Datens\u00e4tze in diesem Batch anwenden?\n\n' +
-            'HINWEIS: Objekt-Zuordnungen werden jetzt ON-THE-FLY w\u00e4hrend der Migration angewendet.\n' +
-            'Dieser Button aktualisiert nur Datens\u00e4tze, die bereits source_dokob/source_objky Werte haben\n' +
-            '(aus einem vorherigen, teilweisen Migrationslauf).')) return;
+        if (!confirm(t('map.apply_confirm'))) return;
 
         fetch(`/batch/${BATCH_ID}/object-mapping/apply`, {
             method: 'POST'
@@ -422,18 +419,16 @@
         .then(result => {
             if (result.success) {
                 if (result.updated === 0) {
-                    alert('ℹ️ Keine Datensätze aktualisiert.\n\n' + 
-                        'Dies ist für neue Batches erwartet.\n' +
-                        'Objekt-Zuordnungen werden automatisch während der Migration angewendet.');
+                    alert(t('map.apply_no_records'));
                 } else {
-                    alert(`✅ Zuordnungen angewendet!\n\nAktualisiert: ${result.updated} Datensätze`);
+                    alert(t('map.apply_success', {n: result.updated}));
                 }
                 loadStats();
             } else {
-                alert('Fehler: ' + (result.error || 'Unbekannter Fehler'));
+                alert(t('error_prefix') + (result.error || t('map.error_unknown')));
             }
         })
-        .catch(err => alert('Fehler beim Anwenden der Zuordnungen: ' + err));
+        .catch(err => alert(t('map.apply_error', {msg: err})));
     }
 
     function escapeJs(text) {
@@ -472,9 +467,9 @@
                     bar.style.width = pct + '%';
                     bar.textContent = pct + '%';
                     document.getElementById('linkProgressStats').textContent =
-                        `Verlinkung: ${data.completed}/${data.link_total} (${data.linked} verlinkt, ${data.link_exists} existiert, ${data.link_failed} Fehler)`;
+                        t('map.link_progress', {completed: data.completed, total: data.link_total, linked: data.linked, exists: data.link_exists, failed: data.link_failed});
                     document.getElementById('linkProgressPhase').textContent =
-                        `Phase: ${data.migration_phase || '—'}`;
+                        t('map.link_phase', {phase: data.migration_phase || '—'});
 
                     // Background linking finished?
                     if (!data.is_linking && data.background_result) {
@@ -484,19 +479,14 @@
 
                         const r = data.background_result;
                         if (r.success) {
-                            let msg = `Verlinkung abgeschlossen!\n\n`;
-                            msg += `Gesamt: ${r.total_records}\n`;
-                            msg += `Verlinkt: ${r.linked}\n`;
-                            msg += `Bereits vorhanden: ${r.already_existed}\n`;
-                            msg += `Fehlgeschlagen: ${r.failed}\n`;
-                            msg += `Dauer: ${r.duration_formatted}`;
-                            if (r.cancel_reason) msg += `\n\nHinweis: ${r.cancel_reason}`;
+                            let msg = t('map.link_complete_msg', {total: r.total_records, linked: r.linked, existed: r.already_existed, failed: r.failed, duration: r.duration_formatted});
+                            if (r.cancel_reason) msg += t('map.link_complete_note', {reason: r.cancel_reason});
                             alert(msg);
                         } else if (r.error) {
-                            alert('Verlinkung fehlgeschlagen: ' + r.error);
+                            alert(t('map.link_failed_msg', {msg: r.error}));
                         }
                         // Reset UI
-                        if (btn) { btn.disabled = false; btn.textContent = '🔗 Alle verlinken'; }
+                        if (btn) { btn.disabled = false; btn.textContent = t('map.link_all'); }
                         if (selBtn) { selBtn.disabled = false; }
                         loadStats();
                     }
@@ -513,14 +503,14 @@
     }
 
     function linkAll() {
-        if (!confirm('Objektlinks für alle verlinkbaren Datensätze erstellen?\n\nVoraussetzung: Upload erfolgreich, Objekt-Mapping vorhanden.')) {
+        if (!confirm(t('map.link_confirm'))) {
             return;
         }
 
         const btn = document.getElementById('linkAllBtn');
         const cancelBtn = document.getElementById('cancelLinkBtn');
         btn.disabled = true;
-        btn.textContent = '⏳ Wird verlinkt...';
+        btn.textContent = t('map.linking_status');
         cancelBtn.style.display = 'inline-flex';
 
         fetch('/execute_linking', {
@@ -534,36 +524,36 @@
                 // Background linking started successfully — poll for completion
                 startLinkProgressPolling();
             } else if (data.login_required) {
-                alert('⚠️ Nicht eingeloggt!\n\nBitte zuerst bei SAP anmelden.');
+                alert(t('map.link_not_logged_in'));
                 window.location.href = '/';
             } else {
-                alert('Verlinkung konnte nicht gestartet werden: ' + (data.error || 'Unbekannter Fehler'));
+                alert(t('map.link_start_error', {msg: data.error || t('map.error_unknown')}));
                 btn.disabled = false;
-                btn.textContent = '🔗 Alle verlinken';
+                btn.textContent = t('map.link_all');
                 cancelBtn.style.display = 'none';
             }
         })
         .catch(error => {
-            alert('Fehler beim Starten der Verlinkung: ' + error);
+            alert(t('map.link_conn_error', {msg: error}));
             btn.disabled = false;
-            btn.textContent = '🔗 Alle verlinken';
+            btn.textContent = t('map.link_all');
             cancelBtn.style.display = 'none';
         });
     }
 
     function linkSelected() {
         // For now, link-selected not applicable on mapping page (no record selection here)
-        alert('Bitte verwenden Sie "Alle verlinken" auf dieser Seite,\noder wählen Sie einzelne Datensätze in der Batch-Vorschau aus.');
+        alert(t('map.link_use_all'));
     }
 
     function cancelLinking() {
-        if (!confirm('Verlinkung wirklich abbrechen?\n\nBereits verlinkte Datensätze bleiben erhalten.')) {
+        if (!confirm(t('map.cancel_confirm'))) {
             return;
         }
 
         const cancelBtn = document.getElementById('cancelLinkBtn');
         cancelBtn.disabled = true;
-        cancelBtn.textContent = '⏳ Abbruch angefordert...';
+        cancelBtn.textContent = t('map.cancel_requested');
 
         fetch(`/batch/${BATCH_ID}/cancel-linking`, {
             method: 'POST',
@@ -572,16 +562,16 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                cancelBtn.textContent = '⏳ Abbruch angefordert...';
+                cancelBtn.textContent = t('map.cancel_requested');
             } else {
-                alert('Abbruch fehlgeschlagen: ' + data.error);
+                alert(t('map.cancel_failed_msg', {msg: data.error}));
                 cancelBtn.disabled = false;
-                cancelBtn.textContent = '⛔ Verlinkung abbrechen';
+                cancelBtn.textContent = t('map.cancel_linking');
             }
         })
         .catch(error => {
-            alert('Fehler beim Abbrechen: ' + error);
+            alert(t('map.cancel_error', {msg: error}));
             cancelBtn.disabled = false;
-            cancelBtn.textContent = '⛔ Verlinkung abbrechen';
+            cancelBtn.textContent = t('map.cancel_linking');
         });
     }

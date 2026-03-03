@@ -391,25 +391,25 @@
     <!-- Workflow Step Indicator -->
     <div style="display:flex;align-items:center;margin-bottom:20px;">
         <a href="/prepare" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Neuen Batch erstellen">
-            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> Batch erstellen
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> <span data-i18n="wf.step1">Batch erstellen</span>
         </a>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
         <a href="/preview?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Vorschau und Vorbereitung">
-            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> Vorschau und Vorbereitung
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> <span data-i18n="wf.step2">Vorschau und Vorbereitung</span>
         </a>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
         <div style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#007bff;color:#fff;">
-            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> Objekt Link
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> <span data-i18n="wf.step3">Objekt Link</span>
         </div>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
         <a href="/details?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Auswertung &amp; Details">
-            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> Auswertung
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> <span data-i18n="wf.step4">Auswertung</span>
         </a>
     </div>
 
     <!-- Batch Header -->
     <div class="batch-header">
-        <h2>📦 Objekt-Zuordnung - Batch {{ batch_id }}</h2>
+        <h2>📦 <span data-i18n="map.title">Objekt-Zuordnung</span> - Batch {{ batch_id }}</h2>
         <div class="batch-info">
             <span>📋 Wave: <strong id="batchWave">-</strong></span>
             <span>📝 <span id="batchDescription">Lade...</span></span>
@@ -420,31 +420,31 @@
     <!-- Header Actions -->
     <div class="header-actions">
         <div class="btn-group">
-            <a href="/preview?batch_id={{ batch_id }}" class="btn btn-secondary">
+            <a href="/preview?batch_id={{ batch_id }}" class="btn btn-secondary" data-i18n="map.back">
                 ← Zurück zum Batch
             </a>
         </div>
         <div class="btn-group">
-            <button class="btn btn-info" onclick="downloadTemplate()">
+            <button class="btn btn-info" onclick="downloadTemplate()" data-i18n="map.download_template">
                 📥 Vorlage herunterladen
             </button>
-            <button class="btn btn-primary" onclick="showUploadModal()">
+            <button class="btn btn-primary" onclick="showUploadModal()" data-i18n="map.upload_excel">
                 📤 Excel hochladen
             </button>
-            <button class="btn btn-warning" onclick="downloadMappings()">
+            <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
                 💾 Zuordnungen exportieren
             </button>
-            <button class="btn btn-apply" onclick="applyMappings()">
+            <button class="btn btn-apply" onclick="applyMappings()" data-i18n="map.apply">
                 ✨ Auf Staging anwenden
             </button>
             <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
-            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" style="background: #28a745;">
+            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" style="background: #28a745;" data-i18n="map.link_all">
                 🔗 Alle verlinken
             </button>
-            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" style="background: #28a745;">
+            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" style="background: #28a745;" data-i18n="map.link_selected">
                 🔗 Ausgewählte verlinken
             </button>
-            <button class="btn btn-danger" onclick="cancelLinking()" id="cancelLinkBtn" style="display: none;">
+            <button class="btn btn-danger" onclick="cancelLinking()" id="cancelLinkBtn" style="display: none;" data-i18n="map.cancel_linking">
                 ⛔ Verlinkung abbrechen
             </button>
         </div>
@@ -467,26 +467,26 @@
     <div class="stats-grid">
         <div class="stat-card success">
             <div class="stat-value" id="statTotalMappings">0</div>
-            <div class="stat-label">Zuordnungen gesamt</div>
+            <div class="stat-label" data-i18n="map.stat.total">Zuordnungen gesamt</div>
         </div>
         <div class="stat-card info">
             <div class="stat-value" id="statUniqueSources">0</div>
-            <div class="stat-label">Eindeutige Quellen</div>
+            <div class="stat-label" data-i18n="map.stat.unique_source">Eindeutige Quellen</div>
         </div>
         <div class="stat-card info">
             <div class="stat-value" id="statUniqueTargets">0</div>
-            <div class="stat-label">Eindeutige Ziele</div>
+            <div class="stat-label" data-i18n="map.stat.unique_target">Eindeutige Ziele</div>
         </div>
         <div class="stat-card warning">
             <div class="stat-value" id="statUnmapped">0</div>
-            <div class="stat-label">Nicht zugeordnet</div>
+            <div class="stat-label" data-i18n="map.stat.unmapped">Nicht zugeordnet</div>
         </div>
     </div>
 
     <!-- Tabs -->
     <div class="tabs">
-        <div class="tab active" data-tab="unmapped">Nicht zugeordnet</div>
-        <div class="tab" data-tab="mappings">Zuordnungen</div>
+        <div class="tab active" data-tab="unmapped" data-i18n="map.tab.unmapped">Nicht zugeordnet</div>
+        <div class="tab" data-tab="mappings" data-i18n="map.tab.mappings">Zuordnungen</div>
     </div>
 
     <!-- Tab: Unmapped Objects -->

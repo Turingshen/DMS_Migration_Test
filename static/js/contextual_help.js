@@ -6,7 +6,7 @@
     'use strict';
 
     // ── Help Content Database ────────────────────────────────────────
-    const HELP_CONTENT = {
+    const HELP_CONTENT_DE = {
 
         // ── Glossary (shared) ────────────────────────────────────────
         glossary: {
@@ -284,6 +284,290 @@
         }
     };
 
+    // ── Help Content — English ───────────────────────────────────────
+    const HELP_CONTENT_EN = {
+
+        // ── Glossary (shared) ────────────────────────────────────────
+        glossary: {
+            title: 'Terms / Glossary',
+            icon: 'fas fa-book',
+            items: [
+                { term: 'DOKOB',   desc: 'Document Object Type — SAP business object type to which a document is attached (e.g. EQUI, IFLOT, PMAUFK)' },
+                { term: 'DOKNR',   desc: 'Document Number — unique number of a DMS document' },
+                { term: 'DOKAR',   desc: 'Document Type — classification (e.g. ZLH, IY1, IY2)' },
+                { term: 'DOKVR',   desc: 'Document Version (e.g. 00, 01)' },
+                { term: 'DOKTL',   desc: 'Document Part (e.g. 000, 001)' },
+                { term: 'OBJKY',   desc: 'Object Key — key of the linked business object (e.g. Equipment number, Functional Location)' },
+                { term: 'WERK',    desc: 'Plant Code — identifies a BASF site' },
+                { term: 'DRAD',    desc: 'Document-Object Link Table — connects documents with business objects' },
+                { term: 'LOIO',    desc: 'Logical Information Object — reference to the file in the SAP Content Repository' },
+                { term: 'Ablage',  desc: 'Storage type: KPRO (file in Content Repository) or DB (stored in DRAO database table)' },
+                { term: 'DRAW',    desc: 'Document Info Record Master Table — contains file names, status' },
+                { term: 'DIL',     desc: 'Data Integration Layer — source database mirroring SAP R/3 tables' },
+                { term: 'Wave',    desc: 'Migration wave — time-based grouping of batches for planning' },
+                { term: 'Batch',   desc: 'Migration batch — a group of documents that are migrated together' },
+            ]
+        },
+
+        // ── Workflow Overview ────────────────────────────────────────
+        workflow: {
+            title: 'Migration Workflow',
+            icon: 'fas fa-route',
+            steps: [
+                { num: '0',  label: 'Settings',                      page: 'settings',    desc: 'Configure SAP systems, save credentials, set performance parameters' },
+                { num: '0b', label: 'Define Rules',                   page: 'rules',       desc: 'Define translation and overwrite rules for document types and fields' },
+                { num: '1',  label: 'Create Batch',                   page: 'prepare',     desc: 'Select plants, load DMS objects, optionally define exclusions, create batch' },
+                { num: '2',  label: 'Preview & Refresh Data',         page: 'preview',     desc: 'Review batch, refresh data (LOIO, file size, apply rules), skip records' },
+                { num: '3a', label: 'Run Migration',                  page: 'preview',     desc: 'Upload documents to target system — create containers and transfer files' },
+                { num: '3b', label: 'Object Mapping & Linking',       page: 'mapping',     desc: 'Map source objects to target objects, then create links in target system' },
+                { num: '4',  label: 'Analysis',                       page: 'details',     desc: 'Analyze results, investigate errors, retry failed records' },
+            ]
+        },
+
+        // ── Page-Specific Help ───────────────────────────────────────
+
+        dashboard: {
+            title: 'Dashboard — Batch Overview',
+            icon: 'fas fa-tachometer-alt',
+            intro: 'The dashboard shows all migration batches as a Kanban board, grouped by waves. Here you create new batches and track progress.',
+            sections: [
+                {
+                    title: 'KPI Cards',
+                    content: 'At the top you see overall statistics: number of documents, success rate and data volume across all batches.'
+                },
+                {
+                    title: 'Kanban Board',
+                    content: 'Each batch appears as a card in its wave\'s column. The colored marker indicates the current phase:\n• <b>Gray</b> = Preparation\n• <b>Blue</b> = Upload running\n• <b>Green</b> = Upload complete\n• <b>Orange</b> = Linking\n• <b>Dark green</b> = Completed'
+                },
+                {
+                    title: 'Batch Card — Detailed Structure',
+                    content: '<b>Each batch card consists of 5 areas:</b>\n\n<b>① Header</b>\nLeft: Batch description + document count\nRight: Status badge (colored)\n\n<b>② Upload Progress Bar</b>\n<span style="color:#28a745">■</span> <b>Green</b> = Successfully uploaded\n<span style="color:#dc3545">■</span> <b>Red</b> = Failed\nDisplay: ↑ Success/Total + Percent\n\n<b>③ Link Progress Bar</b> (only when linking has started)\n<span style="color:#17a2b8">■</span> <b>Cyan</b> = Successfully linked\n<span style="color:#dc3545">■</span> <b>Red</b> = Link error\nDisplay: 🔗 Linked/Total + Percent\n\n<b>④ Phase Progress</b> (3 small bars)\nThe three bars show: <b>Preparation → Upload → Linking</b>\n<span style="color:#28a745">■</span> Green = Completed\n<span style="color:#007bff">■</span> Blue (pulsing) = Active/running\n<span style="color:#e9ecef">■</span> Gray = Pending\n<span style="color:#dc3545">■</span> Red = Error\n\n<b>⑤ Colored Left Border</b>\nThe side color bar shows the current phase:\n• <span style="color:#6c757d">■</span> <b>Gray</b> — Prepared\n• <span style="color:#007bff">■</span> <b>Blue</b> — Upload active\n• <span style="color:#28a745">■</span> <b>Green</b> — Upload complete\n• <span style="color:#17a2b8">■</span> <b>Cyan</b> — Linking in progress\n• <span style="color:#28a745">■</span> <b>Dark green</b> — Completed\n• <span style="color:#dc3545">■</span> <b>Red</b> — Error'
+                },
+                {
+                    title: 'Status Badges (Colors & Meaning)',
+                    content: 'The badge at the top right of each card shows the exact status:\n\n<span class="badge badge-secondary">Prepared</span> — Batch created, not yet started\n<span class="badge badge-warning">Uploading...</span> — Upload in progress\n<span class="badge badge-success">Uploaded</span> — All documents successfully uploaded\n<span class="badge badge-warning">Upload (Errors)</span> — Upload finished, but with errors\n<span class="badge badge-danger">Failed</span> — Upload failed\n<span class="badge badge-info">Linking...</span> — Linking in progress\n<span class="badge badge-success">Done</span> — All done ✓\n<span class="badge badge-warning">Linked (Errors)</span> — Linking with errors\n<span class="badge badge-danger">Link Error</span> — Linking error\n<span class="badge badge-secondary">Cancelled</span> — Linking cancelled'
+                },
+                {
+                    title: 'Create New Batch',
+                    content: 'Click <b>"+ New Batch"</b> to go to the batch creation page. There you select plants and load DMS objects from the source database.'
+                },
+                {
+                    title: 'Open Batch',
+                    content: 'Click on a batch card to open the <b>Preview</b>. There you can review the batch and start the migration.'
+                },
+                {
+                    title: 'Wave Management',
+                    content: 'Via <b>"Wave Management"</b> in the navbar you can create and schedule wave plans (Qual-Load, Qual-Link, Prod-Load, Prod-Link phases).'
+                }
+            ]
+        },
+
+        settings: {
+            title: 'Settings — System Configuration',
+            icon: 'fas fa-cog',
+            intro: 'Here you configure SAP systems, credentials and performance parameters. These settings must be configured before the first migration.',
+            sections: [
+                {
+                    title: 'Performance Settings',
+                    content: '<b>Max API Workers</b> (1–50): Number of parallel API calls. More = faster, but higher load on the target system.\n\n<b>Pacing</b> (seconds): Delay between API calls.\n• <b>0 = Dynamic</b> (recommended): Automatically adjusts the delay based on file size\n• Fixed value: Constant delay'
+                },
+                {
+                    title: 'Manage SAP Systems',
+                    content: 'Add source systems (R/3) and target systems (S/4HANA):\n• <b>System ID</b>: Unique short name (e.g. "zv1", "s4qual")\n• <b>Type</b>: R3 (source) or S4 (target)\n• <b>Auth Type</b>: OAuth or Basic Auth\n• <b>API Endpoints</b>: URLs for the various APIs (Metadata, Download, Upload, Link)'
+                },
+                {
+                    title: 'Credentials',
+                    content: 'For Basic Auth systems (ZV instances) you can store username and password encrypted.\n\n<b>Test</b>: Click "Test" to verify the connection — the system fetches a CSRF token.'
+                },
+                {
+                    title: 'Select Source/Target System',
+                    content: 'In the <b>Navbar</b> at the top right you can switch the active source and target system via dropdown. Make sure to select the correct system before starting a migration!\n\n⚠️ <b>Prod systems</b> are highlighted in red.'
+                }
+            ],
+            warnings: [
+                'Make sure OAuth tokens are valid before starting a migration.',
+                'For Basic Auth, credentials must be saved AND tested.'
+            ]
+        },
+
+        rules: {
+            title: 'Migration Rules',
+            icon: 'fas fa-tasks',
+            intro: 'Rules automatically transform document fields during "Refresh Data" (Phase 4/4). They are applied to each record in the defined order.',
+            sections: [
+                {
+                    title: 'Translation Rules',
+                    content: 'Convert a source value to a target value.\n\n<b>Example</b>: Document type "ZLH" in source system → "IY1" in target system\n• <b>Source column</b>: The field to check (e.g. source_documenttype)\n• <b>Source value</b>: The value to replace\n• <b>Target column</b>: The field to set\n• <b>Target value</b>: The new value'
+                },
+                {
+                    title: 'Overwrite Rules',
+                    content: 'Set a field to a fixed value — regardless of the source value.\n\n<b>Example</b>: All documents get target_documenttype = "IY1"\n• Optional <b>Condition</b>: Only apply when a specific field has a specific value'
+                },
+                {
+                    title: 'Conditions',
+                    content: 'Each rule can have an optional condition:\n• <b>contains</b>\n• <b>equals</b>\n• <b>starts_with</b>\n\nThe condition checks any field for a given value.'
+                },
+                {
+                    title: 'Order',
+                    content: 'Rules are executed in the displayed order (lower number = first). Use the arrow buttons to reorder.\n\n⚠️ The order matters when multiple rules affect the same field!'
+                }
+            ],
+            warnings: [
+                'Rules are only applied during "Refresh Data" in the preview — not when creating a batch.',
+                'Changes to rules require a new "Refresh Data" for existing batches.'
+            ]
+        },
+
+        prepare: {
+            title: 'Step 1 — Create Batch',
+            icon: 'fas fa-plus-circle',
+            intro: 'Create a new migration batch by selecting plants and loading DMS objects from the source system.',
+            sections: [
+                {
+                    title: '1. Select Plants',
+                    content: 'Select the plants (sites) whose documents should be migrated. The plant list is loaded from the DIL database on first access and cached locally.'
+                },
+                {
+                    title: '2. Load DMS Objects',
+                    content: 'Click <b>"Load DMS Objects"</b>. The system queries 11 object types:\n\n• <b>EQUI</b> — Equipment\n• <b>IFLOT</b> — Functional Location\n• <b>MPLA</b> — Maintenance Plan\n• <b>PMPLKO</b> — Planning Object\n• <b>PMAUFK</b> — Maintenance Order\n• <b>PMAFVC</b> — Order Operation\n• <b>PMQMEL</b> — PM Notification\n• <b>SMQMEL</b> — SM Notification\n• <b>STKO_DOC</b> / <b>STPO_DOC</b> — Bills of Material\n• <b>IMPTT</b> — Measurement Points\n\n<b>Automatic exclusions</b> via JEST status:\n• Deleted Equipments/Functional Locations (I0320, I0013, I0076)\n• TECO/Closed Orders (I0045, I0046)\n• Closed Notifications (I0072)\n• Deletion flags on plans and BOMs'
+                },
+                {
+                    title: '3. Exclusion Template (optional)',
+                    content: 'Download an <b>Excel template</b>, enter OBJKY values that should be excluded, and upload it back. This allows you to specifically exclude certain equipments or orders from the migration.'
+                },
+                {
+                    title: '4. Batch Metadata',
+                    content: '• <b>Wave</b> (required): Which migration wave does the batch belong to?\n• <b>Description</b> (max 40 chars): Short description\n• <b>Notes</b>: Additional information\n• <b>DOKOB Filter</b>: Optionally include only specific object types in the batch'
+                },
+                {
+                    title: '5. Create Batch',
+                    content: 'Click <b>"Create Batch"</b>. The system:\n• Reads the local DMS objects\n• Applies filters and exclusions\n• Creates the batch (ID: DMS_YYYYMMDD_HHMMSS)\n• Generates target document numbers (internal: automatic, external: retained)\n\nYou will then be redirected to the preview.'
+                }
+            ],
+            warnings: [
+                'DMS objects are stored locally. Re-selecting the same plants will overwrite the data.',
+                'Internal number ranges (IY1, IY2) automatically get new numbers in the target system.',
+                'Make sure the correct source system is selected in the navbar!'
+            ]
+        },
+
+        preview: {
+            title: 'Step 2 — Preview & Migration',
+            icon: 'fas fa-search',
+            intro: 'Review the batch, refresh metadata and run the migration.',
+            sections: [
+                {
+                    title: '1. Review Batch Statistics',
+                    content: 'At the top you see:\n• <b>Total count</b> of records\n• <b>File size distribution</b> (Tiny/Small/Medium/Large)\n• <b>Storage type</b>: KPRO (Content Repository) vs. DB (Database)\n• <b>Status distribution</b>: Pending, Success, Failed, Partial'
+                },
+                {
+                    title: '⭐ 2. Run "Refresh Data"',
+                    content: '<b>This is the most important step!</b> Click the "Refresh Data" button. The system runs through 5 phases:\n\n<b>Phase 1/4</b>: LOIO Lookup — Load file references from the Content Repository\n<b>Phase 2/4</b>: File Sizes — Determine actual file sizes\n<b>Phase 3/4</b>: File Names + Descriptions — from DRAW/DRAT (English preferred, then German)\n<b>Phase 4/4</b>: Apply Migration Rules — Execute translation/overwrite rules\n<b>Phase 5/5</b>: Link Count — Count source/target links',
+                    highlight: true
+                },
+                {
+                    title: '3. Browse Records',
+                    content: 'The table shows all records (5000 per page). Use the filters:\n• <b>Status filter</b>: Pending, Success, Failed, Partial\n• <b>Error category</b>: Type of error\n• <b>Storage</b>: KPRO or DB\n• <b>Full-text search</b>: Across all fields'
+                },
+                {
+                    title: '4. Skip Records',
+                    content: 'Individual records can be excluded from migration using the <b>"Skip"</b> function. Provide a reason. Skipped records will be ignored during execution.'
+                },
+                {
+                    title: '5. Start Migration',
+                    content: 'Click <b>"Start Migration"</b>. For each record:\n1. A document container is created in the target system\n2. The file(s) are downloaded from the source system\n3. The file(s) are uploaded to the target system\n\nProgress is updated live. You can <b>cancel</b> the migration at any time.'
+                },
+                {
+                    title: '6. Reset Failed',
+                    content: 'After execution you can <b>reset failed records</b> and retry them. Records with status "Partial" (container created, files partially uploaded) will only transfer the missing files on retry.'
+                }
+            ],
+            warnings: [
+                '⚠️ IMPORTANT: "Refresh Data" MUST be done before execution! Without it, LOIO IDs, file sizes and file names are missing.',
+                'Make sure you are logged in and the token is valid.',
+                'Large batches (>10,000 documents) can take several hours. The session is automatically kept alive.'
+            ]
+        },
+
+        mapping: {
+            title: 'Step 3 — Object Mapping & Linking',
+            icon: 'fas fa-project-diagram',
+            intro: 'Map source business objects to target business objects and create the links in the target system.',
+            sections: [
+                {
+                    title: '1. Manage Mappings',
+                    content: 'Each source system object (e.g. Equipment number in R/3) must be mapped to a target system object (e.g. Equipment number in S/4).\n\nThe mapping consists of:\n• <b>Source DOKOB</b> + <b>Source OBJKY</b> → <b>Target DOKOB</b> + <b>Target OBJKY</b>\n\nIn many cases DOKOB and OBJKY stay the same (e.g. Equipment keeps its number).'
+                },
+                {
+                    title: '2. Excel Mapping Template',
+                    content: '<b>Recommended approach:</b>\n1. Click <b>"Download Template"</b>\n2. The Excel file contains worksheets:\n   • <b>Mappings</b>: Existing mappings\n   • <b>Batch Objects</b>: All source objects of the batch\n   • <b>Unmapped</b>: Objects without mapping\n   • <b>Info</b>: Explanations\n3. Fill in the target columns\n4. Upload the file via <b>"Upload Template"</b>'
+                },
+                {
+                    title: '3. Apply Mappings',
+                    content: 'Click <b>"Apply Mappings"</b> to transfer the mappings to the staging records. This sets target_dokob and target_objky in the records.'
+                },
+                {
+                    title: '4. Start Linking',
+                    content: 'After successful upload (Step 2) click <b>"Start Linking"</b>:\n• The system creates object links in the target system\n• Each document is linked to its target business object\n• Progress is shown live\n\n<b>Link status per record:</b>\n• <b>linked</b> — Successfully linked\n• <b>link_exists</b> — Link already existed\n• <b>link_failed</b> — Linking error'
+                }
+            ],
+            warnings: [
+                'Linking can only be performed for records with status "success" and a created container.',
+                'Without object mappings, no links can be created in the target system.',
+                'Check the "Unmapped" list in the Excel template — unmapped objects will not be linked.'
+            ]
+        },
+
+        details: {
+            title: 'Step 4 — Analysis & Results',
+            icon: 'fas fa-chart-bar',
+            intro: 'Analyze the migration results, investigate errors and retry failed records.',
+            sections: [
+                {
+                    title: 'Summary',
+                    content: 'The overview card shows:\n• <b>Successful</b> records (green)\n• <b>Failed</b> records (red)\n• <b>Partial</b> (container created, but not all files) (orange)\n• <b>Pending</b> records (gray)'
+                },
+                {
+                    title: 'Error Categories',
+                    content: 'Filter by error type:\n• <b>AUTH_ERROR</b> — Authentication problem\n• <b>RATE_LIMIT</b> — API rate limit reached\n• <b>UPLOAD_FAIL</b> — Upload error\n• <b>PAYLOAD_TOO_LARGE</b> — File too large\n• <b>CONTAINER_CREATE_FAIL</b> — Container creation failed'
+                },
+                {
+                    title: 'File Details',
+                    content: 'Click on a record to see the <b>individual files</b> and their upload status. For multi-part documents, one file may succeed while another fails (= "Partial").'
+                },
+                {
+                    title: 'CSV Export',
+                    content: 'Click <b>"CSV Export"</b> to download all file details as a CSV file. Useful for external analysis or reporting.'
+                },
+                {
+                    title: 'Retry Failed',
+                    content: '<b>By category</b>: Click the "Retry" button next to an error category to reset all records of that category.\n\n<b>All errors</b>: "Reset All Errors" resets all Failed/Partial records. Then go back to the preview and start the migration again.'
+                }
+            ]
+        },
+
+        waves: {
+            title: 'Wave Overview & Planning',
+            icon: 'fas fa-stream',
+            intro: 'Manage migration waves and plan the timeline of the migration.',
+            sections: [
+                {
+                    title: 'Wave Concept',
+                    content: 'Batches are grouped into <b>Waves</b>. Each wave typically has 4 phases:\n1. <b>Qual Load</b> — Quality system: Upload\n2. <b>Qual Link</b> — Quality system: Linking\n3. <b>Prod Load</b> — Production system: Upload\n4. <b>Prod Link</b> — Production system: Linking'
+                },
+                {
+                    title: 'Create Wave Plan',
+                    content: 'For each phase you can set start/end date and status:\n• <b>Preparation</b> — Not yet started\n• <b>In progress</b> — Work in progress\n• <b>Done</b> — Completed'
+                }
+            ]
+        }
+    };
+
+    // ── Language Helper ──────────────────────────────────────────────
+    function getHelpContent() {
+        return (typeof I18n !== 'undefined' && I18n.getLang() === 'en') ? HELP_CONTENT_EN : HELP_CONTENT_DE;
+    }
+
     // ── Page Detection ───────────────────────────────────────────────
     function detectCurrentPage() {
         const path = window.location.pathname;
@@ -305,9 +589,11 @@
     // ── Build HTML ───────────────────────────────────────────────────
     function buildHelpPanel() {
         const currentPage = detectCurrentPage();
-        const pageHelp = HELP_CONTENT[currentPage];
-        const workflow = HELP_CONTENT.workflow;
-        const glossary = HELP_CONTENT.glossary;
+        const hc = getHelpContent();
+        const isEn = typeof I18n !== 'undefined' && I18n.getLang() === 'en';
+        const pageHelp = hc[currentPage];
+        const workflow = hc.workflow;
+        const glossary = hc.glossary;
 
         let html = '';
 
@@ -315,8 +601,8 @@
         html += `
             <div class="help-panel-header">
                 <div class="d-flex align-items-center justify-content-between">
-                    <h5 class="mb-0"><i class="fas fa-question-circle"></i> Hilfe</h5>
-                    <button class="btn btn-sm btn-outline-light" onclick="ContextualHelp.close()" title="Schließen">
+                    <h5 class="mb-0"><i class="fas fa-question-circle"></i> ${isEn ? 'Help' : 'Hilfe'}</h5>
+                    <button class="btn btn-sm btn-outline-light" onclick="ContextualHelp.close()" title="${isEn ? 'Close' : 'Schließen'}">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
@@ -326,9 +612,9 @@
         // Tab navigation
         html += `
             <div class="help-tabs">
-                <button class="help-tab active" data-tab="page"><i class="${pageHelp.icon}"></i> Diese Seite</button>
+                <button class="help-tab active" data-tab="page"><i class="${pageHelp.icon}"></i> ${isEn ? 'This Page' : 'Diese Seite'}</button>
                 <button class="help-tab" data-tab="workflow"><i class="${workflow.icon}"></i> Workflow</button>
-                <button class="help-tab" data-tab="glossary"><i class="${glossary.icon}"></i> Glossar</button>
+                <button class="help-tab" data-tab="glossary"><i class="${glossary.icon}"></i> ${isEn ? 'Glossary' : 'Glossar'}</button>
             </div>
         `;
 
@@ -357,7 +643,7 @@
         }
 
         if (pageHelp.warnings && pageHelp.warnings.length > 0) {
-            html += `<div class="help-warnings-title"><i class="fas fa-exclamation-triangle"></i> Wichtige Hinweise</div>`;
+            html += `<div class="help-warnings-title"><i class="fas fa-exclamation-triangle"></i> ${isEn ? 'Important Notes' : 'Wichtige Hinweise'}</div>`;
             pageHelp.warnings.forEach(w => {
                 html += `<div class="help-warning">${w}</div>`;
             });
@@ -367,7 +653,7 @@
         // ── Tab: Workflow ────────────────────────────────────────────
         html += `<div class="help-tab-content" data-tab="workflow" style="display:none;">`;
         html += `<div class="help-section-title"><i class="${workflow.icon}"></i> ${workflow.title}</div>`;
-        html += `<div class="help-intro">Der Migrationsprozess folgt diesen Schritten:</div>`;
+        html += `<div class="help-intro">${isEn ? 'The migration process follows these steps:' : 'Der Migrationsprozess folgt diesen Schritten:'}</div>`;
         html += `<div class="help-workflow-steps">`;
         workflow.steps.forEach(step => {
             const isActive = step.page === currentPage;
@@ -412,7 +698,7 @@
         btn.id = 'helpFloatingBtn';
         btn.className = 'help-floating-btn';
         btn.innerHTML = '<i class="fas fa-question"></i>';
-        btn.title = 'Hilfe anzeigen (H)';
+        btn.title = (typeof I18n !== 'undefined' && I18n.getLang() === 'en') ? 'Show help (H)' : 'Hilfe anzeigen (H)';
         btn.onclick = function() { ContextualHelp.toggle(); };
         document.body.appendChild(btn);
 
@@ -860,5 +1146,22 @@
         injectStyles();
         createHelpElements();
     }
+
+    // ── Language Change Listener ─────────────────────────────────────
+    document.addEventListener('languageChanged', () => {
+        // Rebuild the help panel with new language content
+        const panel = document.getElementById('helpPanel');
+        if (panel) {
+            panel.innerHTML = buildHelpPanel();
+            attachTabListeners();
+            attachAccordionListeners();
+        }
+        // Update floating button tooltip
+        const btn = document.getElementById('helpFloatingBtn');
+        if (btn) {
+            const isEn = typeof I18n !== 'undefined' && I18n.getLang() === 'en';
+            btn.title = isEn ? 'Show help (H)' : 'Hilfe anzeigen (H)';
+        }
+    });
 
 })();

@@ -293,7 +293,7 @@
     <div id="summaryCard" class="summary-card" style="display: none;">
         <div class="d-flex justify-content-between align-items-start">
             <div>
-                <h2 id="summaryTitle">Batch-Übersicht</h2>
+                <h2 id="summaryTitle" data-i18n="det.summary.title">Batch-Übersicht</h2>
                 <p class="mb-0 opacity-75" id="summaryBatchId"></p>
             </div>
             <div>
@@ -360,11 +360,11 @@
                         <table class="table table-sm table-hover" id="errorTable">
                             <thead class="thead-dark">
                                 <tr>
-                                    <th>Kategorie</th>
-                                    <th>Beschreibung</th>
-                                    <th class="text-center">Anzahl</th>
-                                    <th>Aktion</th>
-                                    <th>Aktionen</th>
+                                    <th data-i18n="det.errors.category">Kategorie</th>
+                                    <th data-i18n="det.errors.description">Beschreibung</th>
+                                    <th class="text-center" data-i18n="det.errors.count">Anzahl</th>
+                                    <th data-i18n="det.errors.action">Aktion</th>
+                                    <th data-i18n="det.th.actions">Aktionen</th>
                                 </tr>
                             </thead>
                             <tbody id="errorTableBody">
@@ -385,59 +385,59 @@
     <div id="filterPanel" class="filter-panel" style="display: none;">
         <div class="row">
             <div class="col-md-12 mb-2">
-                <strong>Schnellfilter:</strong>
+                <strong data-i18n="det.filter.quick">Schnellfilter:</strong>
                 <button class="btn btn-outline-secondary quick-filter-btn" onclick="quickFilter('all')">
-                    <i class="fas fa-list"></i> Alle
+                    <i class="fas fa-list"></i> <span data-i18n="det.filter.all">Alle</span>
                 </button>
                 <button class="btn btn-outline-success quick-filter-btn" onclick="quickFilter('success')">
-                    <i class="fas fa-check-circle"></i> Erfolgreich
+                    <i class="fas fa-check-circle"></i> <span data-i18n="det.filter.success">Erfolgreich</span>
                 </button>
                 <button class="btn btn-outline-warning quick-filter-btn" onclick="quickFilter('partial')">
-                    <i class="fas fa-exclamation-triangle"></i> Teilweise
+                    <i class="fas fa-exclamation-triangle"></i> <span data-i18n="det.filter.partial">Teilweise</span>
                 </button>
                 <button class="btn btn-outline-danger quick-filter-btn" onclick="quickFilter('failed')">
-                    <i class="fas fa-times-circle"></i> Fehlgeschlagen
+                    <i class="fas fa-times-circle"></i> <span data-i18n="det.filter.failed">Fehlgeschlagen</span>
                 </button>
                 <button class="btn btn-outline-info quick-filter-btn" onclick="quickFilter('pending')">
-                    <i class="fas fa-clock"></i> Ausstehend
+                    <i class="fas fa-clock"></i> <span data-i18n="det.filter.pending">Ausstehend</span>
                 </button>
                 <button class="btn btn-outline-secondary quick-filter-btn" onclick="quickFilter('size-error')">
-                    <i class="fas fa-file-archive"></i> Größenfehler
+                    <i class="fas fa-file-archive"></i> <span data-i18n="det.filter.size_error">Größenfehler</span>
                 </button>
                 <span class="float-right">
                     <button class="btn btn-sm btn-outline-primary" onclick="expandAll()">
-                        <i class="fas fa-expand-alt"></i> Alle aufklappen
+                        <i class="fas fa-expand-alt"></i> <span data-i18n="det.filter.expand_all">Alle aufklappen</span>
                     </button>
                     <button class="btn btn-sm btn-outline-secondary" onclick="collapseAll()">
-                        <i class="fas fa-compress-alt"></i> Alle zuklappen
+                        <i class="fas fa-compress-alt"></i> <span data-i18n="det.filter.collapse_all">Alle zuklappen</span>
                     </button>
                 </span>
             </div>
         </div>
         <div class="row mt-2">
             <div class="col-md-3">
-                <label class="small font-weight-bold">Status</label>
+                <label class="small font-weight-bold" data-i18n="det.filter.status">Status</label>
                 <select id="filterStatus" class="form-control form-control-sm" onchange="applyFilters()">
-                    <option value="">Alle Status</option>
-                    <option value="success">Erfolgreich</option>
-                    <option value="partial">Teilweise</option>
-                    <option value="failed">Fehlgeschlagen</option>
-                    <option value="pending">Ausstehend</option>
+                    <option value="" data-i18n="det.filter.all_status">Alle Status</option>
+                    <option value="success" data-i18n="det.filter.success">Erfolgreich</option>
+                    <option value="partial" data-i18n="det.filter.partial">Teilweise</option>
+                    <option value="failed" data-i18n="det.filter.failed">Fehlgeschlagen</option>
+                    <option value="pending" data-i18n="det.filter.pending">Ausstehend</option>
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="small font-weight-bold">Fehlerkategorie</label>
+                <label class="small font-weight-bold" data-i18n="det.filter.error_cat">Fehlerkategorie</label>
                 <select id="filterErrorCategory" class="form-control form-control-sm" onchange="applyFilters()">
-                    <option value="">Alle Kategorien</option>
+                    <option value="" data-i18n="det.filter.all_cats">Alle Kategorien</option>
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="small font-weight-bold">Dokumentnummer</label>
-                <input type="text" id="filterDocNumber" class="form-control form-control-sm" placeholder="Suchen..." onkeyup="debounceFilter()">
+                <label class="small font-weight-bold" data-i18n="det.filter.doknr">Dokumentnummer</label>
+                <input type="text" id="filterDocNumber" class="form-control form-control-sm" placeholder="Suchen..." data-i18n-placeholder="search" onkeyup="debounceFilter()">
             </div>
             <div class="col-md-3">
-                <label class="small font-weight-bold">Dateiname</label>
-                <input type="text" id="filterFilename" class="form-control form-control-sm" placeholder="Suchen..." onkeyup="debounceFilter()">
+                <label class="small font-weight-bold" data-i18n="det.filter.filename">Dateiname</label>
+                <input type="text" id="filterFilename" class="form-control form-control-sm" placeholder="Suchen..." data-i18n-placeholder="search" onkeyup="debounceFilter()">
             </div>
         </div>
     </div>
@@ -449,7 +449,7 @@
     
     <!-- Pagination -->
     <div id="paginationContainer" class="mt-3 d-flex justify-content-between align-items-center" style="display: none;">
-        <div class="pagination-info">
+        <div class="pagination-info" data-i18n="det.page.showing">
             Zeige <span id="showingFrom">0</span>-<span id="showingTo">0</span> von <span id="totalRecords">0</span> Dokumenten
         </div>
         <nav>

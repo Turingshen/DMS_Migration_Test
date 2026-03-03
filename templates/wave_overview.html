@@ -77,7 +77,7 @@
                     <p class="text-muted mb-0" data-i18n="waves.subtitle">Überblick über alle Migrationswellen und deren Fortschritt</p>
                 </div>
                 <div>
-                    <button class="btn btn-outline-secondary" onclick="loadWaveData()" title="Aktualisieren">
+                    <button class="btn btn-outline-secondary" onclick="loadWaveData()" title="Aktualisieren" data-i18n-title="waves.refresh_title">
                         <i class="fas fa-sync-alt"></i> <span data-i18n="waves.refresh">Aktualisieren</span>
                     </button>
                 </div>
@@ -141,7 +141,7 @@
     <div class="kanban-container" id="kanbanBoard">
         <div class="text-center w-100 py-5">
             <div class="spinner-border" role="status">
-                <span class="sr-only">Laden...</span>
+                <span class="sr-only" data-i18n="loading">Laden...</span>
             </div>
             <p class="text-muted mt-2" data-i18n="waves.loading">Lade Wellen-Daten...</p>
         </div>

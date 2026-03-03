@@ -390,11 +390,11 @@
 <div class="mapping-container">
     <!-- Workflow Step Indicator -->
     <div style="display:flex;align-items:center;margin-bottom:20px;">
-        <a href="/prepare" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Neuen Batch erstellen">
+        <a href="/prepare" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Neuen Batch erstellen" data-i18n-title="wf.step1_title">
             <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">1</span> <span data-i18n="wf.step1">Batch erstellen</span>
         </a>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
-        <a href="/preview?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Vorschau und Vorbereitung">
+        <a href="/preview?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#28a745;color:#fff;text-decoration:none;" title="Vorschau und Vorbereitung" data-i18n-title="wf.step2_title">
             <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">2</span> <span data-i18n="wf.step2">Vorschau und Vorbereitung</span>
         </a>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
@@ -402,7 +402,7 @@
             <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">3</span> <span data-i18n="wf.step3">Objekt Link</span>
         </div>
         <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
-        <a href="/details?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Auswertung &amp; Details">
+        <a href="/details?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Auswertung &amp; Details" data-i18n-title="wf.step4_title">
             <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> <span data-i18n="wf.step4">Auswertung</span>
         </a>
     </div>
@@ -412,8 +412,8 @@
         <h2>📦 <span data-i18n="map.title">Objekt-Zuordnung</span> - Batch {{ batch_id }}</h2>
         <div class="batch-info">
             <span>📋 Wave: <strong id="batchWave">-</strong></span>
-            <span>📝 <span id="batchDescription">Lade...</span></span>
-            <span>📊 Datensätze: <strong id="batchRecordCount">-</strong></span>
+            <span>📝 <span id="batchDescription" data-i18n="loading">Lade...</span></span>
+            <span>📊 <span data-i18n="map.records">Datensätze:</span> <strong id="batchRecordCount">-</strong></span>
         </div>
     </div>
 
@@ -438,10 +438,10 @@
                 ✨ Auf Staging anwenden
             </button>
             <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
-            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" style="background: #28a745;" data-i18n="map.link_all">
+            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" data-i18n-title="map.link_all_title" style="background: #28a745;" data-i18n="map.link_all">
                 🔗 Alle verlinken
             </button>
-            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" style="background: #28a745;" data-i18n="map.link_selected">
+            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" data-i18n-title="map.link_selected_title" style="background: #28a745;" data-i18n="map.link_selected">
                 🔗 Ausgewählte verlinken
             </button>
             <button class="btn btn-danger" onclick="cancelLinking()" id="cancelLinkBtn" style="display: none;" data-i18n="map.cancel_linking">
@@ -454,7 +454,7 @@
     <div id="linkProgressContainer" class="card" style="display: none; margin-bottom: 15px;">
         <div class="card-body" style="padding: 10px 15px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                <small id="linkProgressStats" class="text-muted">Verlinkung wird ausgeführt...</small>
+                <small id="linkProgressStats" class="text-muted" data-i18n="map.linking_progress">Verlinkung wird ausgeführt...</small>
                 <small id="linkProgressPhase" class="text-muted"></small>
             </div>
             <div style="background: #e9ecef; border-radius: 4px; height: 20px; overflow: hidden;">
@@ -493,11 +493,11 @@
     <div id="tab-unmapped" class="tab-content active">
         <div class="card">
             <div class="card-header">
-                <h3>Nicht zugeordnete Objekte in diesem Batch</h3>
-                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 Aktualisieren</button>
+                <h3 data-i18n="map.unmapped.title">Nicht zugeordnete Objekte in diesem Batch</h3>
+                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 <span data-i18n="map.unmapped.refresh">Aktualisieren</span></button>
             </div>
             <div class="card-body">
-                <div class="alert alert-info">
+                <div class="alert alert-info" data-i18n="map.unmapped.info">
                     Dies sind DOKOB/OBJKY-Kombinationen in diesem Batch, für die keine Zuordnung definiert ist.
                 </div>
                 <div id="dokobFilterBar" style="display:none; margin-bottom:12px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
@@ -509,14 +509,14 @@
                             <tr>
                                 <th>DOKOB</th>
                                 <th>OBJKY</th>
-                                <th>Anzahl</th>
-                                <th>Aktion</th>
+                                <th data-i18n="map.unmapped.count">Anzahl</th>
+                                <th data-i18n="map.unmapped.action">Aktion</th>
                             </tr>
                         </thead>
                         <tbody id="unmappedBody">
                             <tr>
                                 <td colspan="4" class="loading">
-                                    <div class="spinner"></div> Lade...
+                                    <div class="spinner"></div> <span data-i18n="loading">Lade...</span>
                                 </td>
                             </tr>
                         </tbody>
@@ -530,30 +530,30 @@
     <div id="tab-mappings" class="tab-content">
         <div class="card">
             <div class="card-header">
-                <h3>Objekt-Zuordnungen</h3>
-                <span class="badge badge-info" id="mappingCount">0 Zuordnungen</span>
+                <h3 data-i18n="map.mappings.title">Objekt-Zuordnungen</h3>
+                <span class="badge badge-info" id="mappingCount" data-i18n="map.mappings.count">0 Zuordnungen</span>
             </div>
             <div class="card-body">
                 <div class="search-box">
-                    <input type="text" id="searchMappings" placeholder="Zuordnungen suchen..." onkeyup="filterMappings()">
+                    <input type="text" id="searchMappings" placeholder="Zuordnungen suchen..." data-i18n-placeholder="map.mappings.search" onkeyup="filterMappings()">
                 </div>
                 <div class="table-container">
                     <table id="mappingsTable">
                         <thead>
                             <tr>
-                                <th>Quell-DOKOB</th>
-                                <th>Quell-OBJKY</th>
+                                <th data-i18n="map.mappings.source">Quell-DOKOB</th>
+                                <th data-i18n="map.mappings.source_key">Quell-OBJKY</th>
                                 <th>→</th>
-                                <th>Ziel-DOKOB</th>
-                                <th>Ziel-OBJKY</th>
-                                <th>Erstellt</th>
-                                <th>Aktionen</th>
+                                <th data-i18n="map.mappings.target">Ziel-DOKOB</th>
+                                <th data-i18n="map.mappings.target_key">Ziel-OBJKY</th>
+                                <th data-i18n="map.mappings.created">Erstellt</th>
+                                <th data-i18n="map.th.actions">Aktionen</th>
                             </tr>
                         </thead>
                         <tbody id="mappingsBody">
                             <tr>
                                 <td colspan="7" class="loading">
-                                    <div class="spinner"></div> Lade Zuordnungen...
+                                    <div class="spinner"></div> <span data-i18n="map.mappings.loading">Lade Zuordnungen...</span>
                                 </td>
                             </tr>
                         </tbody>
@@ -570,24 +570,24 @@
 <div id="uploadModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Objekt-Zuordnung Excel hochladen</h3>
+            <h3 data-i18n="map.upload.title">Objekt-Zuordnung Excel hochladen</h3>
             <button class="modal-close" onclick="closeUploadModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <div class="alert alert-info">
+            <div class="alert alert-info" data-i18n-html="map.upload.info">
                 Excel-Datei mit Spalten hochladen: <strong>source_dokob, source_objky, target_dokob, target_objky</strong>
             </div>
             <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
                 <div class="upload-icon">📁</div>
-                <div>Klicken oder Excel-Datei hierhin ziehen</div>
-                <div style="color: #999; font-size: 12px; margin-top: 10px;">Unterstützt .xlsx und .xls Dateien</div>
+                <div data-i18n="map.upload.drop">Klicken oder Excel-Datei hierhin ziehen</div>
+                <div style="color: #999; font-size: 12px; margin-top: 10px;" data-i18n="map.upload.formats">Unterstützt .xlsx und .xls Dateien</div>
             </div>
             <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none" onchange="handleFileSelect(event)">
             <div id="uploadStatus" style="margin-top: 15px;"></div>
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeUploadModal()">Abbrechen</button>
-            <button class="btn btn-primary" id="uploadBtn" onclick="uploadFile()" disabled>Hochladen</button>
+            <button class="btn btn-secondary" onclick="closeUploadModal()" data-i18n="cancel">Abbrechen</button>
+            <button class="btn btn-primary" id="uploadBtn" onclick="uploadFile()" disabled data-i18n="map.upload.btn">Hochladen</button>
         </div>
     </div>
 </div>
@@ -596,35 +596,35 @@
 <div id="editModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Zuordnung bearbeiten</h3>
+            <h3 data-i18n="map.edit.title">Zuordnung bearbeiten</h3>
             <button class="modal-close" onclick="closeEditModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="editId">
             <div class="form-row">
                 <div class="form-group">
-                    <label>Quell-DOKOB</label>
+                    <label data-i18n="map.edit.src_dokob">Quell-DOKOB</label>
                     <input type="text" class="form-control" id="editSourceDokob" required maxlength="10">
                 </div>
                 <div class="form-group">
-                    <label>Quell-OBJKY</label>
+                    <label data-i18n="map.edit.src_objky">Quell-OBJKY</label>
                     <input type="text" class="form-control" id="editSourceObjky" required maxlength="100">
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Ziel-DOKOB</label>
+                    <label data-i18n="map.edit.tgt_dokob">Ziel-DOKOB</label>
                     <input type="text" class="form-control" id="editTargetDokob" required maxlength="10">
                 </div>
                 <div class="form-group">
-                    <label>Ziel-OBJKY</label>
+                    <label data-i18n="map.edit.tgt_objky">Ziel-OBJKY</label>
                     <input type="text" class="form-control" id="editTargetObjky" required maxlength="100">
                 </div>
             </div>
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeEditModal()">Abbrechen</button>
-            <button class="btn btn-primary" onclick="saveEdit()">Änderungen speichern</button>
+            <button class="btn btn-secondary" onclick="closeEditModal()" data-i18n="cancel">Abbrechen</button>
+            <button class="btn btn-primary" onclick="saveEdit()" data-i18n="map.edit.save">Änderungen speichern</button>
         </div>
     </div>
 </div>

@@ -45,6 +45,7 @@
         'delete':                       { de: 'Löschen', en: 'Delete' },
         'update':                       { de: 'Aktualisieren', en: 'Update' },
         'reset':                        { de: 'Zurücksetzen', en: 'Reset' },
+        'refresh':                      { de: 'Aktualisieren', en: 'Refresh' },
         'search':                       { de: 'Suchen...', en: 'Search...' },
         'yes':                          { de: 'Ja', en: 'Yes' },
         'no':                           { de: 'Nein', en: 'No' },
@@ -66,6 +67,10 @@
         'wf.step3b':                    { de: 'Objekt-Zuordnung', en: 'Object Mapping' },
         'wf.step4':                     { de: 'Auswertung', en: 'Results' },
         'wf.step4b':                    { de: 'Ausführen', en: 'Execute' },
+        'wf.step1_title':              { de: 'Neuen Batch erstellen', en: 'Create new batch' },
+        'wf.step2_title':              { de: 'Vorschau und Vorbereitung', en: 'Preview and preparation' },
+        'wf.step3_title':              { de: 'Objekt Link & Verlinkung', en: 'Object link & linking' },
+        'wf.step4_title':              { de: 'Auswertung & Details', en: 'Results & details' },
 
         // ══════════════════════════════════════════════════════════════
         // DASHBOARD (index.html)
@@ -114,6 +119,7 @@
         'dash.batch.phase':             { de: 'Phase', en: 'Phase' },
         'dash.batch.linking':           { de: 'Verlinkung', en: 'Linking' },
         'dash.batch.actions':           { de: 'Aktionen', en: 'Actions' },
+        'dash.loading_schedule':        { de: 'Lade Zeitplan...', en: 'Loading schedule...' },
 
         // ══════════════════════════════════════════════════════════════
         // BATCH CARDS / STATUS
@@ -311,6 +317,38 @@
         'prep.msg.file_processing':     { de: 'Datei wird verarbeitet...', en: 'Processing file...' },
         'prep.msg.excl_keys_loaded':    { de: '{{n}} Ausschluss-Keys aus {{sheets}} Objekttypen geladen:', en: '{{n}} exclusion keys from {{sheets}} object types loaded:' },
 
+        // Exclusion rules DOKOB names and conditions
+        'prep.rules.equi':             { de: 'Equipment', en: 'Equipment' },
+        'prep.rules.iflot':            { de: 'Techn. Platz', en: 'Functional Location' },
+        'prep.rules.pmaufk':           { de: 'PM-Auftrag', en: 'PM Order' },
+        'prep.rules.pmqmel':           { de: 'PM-Meldung', en: 'PM Notification' },
+        'prep.rules.smqmel':           { de: 'Service-Meldung', en: 'Service Notification' },
+        'prep.rules.pmafvc':           { de: 'PM-Vorgang', en: 'PM Operation' },
+        'prep.rules.stko':             { de: 'Stücklistenkopf', en: 'BOM Header' },
+        'prep.rules.stpo':             { de: 'Stücklistenpos.', en: 'BOM Item' },
+        'prep.rules.plko':             { de: 'Arbeitsplan', en: 'Routing' },
+        'prep.rules.no_filter':        { de: 'Keine Filterung: QMQMEL, DRAW, MARA, MARC und alle anderen DOKOB', en: 'No filtering: QMQMEL, DRAW, MARA, MARC and all other DOKOB' },
+        'prep.rules.equi_cond':        { de: 'JEST Status: I0320, I0013, I0076 (gelöscht)', en: 'JEST Status: I0320, I0013, I0076 (deleted)' },
+        'prep.rules.iflot_cond':       { de: 'JEST Status: I0320, I0013, I0076 (gelöscht)', en: 'JEST Status: I0320, I0013, I0076 (deleted)' },
+        'prep.rules.pmaufk_cond':      { de: 'JEST Status: I0045 (TECO), I0046 (Closed) + I0013, I0076 (gelöscht)', en: 'JEST Status: I0045 (TECO), I0046 (Closed) + I0013, I0076 (deleted)' },
+        'prep.rules.pmqmel_cond':      { de: 'JEST Status: I0072 (geschlossen) + I0076 (gelöscht)', en: 'JEST Status: I0072 (closed) + I0076 (deleted)' },
+        'prep.rules.smqmel_cond':      { de: 'JEST Status: I0072 (geschlossen) + I0076 (gelöscht)', en: 'JEST Status: I0072 (closed) + I0076 (deleted)' },
+        'prep.rules.pmafvc_cond':      { de: 'Wenn zugehöriger Auftrag TECO/Closed/gelöscht', en: 'When related order is TECO/Closed/deleted' },
+        'prep.rules.stko_cond':        { de: "STKO.LOEKZ = 'X'", en: "STKO.LOEKZ = 'X'" },
+        'prep.rules.stpo_cond':        { de: "STPO.LKENZ = 'X'", en: "STPO.LKENZ = 'X'" },
+        'prep.rules.plko_cond':        { de: "PLKO.LOEKZ = 'X'", en: "PLKO.LOEKZ = 'X'" },
+        'prep.rules.note':             { de: '<i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong> JEST.INACT muss leer sein (\'\'), damit der Status aktiv ist.', en: '<i class="fas fa-lightbulb"></i> <strong>Note:</strong> JEST.INACT must be empty (\'\') for the status to be active.' },
+        'prep.file.template_hint':     { de: 'Enthält alle erforderlichen Spalten und eine Anleitung.', en: 'Contains all required columns and instructions.' },
+        'prep.th.ablage':              { de: 'Ablage', en: 'Storage' },
+        'prep.dokob.filter_hint':      { de: 'Klicke auf die DOKOB-Karten oben um zu filtern.', en: 'Click on the DOKOB cards above to filter.' },
+        'prep.plants.count_hint_title': { de: 'Die Angabe pro Werk ist eine ungefilterte Brutto-Zahl aus dem Cache (ohne Status-Ausschlüsse). Die tatsächliche Batch-Anzahl kann geringer sein.', en: 'The count per plant is an unfiltered gross number from cache (without status exclusions). The actual batch count may be lower.' },
+        'prep.plants.refresh_title':   { de: 'Werke-Cache neu laden (dauert 2-3 Min)', en: 'Reload plant cache (takes 2-3 min)' },
+        'prep.plants.rules_title':     { de: 'Ausschluss-Regeln anzeigen', en: 'Show exclusion rules' },
+        'prep.plants.clear_title':     { de: 'Auswahl zurücksetzen', en: 'Reset selection' },
+        'prep.btn.export_csv_title':   { de: 'Als CSV exportieren', en: 'Export as CSV' },
+        'prep.btn.reset_filter_title': { de: 'Filter zurücksetzen', en: 'Reset filter' },
+        'prep.meta.wave_hint':         { de: 'Wellen werden im <a href="/">Dashboard</a> verwaltet', en: 'Waves are managed in the <a href="/">Dashboard</a>' },
+
         // ══════════════════════════════════════════════════════════════
         // PREVIEW (preview.html + preview.js)
         // ══════════════════════════════════════════════════════════════
@@ -384,6 +422,11 @@
         'prev.tip.file_count_mismatch': { de: 'Quelldateien: {{src}}, Zieldateien: {{tgt}} — Mismatch!', en: 'Source files: {{src}}, Target files: {{tgt}} — Mismatch!' },
         'prev.tip.all_links_excluded': { de: 'Alle {{n}} Links ausgeschlossen → wird bei Ausführung übersprungen (⊘ Verwaist)', en: 'All {{n}} links excluded → will be skipped during execution (⊘ Orphaned)' },
         'prev.tip.partial_excluded':   { de: 'Quelle: {{src}}, Ausgeschl.: {{excl}}, Ziel: {{tgt}} — Teilweise ausgeschlossen', en: 'Source: {{src}}, Excluded: {{excl}}, Target: {{tgt}} — Partially excluded' },
+        'prev.filter.all':             { de: 'Alle', en: 'All' },
+        'prev.stat.excl_title':        { de: 'Durch Ausschlüsse entfernte Objekte', en: 'Objects removed by exclusions' },
+        'prev.btn.columns_title':      { de: 'Spalten ein-/ausblenden', en: 'Show/Hide columns' },
+        'prev.btn.refresh_title':      { de: 'Metadaten, Dateinamen abrufen und Regeln anwenden', en: 'Fetch metadata, filenames and apply rules' },
+        'prev.btn.exclude_title':      { de: 'Dateien größer als 99MB ausschließen', en: 'Exclude files larger than 99MB' },
 
         // Execution badges
         'exec.success':                { de: 'Erfolgreich', en: 'Successful' },
@@ -653,6 +696,14 @@
         'set.sys.edit':                 { de: 'Bearbeiten', en: 'Edit' },
         'set.sys.source_col':           { de: 'Quelle', en: 'Source' },
         'set.pacing_status.no_size':    { de: 'Keine Größe', en: 'No size' },
+        'set.sys.ph_id':               { de: 'z.B. zhl', en: 'e.g. zhl' },
+        'set.sys.ph_name':             { de: 'z.B. ZHL Testsystem Ludwigshafen', en: 'e.g. ZHL Test System Ludwigshafen' },
+        'set.sys.ph_host':             { de: 'z.B. qa-sap.api.basf.com:443', en: 'e.g. qa-sap.api.basf.com:443' },
+        'set.sys.id_title':            { de: 'Nur Kleinbuchstaben, Zahlen, Unterstrich', en: 'Only lowercase letters, numbers, underscore' },
+        'set.pacing_hint':             { de: '<strong>0 = Dynamisches Pacing</strong> (empfohlen): 5s für ≤1MB, 10s für 1-10MB, 20s für 10-50MB, 45s für >50MB<br><strong>>0 = Fixiertes Pacing</strong>: Gleiche Zeit für alle Dokumente', en: '<strong>0 = Dynamic Pacing</strong> (recommended): 5s for ≤1MB, 10s for 1-10MB, 20s for 10-50MB, 45s for >50MB<br><strong>>0 = Fixed Pacing</strong>: Same time for all documents' },
+        'set.pacing_recommendation':   { de: '<i class="fas fa-info-circle"></i> <strong>Empfehlung:</strong><br><ul class="mb-0"><li>Formel: <code>Pacing / Workers ≈ 1.5</code> für optimalen Durchsatz</li><li>Beispiel: 2 Workers, 3s Pacing → 1.5s effektive Zeit pro Request</li><li>Beispiel: 10 Workers, 15s Pacing → 1.5s effektive Zeit pro Request</li></ul>', en: '<i class="fas fa-info-circle"></i> <strong>Recommendation:</strong><br><ul class="mb-0"><li>Formula: <code>Pacing / Workers ≈ 1.5</code> for optimal throughput</li><li>Example: 2 Workers, 3s Pacing → 1.5s effective time per request</li><li>Example: 10 Workers, 15s Pacing → 1.5s effective time per request</li></ul>' },
+        'set.pace.based_on':           { de: '<strong>Basierend auf <span id="totalRecords">0</span> ausgeführten Dokumenten:</strong>', en: '<strong>Based on <span id="totalRecords">0</span> executed documents:</strong>' },
+        'set.pace.recommendation':     { de: '<i class="fas fa-lightbulb"></i> <strong>Empfehlung:</strong> Das empfohlene Pacing ist die maximale Ausführungszeit + 20% Buffer. Wenn das empfohlene Pacing niedriger ist als das aktuelle, läuft die Migration schneller.', en: '<i class="fas fa-lightbulb"></i> <strong>Recommendation:</strong> The recommended pacing is the max execution time + 20% buffer. If the recommended pacing is lower than the current, the migration runs faster.' },
 
         // ══════════════════════════════════════════════════════════════
         // TRANSLATIONS / RULES (translations.html + translations.js)
@@ -704,6 +755,9 @@
         'rules.delete_success':        { de: 'Regel erfolgreich gelöscht', en: 'Rule deleted successfully' },
         'rules.delete_error':          { de: 'Regel konnte nicht gelöscht werden', en: 'Could not delete rule' },
         'rules.move_error':            { de: 'Regel konnte nicht verschoben werden', en: 'Could not move rule' },
+        'rules.opt.docstatus_source':  { de: 'Dokumentenstatus (source_document_status)', en: 'Document Status (source_document_status)' },
+        'rules.opt.docstatus_target':  { de: 'Dokumentenstatus (target_document_status)', en: 'Document Status (target_document_status)' },
+        'rules.notes_label':           { de: 'Notizen', en: 'Notes' },
 
         // ══════════════════════════════════════════════════════════════
         // OBJECT MAPPING (object_mapping.html)
@@ -786,6 +840,13 @@
         'map.cancel_requested':        { de: '⏳ Abbruch angefordert...', en: '⏳ Cancellation requested...' },
         'map.cancel_failed_msg':       { de: 'Abbruch fehlgeschlagen: {{msg}}', en: 'Cancellation failed: {{msg}}' },
         'map.cancel_error':            { de: 'Fehler beim Abbrechen: {{msg}}', en: 'Error cancelling: {{msg}}' },
+        'map.edit.src_dokob':          { de: 'Quell-DOKOB', en: 'Source DOKOB' },
+        'map.edit.src_objky':          { de: 'Quell-OBJKY', en: 'Source OBJKY' },
+        'map.edit.tgt_dokob':          { de: 'Ziel-DOKOB', en: 'Target DOKOB' },
+        'map.edit.tgt_objky':          { de: 'Ziel-OBJKY', en: 'Target OBJKY' },
+        'map.th.actions':              { de: 'Aktionen', en: 'Actions' },
+        'map.link_all_title':          { de: 'Objektlinks für alle verlinkbaren Datensätze erstellen', en: 'Create object links for all linkable records' },
+        'map.link_selected_title':     { de: 'Objektlinks für ausgewählte Datensätze erstellen', en: 'Create object links for selected records' },
 
         // ══════════════════════════════════════════════════════════════
         // MIGRATION DETAILS (migration_details.html)
@@ -889,6 +950,7 @@
         'det.th.time':                   { de: 'Zeit', en: 'Time' },
         'det.error_detail_label':        { de: 'Fehlerdetails:', en: 'Error Details:' },
         'det.notes_label':               { de: 'Notizen:', en: 'Notes:' },
+        'det.th.actions':              { de: 'Aktionen', en: 'Actions' },
 
         // ══════════════════════════════════════════════════════════════
         // WAVE OVERVIEW (wave_overview.html)
@@ -903,6 +965,7 @@
         'waves.stat.errors':           { de: 'Fehler', en: 'Errors' },
         'waves.stat.pending':          { de: 'Ausstehend', en: 'Pending' },
         'waves.loading':               { de: 'Lade Wellen-Daten...', en: 'Loading wave data...' },
+        'waves.refresh_title':         { de: 'Aktualisieren', en: 'Refresh' },
 
         // ══════════════════════════════════════════════════════════════
         // LANGUAGE TOGGLE

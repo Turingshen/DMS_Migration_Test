@@ -104,7 +104,7 @@
                     <div class="form-group">
                         <label for="sourceColumn" data-i18n="rules.th.source_col">Quellspalte</label>
                         <select class="form-control" id="sourceColumn">
-                            <option value="">-- Auswählen --</option>
+                            <option value="" data-i18n="rules.select">-- Auswählen --</option>
                             <option value="source_documenttype">Document Type (source_documenttype)</option>
                             <option value="source_documentnumber">Document Number (source_documentnumber)</option>
                             <option value="source_documentversion">Document Version (source_documentversion)</option>
@@ -114,13 +114,13 @@
                             <option value="source_dokob">Object Type (source_dokob)</option>
                             <option value="source_objky">Object Key (source_objky)</option>
                             <option value="filename">Filename (filename)</option>
-                            <option value="source_document_status">Dokumentenstatus (source_document_status)</option>
+                            <option value="source_document_status" data-i18n="rules.opt.docstatus_source">Dokumentenstatus (source_document_status)</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label for="targetColumn" data-i18n="rules.th.target_col">Zielspalte *</label>
                         <select class="form-control" id="targetColumn" required>
-                            <option value="">-- Auswählen --</option>
+                            <option value="" data-i18n="rules.select">-- Auswählen --</option>
                             <option value="target_documenttype">Document Type (target_documenttype)</option>
                             <option value="target_documentnumber">Document Number (target_documentnumber)</option>
                             <option value="target_documentversion">Document Version (target_documentversion)</option>
@@ -128,7 +128,7 @@
                             <option value="authorization_group">Authorization Group (authorization_group)</option>
                             <option value="target_dokob">Object Type (target_dokob)</option>
                             <option value="target_objky">Object Key (target_objky)</option>
-                            <option value="target_document_status">Dokumentenstatus (target_document_status)</option>
+                            <option value="target_document_status" data-i18n="rules.opt.docstatus_target">Dokumentenstatus (target_document_status)</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -146,35 +146,35 @@
                         <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleConditionBtn" data-i18n="rules.add_condition">Bedingung hinzufügen</button>
                     </div>
                     <div id="conditionSection" class="condition-wrapper" style="display:none;">
-                        <div class="condition-help">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
+                        <div class="condition-help" data-i18n="rules.condition_info">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
                         <div class="form-group mt-2">
-                            <label for="conditionColumn">Bedingungsspalte</label>
+                            <label for="conditionColumn" data-i18n="rules.cond_column">Bedingungsspalte</label>
                             <input type="text" class="form-control" id="conditionColumn" placeholder="e.g., source_description">
                         </div>
                         <div class="form-group">
-                            <label for="conditionOperator">Bedingungsoperator</label>
+                            <label for="conditionOperator" data-i18n="rules.cond_operator">Bedingungsoperator</label>
                             <select class="form-control" id="conditionOperator">
-                                <option value="contains">enthält</option>
-                                <option value="not_contains">enthält nicht</option>
-                                <option value="equals">gleich</option>
-                                <option value="not_equal">ungleich</option>
+                                <option value="contains" data-i18n="rules.op_contains">enthält</option>
+                                <option value="not_contains" data-i18n="rules.op_not_contains">enthält nicht</option>
+                                <option value="equals" data-i18n="rules.op_equals">gleich</option>
+                                <option value="not_equal" data-i18n="rules.op_not_equals">ungleich</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="conditionValue">Bedingungswert</label>
+                            <label for="conditionValue" data-i18n="rules.cond_value">Bedingungswert</label>
                             <input type="text" class="form-control" id="conditionValue" placeholder="e.g., gasket">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="notes">Notizen</label>
+                        <label for="notes" data-i18n="rules.notes_label">Notizen</label>
                         <textarea class="form-control" id="notes" rows="2" 
-                                  placeholder="Optionale Beschreibung"></textarea>
+                                  placeholder="Optionale Beschreibung" data-i18n-placeholder="rules.notes_ph"></textarea>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
-                <button type="button" class="btn btn-primary" onclick="saveRule()">Speichern</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal" data-i18n="cancel">Abbrechen</button>
+                <button type="button" class="btn btn-primary" onclick="saveRule()" data-i18n="save">Speichern</button>
             </div>
         </div>
     </div>
@@ -194,13 +194,13 @@
                 <form id="editRuleForm">
                     <input type="hidden" id="editRuleId">
                     <div class="form-group">
-                        <label>Regeltyp</label>
+                        <label data-i18n="rules.rule_type">Regeltyp</label>
                         <input type="text" class="form-control" id="editRuleType" disabled>
                     </div>
                     <div class="form-group">
-                        <label>Quellspalte</label>
+                        <label data-i18n="rules.th.source_col">Quellspalte</label>
                         <select class="form-control" id="editSourceColumn">
-                            <option value="">-- Auswählen --</option>
+                            <option value="" data-i18n="rules.select">-- Auswählen --</option>
                             <option value="source_documenttype">Document Type (source_documenttype)</option>
                             <option value="source_documentnumber">Document Number (source_documentnumber)</option>
                             <option value="source_documentversion">Document Version (source_documentversion)</option>
@@ -210,13 +210,13 @@
                             <option value="source_dokob">Object Type (source_dokob)</option>
                             <option value="source_objky">Object Key (source_objky)</option>
                             <option value="filename">Filename (filename)</option>
-                            <option value="source_document_status">Dokumentenstatus (source_document_status)</option>
+                            <option value="source_document_status" data-i18n="rules.opt.docstatus_source">Dokumentenstatus (source_document_status)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Zielspalte</label>
+                        <label data-i18n="rules.th.target_col">Zielspalte</label>
                         <select class="form-control" id="editTargetColumn">
-                            <option value="">-- Auswählen --</option>
+                            <option value="" data-i18n="rules.select">-- Auswählen --</option>
                             <option value="target_documenttype">Document Type (target_documenttype)</option>
                             <option value="target_documentnumber">Document Number (target_documentnumber)</option>
                             <option value="target_documentversion">Document Version (target_documentversion)</option>
@@ -224,50 +224,50 @@
                             <option value="authorization_group">Authorization Group (authorization_group)</option>
                             <option value="target_dokob">Object Type (target_dokob)</option>
                             <option value="target_objky">Object Key (target_objky)</option>
-                            <option value="target_document_status">Dokumentenstatus (target_document_status)</option>
+                            <option value="target_document_status" data-i18n="rules.opt.docstatus_target">Dokumentenstatus (target_document_status)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Quellwert</label>
+                        <label data-i18n="rules.th.source_val">Quellwert</label>
                         <input type="text" class="form-control" id="editSourceValue" disabled>
                     </div>
                     <div class="form-group">
-                        <label for="editTargetValue">Zielwert *</label>
+                        <label for="editTargetValue" data-i18n="rules.th.target_val">Zielwert *</label>
                         <input type="text" class="form-control" id="editTargetValue" required>
                     </div>
                     <div class="d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0">Optionale Bedingung</h6>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleEditConditionBtn">Bedingung hinzufügen</button>
+                        <h6 class="mb-0" data-i18n="rules.opt_condition">Optionale Bedingung</h6>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleEditConditionBtn" data-i18n="rules.add_condition">Bedingung hinzufügen</button>
                     </div>
                     <div id="editConditionSection" class="condition-wrapper" style="display:none;">
-                        <div class="condition-help">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
+                        <div class="condition-help" data-i18n="rules.condition_info">Diese Regel nur anwenden, wenn die Bedingung erfüllt ist.</div>
                         <div class="form-group mt-2">
-                            <label for="editConditionColumn">Bedingungsspalte</label>
+                            <label for="editConditionColumn" data-i18n="rules.cond_column">Bedingungsspalte</label>
                             <input type="text" class="form-control" id="editConditionColumn">
                         </div>
                         <div class="form-group">
-                            <label for="editConditionOperator">Bedingungsoperator</label>
+                            <label for="editConditionOperator" data-i18n="rules.cond_operator">Bedingungsoperator</label>
                             <select class="form-control" id="editConditionOperator">
-                                <option value="contains">enthält</option>
-                                <option value="not_contains">enthält nicht</option>
-                                <option value="equals">gleich</option>
-                                <option value="not_equal">ungleich</option>
+                                <option value="contains" data-i18n="rules.op_contains">enthält</option>
+                                <option value="not_contains" data-i18n="rules.op_not_contains">enthält nicht</option>
+                                <option value="equals" data-i18n="rules.op_equals">gleich</option>
+                                <option value="not_equal" data-i18n="rules.op_not_equals">ungleich</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="editConditionValue">Bedingungswert</label>
+                            <label for="editConditionValue" data-i18n="rules.cond_value">Bedingungswert</label>
                             <input type="text" class="form-control" id="editConditionValue">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="editNotes">Notizen</label>
+                        <label for="editNotes" data-i18n="rules.notes_label">Notizen</label>
                         <textarea class="form-control" id="editNotes" rows="2"></textarea>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
-                <button type="button" class="btn btn-primary" onclick="updateRule()">Aktualisieren</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal" data-i18n="cancel">Abbrechen</button>
+                <button type="button" class="btn btn-primary" onclick="updateRule()" data-i18n="update">Aktualisieren</button>
             </div>
         </div>
     </div>

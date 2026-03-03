@@ -25,7 +25,7 @@
                             </label>
                             <input type="number" class="form-control" id="maxWorkers" 
                                    value="{{ settings.max_workers }}" min="1" max="50">
-                            <small class="form-text text-muted">
+                            <small class="form-text text-muted" data-i18n="set.perf.workers_info">
                                 Anzahl paralleler API-Aufrufe (1-50). Mehr Workers = schneller, aber höhere Last.
                             </small>
                         </div>
@@ -40,20 +40,20 @@
                                 <div class="input-group-append">
                                     <span class="input-group-text" id="pacingModeLabel">
                                         {% if settings.pacing_seconds == 0 %}
-                                            <span class="badge badge-success">Dynamisch</span>
+                                            <span class="badge badge-success" data-i18n="set.perf.dynamic">Dynamisch</span>
                                         {% else %}
-                                            <span class="badge badge-secondary">Fixiert</span>
+                                            <span class="badge badge-secondary" data-i18n="set.perf.fixed">Fixiert</span>
                                         {% endif %}
                                     </span>
                                 </div>
                             </div>
-                            <small class="form-text text-muted">
+                            <small class="form-text text-muted" data-i18n-html="set.pacing_hint">
                                 <strong>0 = Dynamisches Pacing</strong> (empfohlen): 5s für ≤1MB, 10s für 1-10MB, 20s für 10-50MB, 45s für >50MB<br>
                                 <strong>>0 = Fixiertes Pacing</strong>: Gleiche Zeit für alle Dokumente
                             </small>
                         </div>
 
-                        <div class="alert alert-info">
+                        <div class="alert alert-info" data-i18n-html="set.pacing_recommendation">
                             <i class="fas fa-info-circle"></i>
                             <strong>Empfehlung:</strong><br>
                             <ul class="mb-0">
@@ -64,9 +64,9 @@
                         </div>
 
                         <div class="form-group">
-                            <label>Berechneter Durchsatz:</label>
+                            <label data-i18n="set.perf.throughput">Berechneter Durchsatz:</label>
                             <div class="alert alert-secondary" id="throughputInfo">
-                                <strong id="throughputValue">-</strong> Dokumente pro Minute (theoretisch)
+                                <strong id="throughputValue">-</strong> <span data-i18n="set.perf.docs_per_min">Dokumente pro Minute (theoretisch)</span>
                             </div>
                         </div>
 
@@ -101,9 +101,9 @@
                             <th>Pacing</th>
                             <td id="currentPacing">
                                 {% if settings.pacing_seconds == 0 %}
-                                    <span class="badge badge-success">Dynamisch</span> (5-45s basierend auf Dateigröße)
+                                    <span class="badge badge-success" data-i18n="set.perf.dynamic">Dynamisch</span> <span data-i18n="set.msg.dynamic_info">(5-45s basierend auf Dateigröße)</span>
                                 {% else %}
-                                    <span class="badge badge-secondary">Fixiert</span> {{ settings.pacing_seconds }} Sekunden
+                                    <span class="badge badge-secondary" data-i18n="set.perf.fixed">Fixiert</span> {{ settings.pacing_seconds }} <span data-i18n="set.msg.seconds">Sekunden</span>
                                 {% endif %}
                             </td>
                         </tr>
@@ -117,10 +117,10 @@
                 </div>
                 <div class="card-body">
                     <ul>
-                        <li><strong>Zu viele Workers</strong> können zu Rate Limiting Fehlern führen</li>
-                        <li><strong>Zu wenig Pacing</strong> kann die API überlasten</li>
-                        <li>Änderungen gelten für <strong>neue</strong> Batch-Ausführungen</li>
-                        <li>Aktuelle Migrationen werden nicht beeinflusst</li>
+                        <li data-i18n="set.notices.1"><strong>Zu viele Workers</strong> können zu Rate Limiting Fehlern führen</li>
+                        <li data-i18n="set.notices.2"><strong>Zu wenig Pacing</strong> kann die API überlasten</li>
+                        <li data-i18n="set.notices.3">Änderungen gelten für <strong>neue</strong> Batch-Ausführungen</li>
+                        <li data-i18n="set.notices.4">Aktuelle Migrationen werden nicht beeinflusst</li>
                     </ul>
                 </div>
             </div>
@@ -135,12 +135,12 @@
                     <h5 class="mb-0">
                         <i class="fas fa-key"></i> <span data-i18n="set.cred.title">SAP Zugangsdaten</span>
                         <button class="btn btn-sm btn-light float-right" onclick="loadCredentials()">
-                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
                         </button>
                     </h5>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted">
+                    <p class="text-muted" data-i18n="set.cred.info">
                         Zugangsdaten für SAP-Systeme. Bei Systemen mit <code>auth_type: basic</code> werden diese für den API-Zugriff verwendet.
                         Bei OAuth-Systemen können optional Credentials für den Direktzugang hinterlegt werden.
                         Die Passwörter werden verschlüsselt in der Datenbank gespeichert.
@@ -148,12 +148,12 @@
                     
                     <div id="credentialsLoading" class="text-center py-3">
                         <i class="fas fa-spinner fa-spin fa-2x"></i>
-                        <p class="mt-2">Lade Zugangsdaten...</p>
+                        <p class="mt-2" data-i18n="set.cred.loading">Lade Zugangsdaten...</p>
                     </div>
                     
                     <div id="credentialsContent" style="display: none;">
                         <div id="credentialsNoSystems" class="alert alert-info" style="display: none;">
-                            <i class="fas fa-info-circle"></i> Keine SAP-Systeme in der Konfiguration vorhanden.
+                            <i class="fas fa-info-circle"></i> <span data-i18n="set.cred.no_systems">Keine SAP-Systeme in der Konfiguration vorhanden.</span>
                         </div>
                         
                         <div id="credentialsList"></div>
@@ -171,15 +171,15 @@
                     <h5 class="mb-0">
                         <i class="fas fa-server"></i> <span data-i18n="set.sys.title">SAP Systeme verwalten</span>
                         <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
-                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
                         </button>
                         <button class="btn btn-sm btn-light float-right" onclick="showAddSystemForm()">
-                            <i class="fas fa-plus"></i> Neues System
+                            <i class="fas fa-plus"></i> <span data-i18n="set.sys.new">Neues System</span>
                         </button>
                     </h5>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted">
+                    <p class="text-muted" data-i18n="set.sys.info">
                         SAP-Systeme und deren API-Endpunkte konfigurieren. 
                         <strong>YAML</strong> liefert die Defaults, <strong>DB-Einträge</strong> haben Vorrang.
                         Neue Systeme werden in der Datenbank gespeichert.
@@ -188,24 +188,24 @@
                     <!-- Add/Edit System Form (hidden by default) -->
                     <div id="systemFormCard" class="card mb-3 border-success" style="display: none;">
                         <div class="card-header bg-light">
-                            <h6 class="mb-0" id="systemFormTitle"><i class="fas fa-plus"></i> Neues System anlegen</h6>
+                            <h6 class="mb-0" id="systemFormTitle"><i class="fas fa-plus"></i> <span data-i18n="set.sys.create">Neues System anlegen</span></h6>
                         </div>
                         <div class="card-body">
                             <form id="systemForm" onsubmit="saveSapSystem(event)">
                                 <div class="form-row">
                                     <div class="col-md-2">
                                         <div class="form-group">
-                                            <label>System-ID</label>
-                                            <input type="text" class="form-control" id="sysId" placeholder="z.B. zhl" 
-                                                   pattern="[a-z0-9_]+" title="Nur Kleinbuchstaben, Zahlen, Unterstrich" required>
-                                            <small class="form-text text-muted">Eindeutig, lowercase</small>
+                                            <label data-i18n="set.sys.id">System-ID</label>
+                                            <input type="text" class="form-control" id="sysId" placeholder="z.B. zhl" data-i18n-placeholder="set.sys.ph_id"
+                                                   pattern="[a-z0-9_]+" title="Nur Kleinbuchstaben, Zahlen, Unterstrich" data-i18n-title="set.sys.id_title" required>
+                                            <small class="form-text text-muted" data-i18n="set.sys.unique_lc">Eindeutig, lowercase</small>
                                         </div>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="form-group">
                                             <label>Label</label>
                                             <input type="text" class="form-control" id="sysLabel" 
-                                                   placeholder="z.B. ZHL Testsystem Ludwigshafen" required>
+                                                   placeholder="z.B. ZHL Testsystem Ludwigshafen" data-i18n-placeholder="set.sys.ph_name" required>
                                         </div>
                                     </div>
                                     <div class="col-md-1">
@@ -221,7 +221,7 @@
                                         <div class="form-group">
                                             <label>Host</label>
                                             <input type="text" class="form-control" id="sysHost" 
-                                                   placeholder="z.B. qa-sap.api.basf.com:443">
+                                                   placeholder="z.B. qa-sap.api.basf.com:443" data-i18n-placeholder="set.sys.ph_host">
                                         </div>
                                     </div>
                                     <div class="col-md-1">
@@ -243,21 +243,21 @@
                                 
                                 <!-- APIs for this system -->
                                 <div class="mb-3">
-                                    <label><strong><i class="fas fa-plug"></i> API-Endpunkte</strong></label>
+                                    <label><strong><i class="fas fa-plug"></i> <span data-i18n="set.sys.endpoints">API-Endpunkte</span></strong></label>
                                     <div id="systemApisEditor">
                                         <!-- Dynamic API rows added here -->
                                     </div>
                                     <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addApiRow()">
-                                        <i class="fas fa-plus"></i> API hinzufügen
+                                        <i class="fas fa-plus"></i> <span data-i18n="set.sys.add_api">API hinzufügen</span>
                                     </button>
                                 </div>
 
                                 <div class="form-group mb-0">
                                     <button type="submit" class="btn btn-success mr-1">
-                                        <i class="fas fa-save"></i> Speichern
+                                        <i class="fas fa-save"></i> <span data-i18n="save">Speichern</span>
                                     </button>
                                     <button type="button" class="btn btn-outline-secondary" onclick="hideSystemForm()">
-                                        Abbrechen
+                                        <span data-i18n="cancel">Abbrechen</span>
                                     </button>
                                 </div>
                             </form>
@@ -266,7 +266,7 @@
 
                     <div id="sapSystemsLoading" class="text-center py-3">
                         <i class="fas fa-spinner fa-spin fa-2x"></i>
-                        <p class="mt-2">Lade SAP-Systeme...</p>
+                        <p class="mt-2" data-i18n="set.sys.loading">Lade SAP-Systeme...</p>
                     </div>
                     
                     <div id="sapSystemsList" style="display: none;"></div>
@@ -283,40 +283,40 @@
                     <h5 class="mb-0">
                         <i class="fas fa-chart-line"></i> <span data-i18n="set.pacing.title">Dynamisches Pacing - Historische Analyse</span>
                         <button class="btn btn-sm btn-light float-right" onclick="loadPacingStats()">
-                            <i class="fas fa-sync-alt"></i> Aktualisieren
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
                         </button>
                     </h5>
                 </div>
                 <div class="card-body">
                     <div id="pacingStatsLoading" class="text-center py-3">
                         <i class="fas fa-spinner fa-spin fa-2x"></i>
-                        <p class="mt-2">Lade historische Daten...</p>
+                        <p class="mt-2" data-i18n="set.pacing.loading">Lade historische Daten...</p>
                     </div>
                     <div id="pacingStatsContent" style="display: none;">
                         <div class="alert alert-info" id="pacingNoData" style="display: none;">
-                            <i class="fas fa-info-circle"></i> Keine historischen Ausführungsdaten verfügbar. 
-                            Führe zuerst einige Migrationen aus, um Optimierungsempfehlungen zu erhalten.
+                            <i class="fas fa-info-circle"></i> <span data-i18n="set.pacing.no_data">Keine historischen Ausführungsdaten verfügbar. 
+                            Führe zuerst einige Migrationen aus, um Optimierungsempfehlungen zu erhalten.</span>
                         </div>
                         <div id="pacingHasData" style="display: none;">
-                            <p><strong>Basierend auf <span id="totalRecords">0</span> ausgeführten Dokumenten:</strong></p>
+                            <p data-i18n-html="set.pace.based_on"><strong>Basierend auf <span id="totalRecords">0</span> ausgeführten Dokumenten:</strong></p>
                             <table class="table table-bordered table-hover" id="pacingTable">
                                 <thead class="thead-light">
                                     <tr>
-                                        <th>Größen-Bucket</th>
-                                        <th>Dateigröße</th>
-                                        <th>Anzahl</th>
-                                        <th>Ø Zeit (s)</th>
-                                        <th>Min (s)</th>
-                                        <th>Max (s)</th>
-                                        <th>Aktuell (s)</th>
-                                        <th>Empfohlen (s)</th>
-                                        <th>Status</th>
+                                        <th data-i18n="set.pacing.bucket">Größen-Bucket</th>
+                                        <th data-i18n="set.pacing.filesize">Dateigröße</th>
+                                        <th data-i18n="set.pacing.count">Anzahl</th>
+                                        <th data-i18n="set.pacing.avg">Ø Zeit (s)</th>
+                                        <th data-i18n="set.pacing.min">Min (s)</th>
+                                        <th data-i18n="set.pacing.max">Max (s)</th>
+                                        <th data-i18n="set.pacing.current">Aktuell (s)</th>
+                                        <th data-i18n="set.pacing.recommended">Empfohlen (s)</th>
+                                        <th data-i18n="set.pacing.status">Status</th>
                                     </tr>
                                 </thead>
                                 <tbody id="pacingTableBody">
                                 </tbody>
                             </table>
-                            <div class="alert alert-secondary">
+                            <div class="alert alert-secondary" data-i18n-html="set.pace.recommendation">
                                 <i class="fas fa-lightbulb"></i> <strong>Empfehlung:</strong> 
                                 Das empfohlene Pacing ist die maximale Ausführungszeit + 20% Buffer. 
                                 Wenn das empfohlene Pacing niedriger ist als das aktuelle, läuft die Migration schneller.

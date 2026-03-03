@@ -183,23 +183,23 @@
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <div>
                             <strong><i class="fas fa-industry"></i> <span data-i18n="prep.plants.title">Werke auswählen</span></strong>
-                            <span class="badge badge-light ml-2" id="selectedCount">0 ausgewählt</span>
-                            <small class="text-muted ml-2" title="Die Angabe pro Werk ist eine ungefilterte Brutto-Zahl aus dem Cache (ohne Status-Ausschlüsse). Die tatsächliche Batch-Anzahl kann geringer sein."><i class="fas fa-info-circle"></i> ca. Anzahl je Werk ungefiltert <span id="werkeCacheAge"></span></small>
-                            <button type="button" class="btn btn-sm btn-outline-secondary ml-1" onclick="refreshWerkeCache()" title="Werke-Cache neu laden (dauert 2-3 Min)" id="btnRefreshWerke">
+                            <span class="badge badge-light ml-2" id="selectedCount" data-i18n="prep.plants.selected">0 ausgewählt</span>
+                            <small class="text-muted ml-2" title="Die Angabe pro Werk ist eine ungefilterte Brutto-Zahl aus dem Cache (ohne Status-Ausschlüsse). Die tatsächliche Batch-Anzahl kann geringer sein." data-i18n-title="prep.plants.count_hint_title"><i class="fas fa-info-circle"></i> <span data-i18n="prep.plants.approx">ca. Anzahl je Werk ungefiltert</span> <span id="werkeCacheAge"></span></small>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ml-1" onclick="refreshWerkeCache()" title="Werke-Cache neu laden (dauert 2-3 Min)" data-i18n-title="prep.plants.refresh_title" id="btnRefreshWerke">
                                 <i class="fas fa-sync-alt" id="iconRefreshWerke"></i>
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline-info ml-1" data-toggle="modal" data-target="#exclusionRulesModal" title="Ausschluss-Regeln anzeigen">
+                            <button type="button" class="btn btn-sm btn-outline-info ml-1" data-toggle="modal" data-target="#exclusionRulesModal" title="Ausschluss-Regeln anzeigen" data-i18n-title="prep.plants.rules_title">
                                 <i class="fas fa-info-circle"></i>
                             </button>
                         </div>
                         <div>
                             <input type="text" id="werkeSearch" class="form-control form-control-sm d-inline-block"
-                                   style="width: 140px;" placeholder="Suchen..." oninput="filterWerke(this.value)">
+                                   style="width: 140px;" placeholder="Suchen..." data-i18n-placeholder="prep.plants.search" oninput="filterWerke(this.value)">
                             <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('EU')">EU</button>
                             <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('NA')">NA</button>
                             <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('AP')">AP</button>
                             <button class="btn btn-sm btn-outline-secondary quick-filter-btn" onclick="selectRegion('SA')">SA</button>
-                            <button class="btn btn-sm btn-outline-warning ml-1" onclick="clearSelection()" title="Auswahl zurücksetzen">
+                            <button class="btn btn-sm btn-outline-warning ml-1" onclick="clearSelection()" title="Auswahl zurücksetzen" data-i18n-title="prep.plants.clear_title">
                                 <i class="fas fa-times"></i>
                             </button>
                         </div>
@@ -219,7 +219,7 @@
                             <button id="btnLoadData" class="btn btn-success" onclick="loadDMSObjects()">
                                 <i class="fas fa-download"></i> <span data-i18n="prep.plants.load_data">Daten laden &amp; speichern</span>
                             </button>
-                            <button class="btn btn-outline-secondary ml-1" onclick="exportData()" title="Als CSV exportieren">
+                            <button class="btn btn-outline-secondary ml-1" onclick="exportData()" title="Als CSV exportieren" data-i18n-title="prep.btn.export_csv_title">
                                 <i class="fas fa-file-csv"></i> CSV
                             </button>
                         </div>
@@ -252,14 +252,14 @@
                                     </div>
                                     <div class="d-flex align-items-center" style="gap: 8px;">
                                         <div class="btn-group btn-group-sm" id="ablageFilterGroup">
-                                            <button type="button" class="btn btn-outline-secondary active" data-ablage="ALL" onclick="setAblageFilter('ALL')">Alle</button>
+                                            <button type="button" class="btn btn-outline-secondary active" data-ablage="ALL" onclick="setAblageFilter('ALL')" data-i18n="all">Alle</button>
                                             <button type="button" class="btn btn-outline-info" data-ablage="KPRO" onclick="setAblageFilter('KPRO')"><i class="fas fa-cloud"></i> KPRO</button>
                                             <button type="button" class="btn btn-outline-warning" data-ablage="DB" onclick="setAblageFilter('DB')"><i class="fas fa-database"></i> DB</button>
                                         </div>
                                         <input type="text" id="tableSearchInput" class="form-control form-control-sm"
-                                               style="width: 200px;" placeholder="Suchen (DOKNR, OBJKY, DOKOB...)"
+                                               style="width: 200px;" placeholder="Suchen (DOKNR, OBJKY, DOKOB...)" data-i18n-placeholder="prep.results.search"
                                                oninput="applyTableFilter()">
-                                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('tableSearchInput').value=''; applyTableFilter();" title="Filter zurücksetzen">
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('tableSearchInput').value=''; applyTableFilter();" title="Filter zurücksetzen" data-i18n-title="prep.btn.reset_filter_title">
                                             <i class="fas fa-times"></i>
                                         </button>
                                     </div>
@@ -268,7 +268,7 @@
                             <div class="card-body p-0" style="max-height:300px; overflow-y:auto;">
                                 <table class="table table-sm table-striped table-hover mb-0" id="resultsTable">
                                     <thead class="thead-dark">
-                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th><th>Ablage</th></tr>
+                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th><th data-i18n="prep.th.ablage">Ablage</th></tr>
                                     </thead>
                                     <tbody id="resultsBody"></tbody>
                                 </table>
@@ -282,7 +282,7 @@
                 <!-- ════════════════════════════════════════════ -->
                 <div class="tab-pane fade" id="pane-sql" role="tabpanel">
                     <div class="form-group mb-2">
-                        <label><strong>Datenquelle</strong></label>
+                        <label><strong data-i18n="prep.sql.source">Datenquelle</strong></label>
                         <div class="custom-control custom-radio custom-control-inline">
                             <input type="radio" id="srcDil" name="querySource" class="custom-control-input" value="dil" checked>
                             <label class="custom-control-label" for="srcDil">VI-DIL (HANA)</label>
@@ -305,7 +305,7 @@
 FROM dil.drad AS drad
 LEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno
 WHERE iflos.tplnr IS NOT NULL;</textarea>
-                        <small class="form-text text-muted">
+                        <small class="form-text text-muted" data-i18n="prep.sql.hint">
                             Query muss mindestens zurückgeben: documentnumber, documenttype, documentversion, documentpart
                         </small>
                     </div>
@@ -316,22 +316,22 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                 <!-- ════════════════════════════════════════════ -->
                 <div class="tab-pane fade" id="pane-file" role="tabpanel">
                     <div class="form-group">
-                        <label for="fileInput">Excel / CSV Datei</label>
+                        <label for="fileInput" data-i18n="prep.excel.title">Excel / CSV Datei</label>
                         <div class="custom-file">
                             <input type="file" class="custom-file-input" id="fileInput" accept=".xlsx,.xls,.csv">
-                            <label class="custom-file-label" for="fileInput">Datei wählen...</label>
+                            <label class="custom-file-label" for="fileInput" data-i18n="prep.excel.choose_file">Datei wählen...</label>
                         </div>
-                        <small class="form-text text-muted">
+                        <small class="form-text text-muted" data-i18n="prep.excel.required_fields">
                             Pflichtfelder: Documentnumber, Documentpart, Documenttype, Documentversion
                         </small>
                     </div>
                     <div class="alert alert-secondary mt-3">
                         <i class="fas fa-file-excel"></i>
-                        <strong>Template herunterladen:</strong>
+                        <strong data-i18n="prep.excel.download_template">Template herunterladen:</strong>
                         <a href="/download_template" class="btn btn-sm btn-success ml-2">
                             <i class="fas fa-download"></i> migration_template.xlsx
                         </a>
-                        <br><small class="text-muted mt-1 d-block">Enthält alle erforderlichen Spalten und eine Anleitung.</small>
+                        <br><small class="text-muted mt-1 d-block" data-i18n="prep.file.template_hint">Enthält alle erforderlichen Spalten und eine Anleitung.</small>
                     </div>
                 </div>
             </div>
@@ -353,14 +353,14 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                                 <select class="form-control" id="batchWave" name="wave" required>
                                     <option value="" data-i18n="prep.meta.choose_wave">-- Wave auswählen --</option>
                                 </select>
-                                <small class="form-text text-muted">Wellen werden im <a href="/">Dashboard</a> verwaltet</small>
+                                <small class="form-text text-muted" data-i18n-html="prep.meta.wave_hint">Wellen werden im <a href="/">Dashboard</a> verwaltet</small>
                             </div>
                         </div>
                         <div class="col-md-4">
                             <div class="form-group">
                                 <label for="batchDescription" data-i18n="prep.meta.description">Beschreibung (max 40 Zeichen)</label>
                                 <input type="text" class="form-control" id="batchDescription" name="description"
-                                       maxlength="40" placeholder="Kurzbeschreibung...">
+                                       maxlength="40" placeholder="Kurzbeschreibung..." data-i18n-placeholder="prep.meta.description_ph">
                                 <small class="form-text text-muted"><span id="descCharCount">0</span>/40</small>
                             </div>
                         </div>
@@ -368,7 +368,7 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                             <div class="form-group">
                                 <label for="batchNotes" data-i18n="prep.meta.notes">Notizen</label>
                                 <textarea class="form-control" id="batchNotes" name="notes" rows="2"
-                                          placeholder="Detaillierte Notizen..."></textarea>
+                                          placeholder="Detaillierte Notizen..." data-i18n-placeholder="prep.meta.notes_ph"></textarea>
                             </div>
                         </div>
                     </div>
@@ -391,7 +391,7 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                     <span class="badge badge-secondary ml-2" id="exclusionBadge" style="display:none;">0 Keys</span>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted small mb-3">
+                    <p class="text-muted small mb-3" data-i18n="prep.excl.info">
                         Lade eine Excel-Datei hoch, um bestimmte Objekte vom Batch auszuschließen.
                         Pro Objekttyp gibt es ein eigenes Blatt mit der jeweiligen Key-Spalte
                         (IFLOT, EQUI, MPLA, IMPTT, PMPLKO, PMAUFK, PMAFVC, PMQMEL, STKO_DOC, STPO_DOC).
@@ -406,7 +406,7 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                             <div class="custom-file">
                                 <input type="file" class="custom-file-input" id="exclusionFileInput"
                                        accept=".xlsx,.xls" onchange="uploadExclusionFile(this)">
-                                <label class="custom-file-label" for="exclusionFileInput" id="exclusionFileLabel">
+                                <label class="custom-file-label" for="exclusionFileInput" id="exclusionFileLabel" data-i18n="prep.excl.choose_file">
                                     Ausschluss-Excel wählen...
                                 </label>
                             </div>
@@ -414,7 +414,7 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
                         <div class="col-md-3 text-right">
                             <button class="btn btn-outline-danger btn-sm" id="btnClearExclusion"
                                     onclick="clearExclusionUpload()" style="display:none;">
-                                <i class="fas fa-times"></i> Entfernen
+                                <i class="fas fa-times"></i> <span data-i18n="prep.excl.remove">Entfernen</span>
                             </button>
                         </div>
                     </div>
@@ -439,29 +439,29 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header bg-info text-white">
-                <h5 class="modal-title"><i class="fas fa-filter"></i> Ausschluss-Regeln für DMS-Objekte</h5>
+                <h5 class="modal-title"><i class="fas fa-filter"></i> <span data-i18n="prep.excl_rules.title">Ausschluss-Regeln für DMS-Objekte</span></h5>
                 <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted mb-3">DMS-Container werden nur geladen, wenn <strong>mindestens ein verknüpftes Objekt</strong> nicht gelöscht/geschlossen ist.</p>
+                <p class="text-muted mb-3" data-i18n-html="prep.excl_rules.info">DMS-Container werden nur geladen, wenn <strong>mindestens ein verknüpftes Objekt</strong> nicht gelöscht/geschlossen ist.</p>
                 <table class="table table-sm table-bordered">
-                    <thead class="thead-light"><tr><th>DOKOB</th><th>Beschreibung</th><th>Ausschluss wenn...</th></tr></thead>
+                    <thead class="thead-light"><tr><th>DOKOB</th><th data-i18n="prep.excl_rules.desc">Beschreibung</th><th data-i18n="prep.excl_rules.condition">Ausschluss wenn...</th></tr></thead>
                     <tbody>
-                        <tr><td><code>EQUI</code></td><td>Equipment</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
-                        <tr><td><code>IFLOT</code></td><td>Techn. Platz</td><td>JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
-                        <tr><td><code>PMAUFK</code></td><td>PM-Auftrag</td><td>JEST Status: I0045 (TECO), I0046 (Closed) + I0013, I0076 (gelöscht)</td></tr>
-                        <tr><td><code>PMQMEL</code></td><td>PM-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
-                        <tr><td><code>SMQMEL</code></td><td>Service-Meldung</td><td>JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
-                        <tr><td><code>PMAFVC</code></td><td>PM-Vorgang</td><td>Wenn zugehöriger Auftrag TECO/Closed/gelöscht</td></tr>
-                        <tr><td><code>STKO_DOC</code></td><td>Stücklistenkopf</td><td>STKO.LOEKZ = 'X'</td></tr>
-                        <tr><td><code>STPO_DOC</code></td><td>Stücklistenpos.</td><td>STPO.LKENZ = 'X'</td></tr>
-                        <tr><td><code>PLKO</code></td><td>Arbeitsplan</td><td>PLKO.LOEKZ = 'X'</td></tr>
-                        <tr class="table-secondary"><td colspan="3"><em>Keine Filterung: QMQMEL, DRAW, MARA, MARC und alle anderen DOKOB</em></td></tr>
+                        <tr><td><code>EQUI</code></td><td data-i18n="prep.rules.equi">Equipment</td><td data-i18n="prep.rules.equi_cond">JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>IFLOT</code></td><td data-i18n="prep.rules.iflot">Techn. Platz</td><td data-i18n="prep.rules.iflot_cond">JEST Status: I0320, I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMAUFK</code></td><td data-i18n="prep.rules.pmaufk">PM-Auftrag</td><td data-i18n="prep.rules.pmaufk_cond">JEST Status: I0045 (TECO), I0046 (Closed) + I0013, I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMQMEL</code></td><td data-i18n="prep.rules.pmqmel">PM-Meldung</td><td data-i18n="prep.rules.pmqmel_cond">JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
+                        <tr><td><code>SMQMEL</code></td><td data-i18n="prep.rules.smqmel">Service-Meldung</td><td data-i18n="prep.rules.smqmel_cond">JEST Status: I0072 (geschlossen) + I0076 (gelöscht)</td></tr>
+                        <tr><td><code>PMAFVC</code></td><td data-i18n="prep.rules.pmafvc">PM-Vorgang</td><td data-i18n="prep.rules.pmafvc_cond">Wenn zugehöriger Auftrag TECO/Closed/gelöscht</td></tr>
+                        <tr><td><code>STKO_DOC</code></td><td data-i18n="prep.rules.stko">Stücklistenkopf</td><td data-i18n="prep.rules.stko_cond">STKO.LOEKZ = 'X'</td></tr>
+                        <tr><td><code>STPO_DOC</code></td><td data-i18n="prep.rules.stpo">Stücklistenpos.</td><td data-i18n="prep.rules.stpo_cond">STPO.LKENZ = 'X'</td></tr>
+                        <tr><td><code>PLKO</code></td><td data-i18n="prep.rules.plko">Arbeitsplan</td><td data-i18n="prep.rules.plko_cond">PLKO.LOEKZ = 'X'</td></tr>
+                        <tr class="table-secondary"><td colspan="3"><em data-i18n="prep.rules.no_filter">Keine Filterung: QMQMEL, DRAW, MARA, MARC und alle anderen DOKOB</em></td></tr>
                     </tbody>
                 </table>
-                <div class="alert alert-info mb-0"><i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong> JEST.INACT muss leer sein (''), damit der Status aktiv ist.</div>
+                <div class="alert alert-info mb-0" data-i18n-html="prep.rules.note"><i class="fas fa-lightbulb"></i> <strong>Hinweis:</strong> JEST.INACT muss leer sein (''), damit der Status aktiv ist.</div>
             </div>
-            <div class="modal-footer"><button type="button" class="btn btn-secondary" data-dismiss="modal">Schließen</button></div>
+            <div class="modal-footer"><button type="button" class="btn btn-secondary" data-dismiss="modal" data-i18n="close">Schließen</button></div>
         </div>
     </div>
 </div>
@@ -473,30 +473,30 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header bg-success text-white">
-                <h5 class="modal-title"><i class="fas fa-filter"></i> DOKOB-Filter</h5>
+                <h5 class="modal-title"><i class="fas fa-filter"></i> <span data-i18n="prep.dokob.title">DOKOB-Filter</span></h5>
                 <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
             </div>
             <div class="modal-body">
                 <p>Es werden <strong id="dmsObjectCount">0</strong> DMS-Objekte für die Migration vorbereitet.</p>
                 <div class="form-group">
-                    <label><i class="fas fa-filter"></i> Objekttyp-Filter (DOKOB)</label>
+                    <label><i class="fas fa-filter"></i> <span data-i18n="prep.dokob.filter">Objekttyp-Filter (DOKOB)</span></label>
                     <div class="alert alert-light border" style="max-height:180px; overflow-y:auto;">
                         <div id="modalDokobSummary" class="d-flex flex-wrap" style="gap:6px;">
-                            <span class="text-muted">Noch keine Daten geladen</span>
+                            <span class="text-muted" data-i18n="prep.dokob.no_data">Noch keine Daten geladen</span>
                         </div>
                     </div>
                     <small class="form-text text-muted">
-                        <span id="selectedDokobInfo">Alle Objekttypen ausgewählt</span>
-                        — Klicke auf die DOKOB-Karten oben um zu filtern.
-                        <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)">Alle</button> |
-                        <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)">Keine</button>
+                        <span id="selectedDokobInfo" data-i18n="prep.dokob.all_selected">Alle Objekttypen ausgewählt</span>
+                        — <span data-i18n="prep.dokob.filter_hint">Klicke auf die DOKOB-Karten oben um zu filtern.</span>
+                        <button type="button" class="btn btn-sm btn-link p-0 ml-2" onclick="selectAllDokob(true)" data-i18n="all">Alle</button> |
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="selectAllDokob(false)" data-i18n="none">Keine</button>
                     </small>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Abbrechen</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal" data-i18n="cancel">Abbrechen</button>
                 <button type="button" class="btn btn-success" onclick="createDMSBatchConfirmed()">
-                    <i class="fas fa-rocket"></i> Batch erstellen
+                    <i class="fas fa-rocket"></i> <span data-i18n="prep.dokob.create_batch">Batch erstellen</span>
                 </button>
             </div>
         </div>

@@ -81,7 +81,7 @@
                 <ul class="navbar-nav ml-auto">
                     <!-- Source System Selector -->
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle py-1" href="#" id="sourceSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Quellsystem (R/3)">
+                        <a class="nav-link dropdown-toggle py-1" href="#" id="sourceSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Quellsystem (R/3)" data-i18n-title="nav.source_tooltip">
                             <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;" data-i18n="nav.source">QUELLE</small>
                             <span class="badge badge-info">
                                 <i class="fas fa-download"></i> {{ source_system | upper }}
@@ -104,7 +104,7 @@
                     
                     <!-- Target System Selector -->
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle py-1" href="#" id="targetSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Zielsystem (S/4HANA)">
+                        <a class="nav-link dropdown-toggle py-1" href="#" id="targetSystemDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Zielsystem (S/4HANA)" data-i18n-title="nav.target_tooltip">
                             <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;" data-i18n="nav.target">ZIEL</small>
                             <span class="badge {% if 'prod' in (target_system_label|lower) %}badge-danger{% else %}badge-success{% endif %}">
                                 <i class="fas fa-upload"></i> {{ target_system | upper }}
@@ -127,7 +127,7 @@
 
                     <!-- DIL System Indicator (HANA - read-only, not switchable) -->
                     <li class="nav-item">
-                        <span class="nav-link py-1" title="DIL Datenanreicherung (HANA: {{ dil_host }}:{{ dil_port }})">
+                        <span class="nav-link py-1" title="DIL Datenanreicherung (HANA: {{ dil_host }}:{{ dil_port }})" data-i18n-title="nav.dil_tooltip">
                             <small class="text-muted d-block" style="font-size: 0.6rem; line-height: 1;">DIL</small>
                             <span class="badge badge-{{ 'warning' if dil_connected else 'secondary' }}">
                                 <i class="fas fa-database"></i> {{ dil_short }}
@@ -140,7 +140,7 @@
                     </li>
                     <!-- Language Toggle -->
                     <li class="nav-item">
-                        <a class="nav-link py-1" href="#" id="langToggle" onclick="I18n.setLang(I18n.getLang()==='de'?'en':'de'); return false;" title="Sprache / Language" style="cursor:pointer; font-size: 0.85rem; line-height: 2.2;">
+                        <a class="nav-link py-1" href="#" id="langToggle" onclick="I18n.setLang(I18n.getLang()==='de'?'en':'de'); return false;" title="Sprache / Language" data-i18n-title="lang.toggle_tip" style="cursor:pointer; font-size: 0.85rem; line-height: 2.2;">
                             🇩🇪 DE
                         </a>
                     </li>
@@ -165,7 +165,7 @@
                         </div>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/" title="Zurück zur Hauptseite">
+                        <a class="nav-link" href="/" title="Zurück zur Hauptseite" data-i18n-title="nav.back_tooltip">
                             <i class="fas fa-arrow-left"></i>
                         </a>
                     </li>

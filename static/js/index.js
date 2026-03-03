@@ -580,21 +580,21 @@ function renderGantt(waves, batches) {
         const waveBatches = (batches || []).filter(b => b.wave === w.wave_name);
 
         // Render each wave task row, then its assigned batches directly underneath
-        waveTasks.forEach(t => {
-            const startStr = w[t.key + '_start'];
-            const endStr = w[t.key + '_end'];
-            const status = w[t.key + '_status'] || 'vorbereitung';
+        waveTasks.forEach(wt => {
+            const startStr = w[wt.key + '_start'];
+            const endStr = w[wt.key + '_end'];
+            const status = w[wt.key + '_status'] || 'vorbereitung';
             // Calculate duration in days for the wave task
             let durationInfo = '';
             if (startStr && endStr) {
                 const dDays = Math.round((parseLocalDate(endStr) - parseLocalDate(startStr)) / 86400000) + 1;
                 durationInfo = ` <span class="text-muted" style="font-size:0.7rem;">(${dDays} ${t('gantt.days')})</span>`;
             }
-            const label = `<span class="task-env ${t.env}">${t.env.toUpperCase()}</span> ${t.label.split(' ')[1]}${durationInfo}`;
-            html += renderBarRow(label, startStr, endStr, getStatusText(status), 'wave-' + t.env + ' status-' + status);
+            const label = `<span class="task-env ${wt.env}">${wt.env.toUpperCase()}</span> ${wt.label.split(' ')[1]}${durationInfo}`;
+            html += renderBarRow(label, startStr, endStr, getStatusText(status), 'wave-' + wt.env + ' status-' + status);
 
             // Batches assigned to this task
-            const taskKey = 'task_' + t.key; // e.g. task_qual_load
+            const taskKey = 'task_' + wt.key; // e.g. task_qual_load
             const assigned = waveBatches.filter(b => b[taskKey]);
             assigned.forEach(b => {
                 const batchLabel = b.description || b.batch_id;
@@ -669,11 +669,11 @@ function renderTaskList(waves) {
 
     let html = '';
     waves.forEach(w => {
-        tasks.forEach(t => {
-            const status = w[t.key + '_status'] || 'vorbereitung';
-            const startStr = w[t.key + '_start'];
-            const endStr = w[t.key + '_end'];
-            const envClass = t.env === 'Qual' ? 'qual' : 'prod';
+        tasks.forEach(tk => {
+            const status = w[tk.key + '_status'] || 'vorbereitung';
+            const startStr = w[tk.key + '_start'];
+            const endStr = w[tk.key + '_end'];
+            const envClass = tk.env === 'Qual' ? 'qual' : 'prod';
             const dateRange = (startStr && endStr)
                 ? `${formatDateShort(startStr)} → ${formatDateShort(endStr)}`
                 : '<span class="text-muted">-</span>';
@@ -682,19 +682,19 @@ function renderTaskList(waves) {
                 <tr class="task-row">
                     <td>
                         <strong>${w.wave_name}</strong><br>
-                        <span class="task-env ${envClass}">${t.env}</span>
-                        <i class="fas ${t.icon} fa-xs"></i> ${t.label}
+                        <span class="task-env ${envClass}">${tk.env}</span>
+                        <i class="fas ${tk.icon} fa-xs"></i> ${tk.label}
                     </td>
                     <td class="date-range">${dateRange}</td>
                     <td>
                         <div class="d-flex align-items-center">
                             <span class="badge ${getStatusClass(status)} status-badge mr-1" 
-                                onclick="cycleTaskStatus(${w.id}, '${t.key}_status', '${getPrevStatus(status)}')" 
+                                onclick="cycleTaskStatus(${w.id}, '${tk.key}_status', '${getPrevStatus(status)}')" 
                                 title="Klick: ← ${getStatusText(getPrevStatus(status))}">
                                 <i class="fas fa-chevron-left fa-xs"></i></span>
                             <span class="badge ${getStatusClass(status)} px-2">${getStatusText(status)}</span>
                             <span class="badge ${getStatusClass(status)} status-badge ml-1" 
-                                onclick="cycleTaskStatus(${w.id}, '${t.key}_status', '${getNextStatus(status)}')" 
+                                onclick="cycleTaskStatus(${w.id}, '${tk.key}_status', '${getNextStatus(status)}')" 
                                 title="Klick: → ${getStatusText(getNextStatus(status))}">
                                 <i class="fas fa-chevron-right fa-xs"></i></span>
                             <button class="btn btn-sm btn-link p-0 ml-2 text-muted" onclick="editWavePlan('${w.wave_name}')" title="${t('tasklist.edit_wave')}">

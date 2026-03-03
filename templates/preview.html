@@ -185,34 +185,34 @@
                                 <tr>
                                     <th><input type="checkbox" id="selectAllCheckbox"></th>
                                     <th data-column="id">ID</th>
-                                    <th data-column="source_doc">Source Doc</th>
-                                    <th data-column="target_doc" class="target-col">Target Doc</th>
-                                    <th data-column="type_info">Type/Ver/Part</th>
-                                    <th data-column="target_type" class="target-col">Target Type</th>
-                                    <th data-column="dokob">Source DOKOB</th>
-                                    <th data-column="target_dokob" class="target-col">Target DOKOB</th>
-                                    <th data-column="objky">Source OBJKY</th>
-                                    <th data-column="target_objky" class="target-col">Target OBJKY</th>
-                                    <th data-column="doc_status" data-i18n="prev.columns.docstatus">Dok-Status</th>
-                                    <th data-column="description">Description</th>
-                                    <th data-column="filename">Filename</th>
-                                    <th data-column="file_size">File Size</th>
-                                    <th data-column="file_count">Files (S/T)</th>
-                                    <th data-column="link_count">Links (S/E/T)</th>
-                                    <th data-column="ablage">Ablage</th>
-                                    <th data-column="auth_group">Auth Group</th>
-                                    <th data-column="execution">Execution</th>
-                                    <th data-column="link_status">Link Status</th>
-                                    <th data-column="error_category">Error Category</th>
-                                    <th data-column="source_loioid">Source LOIO</th>
-                                    <th data-column="mime_type">MIME Type</th>
+                                    <th data-column="source_doc" data-i18n="prev.th.source_doc">Quell-Dok.</th>
+                                    <th data-column="target_doc" class="target-col" data-i18n="prev.th.target_doc">Ziel-Dok.</th>
+                                    <th data-column="type_info" data-i18n="prev.th.type_info">Typ/Ver./Teil</th>
+                                    <th data-column="target_type" class="target-col" data-i18n="prev.th.target_type">Ziel-Typ</th>
+                                    <th data-column="dokob" data-i18n="prev.th.source_dokob">Quell-DOKOB</th>
+                                    <th data-column="target_dokob" class="target-col" data-i18n="prev.th.target_dokob">Ziel-DOKOB</th>
+                                    <th data-column="objky" data-i18n="prev.th.source_objky">Quell-OBJKY</th>
+                                    <th data-column="target_objky" class="target-col" data-i18n="prev.th.target_objky">Ziel-OBJKY</th>
+                                    <th data-column="doc_status" data-i18n="prev.th.docstatus">Dok.-Status</th>
+                                    <th data-column="description" data-i18n="prev.th.description">Beschreibung</th>
+                                    <th data-column="filename" data-i18n="prev.th.filename">Dateiname</th>
+                                    <th data-column="file_size" data-i18n="prev.th.file_size">Dateigröße</th>
+                                    <th data-column="file_count" data-i18n="prev.th.file_count">Dateien (Q/Z)</th>
+                                    <th data-column="link_count" data-i18n="prev.th.link_count">Links (Q/V/Z)</th>
+                                    <th data-column="ablage" data-i18n="prev.th.ablage">Ablage</th>
+                                    <th data-column="auth_group" data-i18n="prev.th.auth_group">Berecht.gruppe</th>
+                                    <th data-column="execution" data-i18n="prev.th.execution">Ausführung</th>
+                                    <th data-column="link_status" data-i18n="prev.th.link_status">Link-Status</th>
+                                    <th data-column="error_category" data-i18n="prev.th.error_cat">Fehlerkategorie</th>
+                                    <th data-column="source_loioid" data-i18n="prev.th.source_loio">Quell-LOIO</th>
+                                    <th data-column="mime_type" data-i18n="prev.th.mime_type">MIME-Typ</th>
                                     <th data-column="batch_id">Batch ID</th>
-                                    <th data-column="created_at">Created At</th>
-                                    <th data-column="created_by">Created By</th>
-                                    <th data-column="exec_started">Exec Started</th>
-                                    <th data-column="exec_completed">Exec Completed</th>
-                                    <th data-column="exec_error">Exec Error</th>
-                                    <th>Actions</th>
+                                    <th data-column="created_at" data-i18n="prev.th.created_at">Erstellt am</th>
+                                    <th data-column="created_by" data-i18n="prev.th.created_by">Erstellt von</th>
+                                    <th data-column="exec_started" data-i18n="prev.th.exec_started">Ausf. gestartet</th>
+                                    <th data-column="exec_completed" data-i18n="prev.th.exec_completed">Ausf. abgeschlossen</th>
+                                    <th data-column="exec_error" data-i18n="prev.th.exec_error">Ausf.-Fehler</th>
+                                    <th data-i18n="prev.th.actions">Aktionen</th>
                                 </tr>
                             </thead>
                             <tbody id="recordsBody">
@@ -275,11 +275,11 @@
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_source_doc" value="source_doc" checked>
-                    <label class="form-check-label" for="col_source_doc">Source Doc</label>
+                    <label class="form-check-label" for="col_source_doc" data-i18n="prev.col.source_doc">Quell-Dok.</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_doc" value="target_doc" checked>
-                    <label class="form-check-label" for="col_target_doc"><span class="text-primary">&#x25B8;</span> Target Doc</label>
+                    <label class="form-check-label" for="col_target_doc"><span class="text-primary">&#x25B8;</span> <span data-i18n="prev.col.target_doc">Ziel-Dok.</span></label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_type_info" value="type_info" checked>
@@ -287,23 +287,23 @@
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_type" value="target_type" checked>
-                    <label class="form-check-label" for="col_target_type"><span class="text-primary">&#x25B8;</span> Target Type</label>
+                    <label class="form-check-label" for="col_target_type"><span class="text-primary">&#x25B8;</span> <span data-i18n="prev.col.target_type">Ziel-Typ</span></label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_dokob" value="dokob" checked>
-                    <label class="form-check-label" for="col_dokob">Source DOKOB</label>
+                    <label class="form-check-label" for="col_dokob" data-i18n="prev.col.source_dokob">Quell-DOKOB</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_dokob" value="target_dokob" checked>
-                    <label class="form-check-label" for="col_target_dokob"><span class="text-primary">&#x25B8;</span> Target DOKOB</label>
+                    <label class="form-check-label" for="col_target_dokob"><span class="text-primary">&#x25B8;</span> <span data-i18n="prev.col.target_dokob">Ziel-DOKOB</span></label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_objky" value="objky" checked>
-                    <label class="form-check-label" for="col_objky">Source OBJKY</label>
+                    <label class="form-check-label" for="col_objky" data-i18n="prev.col.source_objky">Quell-OBJKY</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_target_objky" value="target_objky" checked>
-                    <label class="form-check-label" for="col_target_objky"><span class="text-primary">&#x25B8;</span> Target OBJKY</label>
+                    <label class="form-check-label" for="col_target_objky"><span class="text-primary">&#x25B8;</span> <span data-i18n="prev.col.target_objky">Ziel-OBJKY</span></label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_doc_status" value="doc_status" checked>
@@ -358,11 +358,11 @@
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_mime_type" value="mime_type">
-                    <label class="form-check-label" for="col_mime_type">MIME Type</label>
+                    <label class="form-check-label" for="col_mime_type" data-i18n="prev.col.mime_type">MIME-Typ</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_batch_id" value="batch_id">
-                    <label class="form-check-label" for="col_batch_id">Batch ID</label>
+                    <label class="form-check-label" for="col_batch_id">Batch-ID</label>
                 </div>
                 <div class="form-check">
                     <input class="form-check-input column-toggle" type="checkbox" id="col_created_at" value="created_at">

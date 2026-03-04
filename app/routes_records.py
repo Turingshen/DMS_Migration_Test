@@ -235,6 +235,7 @@ def get_results(batch_id):
                 validation_notes,
                 validated_by,
                 validated_at,
+                source_authorization_group,
                 authorization_group,
                 filename,
                 file_size_bytes,
@@ -276,7 +277,7 @@ def migration_rules_page():
 
 @migrate_bp.route('/rules/list', methods=['GET'])
 def list_migration_rules():
-    """Get all active migration rules (translation/overwrite)."""
+    """Get all migration rules (translation/overwrite), including inactive ones."""
     try:
         # Check if execution_order column exists
         with misc_engine.begin() as con:
@@ -306,8 +307,7 @@ def list_migration_rules():
                         active,
                         notes
                     FROM dbo.migration_translations
-                    WHERE active = 1
-                    ORDER BY execution_order, id
+                    ORDER BY active DESC, execution_order, id
                 """
             else:
                 query = """
@@ -327,8 +327,7 @@ def list_migration_rules():
                         active,
                         notes
                     FROM dbo.migration_translations
-                    WHERE active = 1
-                    ORDER BY id
+                    ORDER BY active DESC, id
                 """
             
             df = pd.read_sql(query, con)
@@ -471,6 +470,36 @@ def delete_migration_rule(rule_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@migrate_bp.route('/rules/<int:rule_id>/toggle', methods=['POST'])
+def toggle_rule_active(rule_id):
+    """Toggle rule active/inactive status."""
+    try:
+        with misc_engine.begin() as con:
+            # Toggle the active flag (flip 0 to 1 and 1 to 0)
+            toggle_query = text("""
+                UPDATE dbo.migration_translations
+                SET active = CASE WHEN active = 1 THEN 0 ELSE 1 END
+                WHERE id = :id
+            """)
+            con.execute(toggle_query, {'id': rule_id})
+            
+            # Get the new active status to return
+            result = con.execute(text(
+                "SELECT active FROM dbo.migration_translations WHERE id = :id"
+            ), {'id': rule_id}).fetchone()
+            
+            new_status = result[0] if result else None
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Rule status toggled',
+            'active': new_status
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @migrate_bp.route('/rules/<int:rule_id>/move_up', methods=['POST'])
 def move_rule_up(rule_id):
     """Move a rule up in execution order."""
@@ -554,6 +583,7 @@ def get_batch_logs(batch_id):
                 source_documenttype,
                 target_documenttype,
                 source_description,
+                source_authorization_group,
                 authorization_group,
                 execution_status,
                 execution_error,

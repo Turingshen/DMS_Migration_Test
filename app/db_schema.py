@@ -37,6 +37,7 @@ CREATE TABLE dbo.migration_staging (
     filename NVARCHAR(255),
     file_size_bytes INT,
     mime_type VARCHAR(100),
+    source_authorization_group VARCHAR(20),
     authorization_group VARCHAR(20),
     
     -- Validation status
@@ -546,6 +547,16 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has ablage column")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add ablage column: {e}")
+
+        # Source authorization group (original value before rule application)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'source_authorization_group') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD source_authorization_group VARCHAR(20) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has source_authorization_group column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add source_authorization_group column: {e}")
 
         # Sanitized document number (DOKNR with slashes, umlauts, etc. fixed)
         try:

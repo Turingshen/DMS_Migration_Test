@@ -475,17 +475,78 @@ def load_dms_objects_stream():
                         stats[dokob] = 0
                         yield f"data: {json.dumps({'type': 'step_error', 'dokob': dokob, 'error': str(e)})}\n\n"
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Verarbeite Daten...', 'percent': 95})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Dedupliziere Dokumente...', 'percent': 92})}\n\n"
             
             # Combine all results
             if all_results:
                 combined_df = pd.concat(all_results, ignore_index=True)
+                
+                # --- DEDUPLICATION: Group by document, collect all object links ---
+                # Each unique document (doknr/dokar/dokvr/doktl) should only appear ONCE.
+                # Multiple DOKOB/OBJKY entries are collected into object_links JSON array.
+                raw_count = len(combined_df)
+                doc_key_cols = ['doknr', 'dokar', 'dokvr', 'doktl']
+                
+                # Build composite key for grouping
+                def _doc_key(row):
+                    return (
+                        str(row.get('doknr', '') or ''),
+                        str(row.get('dokar', '') or ''),
+                        str(row.get('dokvr', '00') or '00'),
+                        str(row.get('doktl', '000') or '000'),
+                    )
+                
+                # Collect all object links per unique document
+                object_links_map = {}  # doc_key -> list of unique (dokob, objky) tuples
+                for _, row in combined_df.iterrows():
+                    key = _doc_key(row)
+                    dokob = row.get('dokob')
+                    objky = row.get('objky')
+                    if key not in object_links_map:
+                        object_links_map[key] = []
+                    if pd.notnull(dokob) and pd.notnull(objky):
+                        pair = (str(dokob).strip(), str(objky).strip())
+                        if pair not in object_links_map[key]:  # Deduplicate pairs
+                            object_links_map[key].append(pair)
+                
+                # Deduplicate DataFrame: keep first occurrence of each document
+                combined_df = combined_df.drop_duplicates(subset=[c for c in doc_key_cols if c in combined_df.columns], keep='first')
+                dedup_count = raw_count - len(combined_df)
+                
+                # Add object_links JSON and link_count for each row
+                def get_links_json(row):
+                    key = _doc_key(row)
+                    links = object_links_map.get(key, [])
+                    return json.dumps([{'dokob': d, 'objky': o} for d, o in links]) if links else None
+                
+                def get_link_count(row):
+                    key = _doc_key(row)
+                    return len(object_links_map.get(key, []))
+                
+                combined_df = combined_df.copy()
+                combined_df['object_links'] = combined_df.apply(get_links_json, axis=1)
+                combined_df['link_count'] = combined_df.apply(get_link_count, axis=1)
+                
                 data_list = combined_df.to_dict(orient='records')
+                
+                # stats[dokob] keeps the ORIGINAL count (object links before dedup)
+                # This shows how many links exist per DOKOB type
+                # stats['total'] will be the deduplicated document count
+                
+                if dedup_count > 0:
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Dedupliziert: {raw_count:,} → {len(data_list):,} Dokumente ({dedup_count:,} Objektlinks zusammengefasst)', 'percent': 94})}\n\n"
+                    print(f"[DMS Load] Deduplicated: {raw_count} → {len(data_list)} records ({dedup_count} duplicate rows removed)")
             else:
                 data_list = []
+                raw_count = 0
+                dedup_count = 0
             
             stats['total'] = len(data_list)
+            stats['total_raw'] = raw_count if all_results else 0
+            stats['duplicates_removed'] = dedup_count if all_results else 0
             total_time = time.time() - start_time
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Speichere Daten...', 'percent': 96})}\n\n"
             
             # Auto-save to SQLite
             saved = False
@@ -757,8 +818,8 @@ def create_dms_migration_batch_stream():
             yield f"data: {json.dumps({'type': 'status', 'message': 'Bereite Staging-Daten vor...', 'percent': 15})}\n\n"
             
             # Helper function to compute target document number
-            # - Auto-generated IDs (25 digits, all numeric) ? None (will get new number in target)
-            # - Manual/external IDs (contain letters) ? preserve as target number
+            # - Auto-generated IDs (25 digits, all numeric) → None (will get new number in target)
+            # - Manual/external IDs (contain letters) → preserve as target number
             def compute_target_docnumber(doknr):
                 if pd.isnull(doknr):
                     return None
@@ -767,16 +828,65 @@ def create_dms_migration_batch_stream():
                 if len(val) == 25:
                     try:
                         int(val.lstrip('0') or '0')
-                        return None  # Auto-generated ? will get new number
+                        return None  # Auto-generated → will get new number
                     except (ValueError, TypeError):
                         pass
-                # Manual/external ID ? preserve it
+                # Manual/external ID → preserve it
                 return val[:25]
+            
+            # --- DEDUPLICATION: Group by document, collect all object links ---
+            # Each unique document (doknr/dokar/dokvr/doktl) should only appear ONCE in staging.
+            # Multiple DOKOB/OBJKY entries are collected into source_object_links JSON array.
+            doc_key_cols = ['doknr', 'dokar', 'dokvr', 'doktl']
+            
+            # Build composite key for grouping
+            def _doc_key(row):
+                return (
+                    str(row.get('doknr', '') or ''),
+                    str(row.get('dokar', '') or ''),
+                    str(row.get('dokvr', '00') or '00'),
+                    str(row.get('doktl', '000') or '000'),
+                )
+            
+            # Collect all object links per unique document
+            object_links_map = {}  # doc_key -> list of unique (dokob, objky) tuples
+            for _, row in dms_df.iterrows():
+                key = _doc_key(row)
+                dokob = row.get('dokob')
+                objky = row.get('objky')
+                if key not in object_links_map:
+                    object_links_map[key] = []
+                if pd.notnull(dokob) and pd.notnull(objky):
+                    pair = (str(dokob).strip(), str(objky).strip())
+                    if pair not in object_links_map[key]:  # Deduplicate (dokob, objky) pairs
+                        object_links_map[key].append(pair)
+            
+            # Deduplicate DataFrame: keep first occurrence of each document
+            before_count = len(dms_df)
+            dms_df = dms_df.drop_duplicates(subset=[c for c in doc_key_cols if c in dms_df.columns], keep='first')
+            dedup_count = before_count - len(dms_df)
+            if dedup_count > 0:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Dedupliziert: {before_count:,} → {len(dms_df):,} ({dedup_count:,} Duplikate entfernt)', 'percent': 17})}\n\n"
+                print(f"[DMS Batch] Deduplicated: {before_count} → {len(dms_df)} records ({dedup_count} duplicate rows removed)")
+            
+            # Build source_object_links JSON and source_link_count for each row
+            def get_links_json(row):
+                key = _doc_key(row)
+                links = object_links_map.get(key, [])
+                return json.dumps([{'dokob': d, 'objky': o} for d, o in links]) if links else None
+            
+            def get_link_count(row):
+                key = _doc_key(row)
+                return len(object_links_map.get(key, []))
+            
+            dms_df = dms_df.copy()
+            dms_df['source_object_links'] = dms_df.apply(get_links_json, axis=1)
+            dms_df['source_link_count'] = dms_df.apply(get_link_count, axis=1)
             
             # Prepare staging DataFrame using vectorized operations (FAST!)
             # NOTE: target_* fields depend on whether source is auto-generated or manual
-            # - Auto-generated IDs ? target stays None (will get new number during migration)
-            # - Manual/external IDs ? target = source (preserve external number)
+            # - Auto-generated IDs → target stays None (will get new number during migration)
+            # - Manual/external IDs → target = source (preserve external number)
             staging_df = pd.DataFrame({
                 'batch_id': batch_id,
                 'created_by': current_user,
@@ -786,6 +896,8 @@ def create_dms_migration_batch_stream():
                 'source_documentversion': dms_df['dokvr'].fillna('00'),
                 'source_dokob': dms_df['dokob'].fillna(''),
                 'source_objky': dms_df['objky'].fillna(''),
+                'source_object_links': dms_df['source_object_links'],
+                'source_link_count': dms_df['source_link_count'],
                 'target_documentnumber': dms_df['doknr'].apply(compute_target_docnumber),
                 'target_documentpart': dms_df['doktl'].fillna('000'),
                 'target_documenttype': dms_df['dokar'].fillna(''),
@@ -1053,3 +1165,298 @@ def update_wave_task_status():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ============================================================================
+# DMS Document Delete (Target System) - Independent of Migration
+# ============================================================================
+
+@migrate_bp.route('/api/dms/delete', methods=['POST'])
+def delete_dms_document():
+    """
+    Delete a DMS document in the target S4 system (e.g. ZVFR3).
+    Uses OData DELETE via API_DMS_PROCESS_SRV.
+    
+    This is independent of the migration process and can be used anytime.
+    
+    Request body:
+    {
+        "doc_type": "IY1",
+        "doc_number": "DOCNUM123",
+        "doc_version": "00",
+        "doc_part": "000",
+        "target_system": "zvfr3"  # optional, defaults to session target_system
+    }
+    """
+    import requests
+    from app_config import cfg
+    from app.credentials import get_credentials
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'Missing request body'}), 400
+        
+        doc_type = data.get('doc_type', '').strip()
+        doc_number = data.get('doc_number', '').strip()
+        doc_version = data.get('doc_version', '00').strip().zfill(2)
+        doc_part = data.get('doc_part', '000').strip().zfill(3)
+        target_system = data.get('target_system') or session.get('target_system', 'zvfr3')
+        
+        if not doc_type or not doc_number:
+            return jsonify({'success': False, 'error': 'doc_type and doc_number are required'}), 400
+        
+        # Get system config
+        sys_config = cfg.config_env.get(target_system, {})
+        if not sys_config:
+            return jsonify({'success': False, 'error': f'Unknown target system: {target_system}'}), 400
+        
+        auth_type = sys_config.get('auth_type', 'oauth')
+        verify_ssl = sys_config.get('verify_ssl', True)
+        
+        # Build base URL
+        base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+        if not base_url:
+            return jsonify({'success': False, 'error': f'No document API configured for {target_system}'}), 400
+        
+        # Build OData entity key
+        entity_key = (
+            f"A_DocumentInfoRecord("
+            f"DocumentInfoRecordDocType='{doc_type}',"
+            f"DocumentInfoRecordDocNumber='{doc_number}',"
+            f"DocumentInfoRecordDocVersion='{doc_version}',"
+            f"DocumentInfoRecordDocPart='{doc_part}')"
+        )
+        delete_url = f"{base_url}/{entity_key}"
+        
+        # Create session with appropriate auth
+        delete_session = requests.Session()
+        
+        if auth_type == 'basic':
+            creds = get_credentials(target_system)
+            if not creds:
+                return jsonify({
+                    'success': False, 
+                    'error': f'No Basic Auth credentials for {target_system}. Configure in Settings.'
+                }), 401
+            auth_tuple = (creds['username'], creds['password'])
+            delete_session.auth = auth_tuple
+            delete_session.verify = verify_ssl
+            
+            # First fetch CSRF token
+            csrf_headers = {
+                'X-CSRF-Token': 'fetch',
+                'Accept': 'application/json'
+            }
+            csrf_resp = delete_session.get(base_url, headers=csrf_headers, auth=auth_tuple, verify=verify_ssl)
+            if csrf_resp.status_code != 200:
+                return jsonify({
+                    'success': False,
+                    'error': f'CSRF fetch failed: {csrf_resp.status_code} {csrf_resp.text[:500]}'
+                }), 500
+            
+            csrf_token = csrf_resp.headers.get('x-csrf-token')
+            if not csrf_token:
+                return jsonify({'success': False, 'error': 'No CSRF token in response'}), 500
+            
+            # Perform DELETE
+            delete_headers = {
+                'X-CSRF-Token': csrf_token,
+                'Accept': 'application/json',
+                'If-Match': '*'  # Force delete regardless of ETag
+            }
+            delete_resp = delete_session.delete(delete_url, headers=delete_headers, auth=auth_tuple, verify=verify_ssl)
+            
+        else:
+            # OAuth / API-Key
+            bearer_token = session.get('bearer_token')
+            api_key = sys_config.get('X-API-Key')
+            
+            if not bearer_token:
+                return jsonify({'success': False, 'error': 'No bearer token in session'}), 401
+            
+            # Fetch CSRF
+            csrf_headers = {
+                'Authorization': f'Bearer {bearer_token}',
+                'X-API-Key': api_key,
+                'X-CSRF-Token': 'fetch',
+                'Accept': 'application/json'
+            }
+            csrf_resp = delete_session.get(base_url, headers=csrf_headers)
+            if csrf_resp.status_code != 200:
+                return jsonify({
+                    'success': False,
+                    'error': f'CSRF fetch failed: {csrf_resp.status_code}'
+                }), 500
+            
+            csrf_token = csrf_resp.headers.get('x-csrf-token')
+            
+            # Perform DELETE
+            delete_headers = {
+                'Authorization': f'Bearer {bearer_token}',
+                'X-API-Key': api_key,
+                'X-CSRF-Token': csrf_token,
+                'Accept': 'application/json',
+                'If-Match': '*'
+            }
+            delete_resp = delete_session.delete(delete_url, headers=delete_headers)
+        
+        # Handle response
+        if delete_resp.status_code in (200, 204):
+            return jsonify({
+                'success': True,
+                'message': f'Document {doc_type}/{doc_number}/{doc_version}/{doc_part} deleted',
+                'target_system': target_system
+            })
+        elif delete_resp.status_code == 404:
+            return jsonify({
+                'success': False,
+                'error': f'Document not found: {doc_type}/{doc_number}/{doc_version}/{doc_part}',
+                'status_code': 404
+            }), 404
+        else:
+            error_detail = delete_resp.text[:1000] if delete_resp.text else 'No details'
+            return jsonify({
+                'success': False,
+                'error': f'Delete failed: HTTP {delete_resp.status_code}',
+                'detail': error_detail,
+                'url': delete_url
+            }), delete_resp.status_code
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@migrate_bp.route('/api/dms/delete-batch', methods=['POST'])
+def delete_dms_documents_batch():
+    """
+    Delete multiple DMS documents in the target S4 system.
+    Useful for cleanup after test migrations.
+    
+    Request body:
+    {
+        "documents": [
+            {"doc_type": "IY1", "doc_number": "DOC1", "doc_version": "00", "doc_part": "000"},
+            {"doc_type": "IY1", "doc_number": "DOC2", "doc_version": "00", "doc_part": "000"}
+        ],
+        "target_system": "zvfr3"
+    }
+    
+    Returns SSE stream with progress.
+    """
+    import requests
+    import time
+    from app_config import cfg
+    from app.credentials import get_credentials
+    
+    data = request.json
+    if not data or 'documents' not in data:
+        return jsonify({'success': False, 'error': 'Missing documents array'}), 400
+    
+    documents = data.get('documents', [])
+    target_system = data.get('target_system') or session.get('target_system', 'zvfr3')
+    
+    def generate():
+        total = len(documents)
+        deleted = 0
+        failed = 0
+        errors = []
+        
+        yield f"data: {json.dumps({'type': 'start', 'total': total, 'target_system': target_system})}\n\n"
+        
+        try:
+            # Setup session once
+            sys_config = cfg.config_env.get(target_system, {})
+            auth_type = sys_config.get('auth_type', 'oauth')
+            verify_ssl = sys_config.get('verify_ssl', True)
+            base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+            
+            delete_session = requests.Session()
+            
+            if auth_type == 'basic':
+                creds = get_credentials(target_system)
+                if not creds:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'No credentials'})}\n\n"
+                    return
+                auth_tuple = (creds['username'], creds['password'])
+                delete_session.auth = auth_tuple
+                delete_session.verify = verify_ssl
+            
+            # Fetch CSRF once
+            csrf_headers = {'X-CSRF-Token': 'fetch', 'Accept': 'application/json'}
+            if auth_type == 'basic':
+                csrf_resp = delete_session.get(base_url, headers=csrf_headers)
+            else:
+                bearer = session.get('bearer_token')
+                api_key = sys_config.get('X-API-Key')
+                csrf_headers['Authorization'] = f'Bearer {bearer}'
+                csrf_headers['X-API-Key'] = api_key
+                csrf_resp = delete_session.get(base_url, headers=csrf_headers)
+            
+            if csrf_resp.status_code != 200:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'CSRF failed: {csrf_resp.status_code}'})}\n\n"
+                return
+            
+            csrf_token = csrf_resp.headers.get('x-csrf-token')
+            
+            # Delete each document
+            for i, doc in enumerate(documents):
+                doc_type = doc.get('doc_type', '').strip()
+                doc_number = doc.get('doc_number', '').strip()
+                doc_version = doc.get('doc_version', '00').strip().zfill(2)
+                doc_part = doc.get('doc_part', '000').strip().zfill(3)
+                
+                entity_key = (
+                    f"A_DocumentInfoRecord("
+                    f"DocumentInfoRecordDocType='{doc_type}',"
+                    f"DocumentInfoRecordDocNumber='{doc_number}',"
+                    f"DocumentInfoRecordDocVersion='{doc_version}',"
+                    f"DocumentInfoRecordDocPart='{doc_part}')"
+                )
+                delete_url = f"{base_url}/{entity_key}"
+                
+                delete_headers = {
+                    'X-CSRF-Token': csrf_token,
+                    'Accept': 'application/json',
+                    'If-Match': '*'
+                }
+                if auth_type != 'basic':
+                    delete_headers['Authorization'] = f'Bearer {session.get("bearer_token")}'
+                    delete_headers['X-API-Key'] = sys_config.get('X-API-Key')
+                
+                try:
+                    resp = delete_session.delete(delete_url, headers=delete_headers)
+                    if resp.status_code in (200, 204):
+                        deleted += 1
+                        status = 'deleted'
+                    elif resp.status_code == 404:
+                        deleted += 1  # Count as success (already gone)
+                        status = 'not_found'
+                    else:
+                        failed += 1
+                        status = 'failed'
+                        errors.append({
+                            'doc': f"{doc_type}/{doc_number}",
+                            'error': f"HTTP {resp.status_code}"
+                        })
+                except Exception as e:
+                    failed += 1
+                    status = 'error'
+                    errors.append({'doc': f"{doc_type}/{doc_number}", 'error': str(e)})
+                
+                yield f"data: {json.dumps({'type': 'progress', 'current': i+1, 'total': total, 'deleted': deleted, 'failed': failed, 'doc': f'{doc_type}/{doc_number}', 'status': status})}\n\n"
+                
+                time.sleep(0.1)  # Small delay to avoid overwhelming SAP
+            
+            yield f"data: {json.dumps({'type': 'complete', 'total': total, 'deleted': deleted, 'failed': failed, 'errors': errors})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
+

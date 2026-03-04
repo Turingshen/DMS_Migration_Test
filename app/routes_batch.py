@@ -531,7 +531,7 @@ def refresh_batch_data_stream(batch_id):
                 where_clause = " OR ".join(chunk)
                 
                 draw_query = f"""
-                    SELECT doknr, dokar, dokvr, doktl, filep, dokst
+                    SELECT doknr, dokar, dokvr, doktl, filep, dokst, begru
                     FROM dil.DRAW
                     WHERE {where_clause}
 """
@@ -612,14 +612,16 @@ def refresh_batch_data_stream(batch_id):
                            source_dokob, source_objky, filename,
                            target_documenttype, target_documentnumber, target_documentversion,
                            target_documentpart, target_dokob, target_objky,
-                           source_document_status, target_document_status
+                           source_document_status, target_document_status, execution_status
                     FROM dbo.migration_staging
                     WHERE batch_id = '{batch_id}'
                 """, con)
             
-            # Initialize target columns from source if not set
-            if full_df['target_documenttype'].isna().all():
-                full_df['target_documenttype'] = full_df['source_documenttype']
+            # Reset target_documenttype from source before applying rules
+            # BUT only for records that are NOT already successful (preserve successful migrations)
+            not_successful = (full_df['execution_status'] != 'success') | full_df['execution_status'].isna()
+            full_df.loc[not_successful, 'target_documenttype'] = full_df.loc[not_successful, 'source_documenttype']
+            print(f"[REFRESH] Reset target_documenttype for {not_successful.sum()} non-successful records")
             
             # Add alias columns so rules referencing short names work
             # against staging column names (e.g. 'documenttype' -> 'source_documenttype')
@@ -634,57 +636,70 @@ def refresh_batch_data_stream(batch_id):
                 if alias not in full_df.columns and real_col in full_df.columns:
                     full_df[alias] = full_df[real_col]
             
-            # Apply rules using proper apply_translations which handles conditions
-            full_df = _apply_translations(full_df, rules)
+            # Apply rules ONLY to non-successful records (preserve successful migrations)
+            # Filter to non-successful, apply rules, then merge back
+            not_successful_mask = (full_df['execution_status'] != 'success') | full_df['execution_status'].isna()
+            if not_successful_mask.any():
+                non_success_df = full_df.loc[not_successful_mask].copy()
+                non_success_df = _apply_translations(non_success_df, rules)
+                # Update only the non-successful rows in full_df
+                for col in non_success_df.columns:
+                    if col in full_df.columns:
+                        full_df.loc[not_successful_mask, col] = non_success_df[col].values
+                print(f"[REFRESH] Applied rules to {not_successful_mask.sum()} non-successful records")
             
-            # Recompute target_documentnumber based on (possibly changed) target_documenttype
-            # VECTORIZED approach: apply sanitize_doknr to all rows at once instead of iterrows
+            # Recompute target_documentnumber based on VALUE (numeric vs alphanumeric)
+            # NOT based on document type!
+            # - Numeric value (e.g. "123456") → Internal numbering (SAP generates) → target = None
+            # - Alphanumeric value (e.g. "ABLAGEORT") → External numbering → target = value
+            # - Translation rule applied → Has priority, preserve the translated value
             from app.process import sanitize_doknr as _sanitize_doknr
-            INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
             
             if 'target_documentnumber_sanitized' not in full_df.columns:
                 full_df['target_documentnumber_sanitized'] = None
             
-            # Precompute masks
-            target_type_str = full_df['target_documenttype'].fillna('').astype(str).str.strip().str.upper()
-            is_internal = target_type_str.isin(INTERNAL_NUMBERING_TYPES)
-            
-            source_nr_str = full_df['source_documentnumber'].fillna('').astype(str).str.strip()
-            has_source_nr = source_nr_str != ''
-            is_numeric = source_nr_str.str.isdigit() & has_source_nr
-            is_alphanumeric = has_source_nr & ~is_numeric
-            
-            tgt_nr_str = full_df['target_documentnumber'].fillna('').astype(str).str.strip()
-            has_tgt_nr = tgt_nr_str != ''
-            
             # Apply sanitize_doknr vectorized via .apply (function has branching logic, not purely vectorizable)
+            # ONLY for non-successful records - successful records keep their existing values untouched
             def _compute_doknr_row(row):
-                target_type = str(row.get('target_documenttype') or '').strip().upper()
                 current_tgt_nr = row.get('target_documentnumber')
                 source_nr = str(row.get('source_documentnumber') or '').strip()
                 
-                if target_type in INTERNAL_NUMBERING_TYPES:
-                    if source_nr and not source_nr.isdigit():
-                        sanitized, _ = _sanitize_doknr(source_nr)
-                        if sanitized and sanitized.strip():
-                            return source_nr[:25], sanitized[:25]
-                    return None, None
-                elif pd.isna(current_tgt_nr) or str(current_tgt_nr).strip() == '':
-                    if source_nr:
+                current_tgt_str = str(current_tgt_nr).strip() if pd.notna(current_tgt_nr) else ''
+                
+                # PRIORITY 1: If translation rules already changed target_documentnumber (different from source),
+                # preserve that translated value - rules have highest priority
+                if current_tgt_str and current_tgt_str != source_nr:
+                    # Translation was applied - preserve it
+                    sanitized, _ = _sanitize_doknr(current_tgt_str)
+                    if sanitized and sanitized.strip():
+                        return current_tgt_nr, sanitized
+                    return current_tgt_nr, current_tgt_str[:25]
+                
+                # PRIORITY 2: Determine based on VALUE (not document type)
+                # - Numeric source → Internal numbering (SAP generates number)
+                # - Alphanumeric source → External numbering (keep the value)
+                if source_nr:
+                    if source_nr.isdigit():
+                        # Numeric → Internal numbering → SAP generates, we pass None
+                        return None, None
+                    else:
+                        # Alphanumeric → External numbering → Use source value
                         tgt_nr = source_nr[:25]
                         sanitized, _ = _sanitize_doknr(tgt_nr)
                         if sanitized and sanitized.strip():
                             return tgt_nr, sanitized
-                    return None, None
-                else:
-                    sanitized, _ = _sanitize_doknr(str(current_tgt_nr))
-                    if sanitized and sanitized.strip():
-                        return current_tgt_nr, sanitized
-                    return None, None
+                        return tgt_nr, tgt_nr
+                
+                return None, None
             
-            doknr_results = full_df.apply(_compute_doknr_row, axis=1, result_type='expand')
-            full_df['target_documentnumber'] = doknr_results[0]
-            full_df['target_documentnumber_sanitized'] = doknr_results[1]
+            # CRITICAL: Apply ONLY to non-successful records to preserve successful migrations' target fields
+            non_success_mask = (full_df['execution_status'] != 'success') | full_df['execution_status'].isna()
+            if non_success_mask.any():
+                non_success_subset = full_df.loc[non_success_mask].copy()
+                doknr_results = non_success_subset.apply(_compute_doknr_row, axis=1, result_type='expand')
+                full_df.loc[non_success_mask, 'target_documentnumber'] = doknr_results[0].values
+                full_df.loc[non_success_mask, 'target_documentnumber_sanitized'] = doknr_results[1].values
+                print(f"[REFRESH] Computed target_documentnumber for {non_success_mask.sum()} non-successful records, preserved {(~non_success_mask).sum()} successful records")
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
             
@@ -774,6 +789,11 @@ def refresh_batch_data_stream(batch_id):
                 # Document status from DRAW.DOKST
                 dokst = str(row.get('dokst', '')) if pd.notna(row.get('dokst')) else None
                 
+                # Source authorization group (BEGRU) from DRAW
+                begru = str(row.get('begru', '')) if pd.notna(row.get('begru')) else None
+                if begru:
+                    begru = begru.strip()[:20] or None
+                
                 # Description from DRAT.DKTXT
                 drat_desc = str(row.get('dktxt', '')) if pd.notna(row.get('dktxt')) else None
                 if drat_desc and drat_desc.strip():
@@ -787,12 +807,16 @@ def refresh_batch_data_stream(batch_id):
                     'file_size_bytes': file_size_bytes,
                     'filename': filename,
                     'source_document_status': dokst if dokst else None,
-                    'source_description': drat_desc
+                    'source_description': drat_desc,
+                    'source_authorization_group': begru
                 })
             
-            # Also get rule updates
+            # Also get rule updates - ONLY for non-successful records (preserve successful migrations)
             rule_updates = {}
             for _, row in full_df.iterrows():
+                # Skip successful records - don't override their target fields
+                if row.get('execution_status') == 'success':
+                    continue
                 rule_updates[int(row['id'])] = {
                     'target_documenttype': row.get('target_documenttype'),
                     'target_documentnumber': row.get('target_documentnumber'),
@@ -804,6 +828,8 @@ def refresh_batch_data_stream(batch_id):
                     'target_objky': row.get('target_objky'),
                     'target_document_status': row.get('target_document_status')
                 }
+            
+            print(f"[REFRESH] Rule updates prepared for {len(rule_updates)} non-successful records")
             
             # Bulk update using temp table
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 75, 'message': 'Bulk updating via temp table...'})}\n\n"
@@ -819,13 +845,14 @@ def refresh_batch_data_stream(batch_id):
                         file_size_bytes BIGINT,
                         filename NVARCHAR(500),
                         source_document_status NVARCHAR(20),
-                        source_description NVARCHAR(200)
+                        source_description NVARCHAR(200),
+                        source_authorization_group NVARCHAR(20)
                     );
                 """))
                 
                 # Insert metadata updates
                 update_df = pd.DataFrame(update_data)
-                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna() | update_df['source_description'].notna()]
+                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna() | update_df['source_description'].notna() | update_df['source_authorization_group'].notna()]
                 
                 if len(update_df) > 0:
                     chunk_size = 900
@@ -847,7 +874,8 @@ def refresh_batch_data_stream(batch_id):
                             s.source_document_status = COALESCE(t.source_document_status, s.source_document_status),
                             s.source_description = CASE WHEN t.source_description IS NOT NULL AND t.source_description != ''
                                                         AND (s.source_description IS NULL OR s.source_description = '')
-                                                        THEN t.source_description ELSE s.source_description END
+                                                        THEN t.source_description ELSE s.source_description END,
+                            s.source_authorization_group = COALESCE(t.source_authorization_group, s.source_authorization_group)
                         FROM dbo.migration_staging s
                         INNER JOIN #refresh_update t ON s.id = t.staging_id
                     """))
@@ -858,73 +886,77 @@ def refresh_batch_data_stream(batch_id):
                 yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 85, 'message': f'Updated {updated_count} metadata records'})}\n\n"
                 
                 # Update rule results via BULK temp table (not row-by-row!)
-                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 86, 'message': 'Bulk updating rule results...'})}\n\n"
-                
-                con.execute(text("""
-                    IF OBJECT_ID('tempdb..#rules_update') IS NOT NULL DROP TABLE #rules_update;
-                    CREATE TABLE #rules_update (
-                        staging_id INT PRIMARY KEY,
-                        target_documenttype NVARCHAR(10),
-                        target_documentnumber NVARCHAR(50),
-                        target_documentnumber_sanitized NVARCHAR(50),
-                        target_documentversion NVARCHAR(10),
-                        target_documentpart NVARCHAR(10),
-                        authorization_group NVARCHAR(10),
-                        target_dokob NVARCHAR(20),
-                        target_objky NVARCHAR(100),
-                        target_document_status NVARCHAR(10)
-                    );
-                """))
-                
-                # Build DataFrame from rule_updates dict
-                rules_rows = []
-                for staging_id, vals in rule_updates.items():
-                    rules_rows.append({
-                        'staging_id': staging_id,
-                        'target_documenttype': vals.get('target_documenttype'),
-                        'target_documentnumber': vals.get('target_documentnumber'),
-                        'target_documentnumber_sanitized': vals.get('target_documentnumber_sanitized'),
-                        'target_documentversion': vals.get('target_documentversion'),
-                        'target_documentpart': vals.get('target_documentpart'),
-                        'authorization_group': vals.get('authorization_group'),
-                        'target_dokob': vals.get('target_dokob'),
-                        'target_objky': vals.get('target_objky'),
-                        'target_document_status': vals.get('target_document_status')
-                    })
-                
-                rules_df = pd.DataFrame(rules_rows)
-                # Replace NaN with None for SQL compatibility
-                rules_df = rules_df.where(pd.notnull(rules_df), None)
-                
-                # Bulk insert into temp table
-                rules_chunk_size = 900
-                for i in range(0, len(rules_df), rules_chunk_size):
-                    chunk = rules_df.iloc[i:i + rules_chunk_size]
-                    chunk.to_sql('#rules_update', con, if_exists='append', index=False, method='multi')
+                # Only if there are non-successful records to update
+                if len(rule_updates) > 0:
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 86, 'message': f'Bulk updating {len(rule_updates)} rule results...'})}\n\n"
                     
-                    if i % 5000 == 0 and i > 0:
-                        pct = 86 + int((i / len(rules_df)) * 4)  # 86-90%
-                        yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': pct, 'message': f'Rules temp table: {i}/{len(rules_df)}'})}\n\n"
-                
-                # Single UPDATE JOIN — replaces 100k individual UPDATEs!
-                con.execute(text("""
-                    UPDATE s
-                    SET s.target_documenttype = t.target_documenttype,
-                        s.target_documentnumber = t.target_documentnumber,
-                        s.target_documentnumber_sanitized = t.target_documentnumber_sanitized,
-                        s.target_documentversion = t.target_documentversion,
-                        s.target_documentpart = t.target_documentpart,
-                        s.authorization_group = t.authorization_group,
-                        s.target_dokob = t.target_dokob,
-                        s.target_objky = t.target_objky,
-                        s.target_document_status = t.target_document_status
-                    FROM dbo.migration_staging s
-                    INNER JOIN #rules_update t ON s.id = t.staging_id
-                """))
-                
-                con.execute(text("DROP TABLE #rules_update"))
-                
-                yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Rule updates complete'})}\n\n"
+                    con.execute(text("""
+                        IF OBJECT_ID('tempdb..#rules_update') IS NOT NULL DROP TABLE #rules_update;
+                        CREATE TABLE #rules_update (
+                            staging_id INT PRIMARY KEY,
+                            target_documenttype NVARCHAR(10),
+                            target_documentnumber NVARCHAR(50),
+                            target_documentnumber_sanitized NVARCHAR(50),
+                            target_documentversion NVARCHAR(10),
+                            target_documentpart NVARCHAR(10),
+                            authorization_group NVARCHAR(10),
+                            target_dokob NVARCHAR(20),
+                            target_objky NVARCHAR(100),
+                            target_document_status NVARCHAR(10)
+                        );
+                    """))
+                    
+                    # Build DataFrame from rule_updates dict
+                    rules_rows = []
+                    for staging_id, vals in rule_updates.items():
+                        rules_rows.append({
+                            'staging_id': staging_id,
+                            'target_documenttype': vals.get('target_documenttype'),
+                            'target_documentnumber': vals.get('target_documentnumber'),
+                            'target_documentnumber_sanitized': vals.get('target_documentnumber_sanitized'),
+                            'target_documentversion': vals.get('target_documentversion'),
+                            'target_documentpart': vals.get('target_documentpart'),
+                            'authorization_group': vals.get('authorization_group'),
+                            'target_dokob': vals.get('target_dokob'),
+                            'target_objky': vals.get('target_objky'),
+                            'target_document_status': vals.get('target_document_status')
+                        })
+                    
+                    rules_df = pd.DataFrame(rules_rows)
+                    # Replace NaN with None for SQL compatibility
+                    rules_df = rules_df.where(pd.notnull(rules_df), None)
+                    
+                    # Bulk insert into temp table
+                    rules_chunk_size = 900
+                    for i in range(0, len(rules_df), rules_chunk_size):
+                        chunk = rules_df.iloc[i:i + rules_chunk_size]
+                        chunk.to_sql('#rules_update', con, if_exists='append', index=False, method='multi')
+                        
+                        if i % 5000 == 0 and i > 0:
+                            pct = 86 + int((i / len(rules_df)) * 4)  # 86-90%
+                            yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': pct, 'message': f'Rules temp table: {i}/{len(rules_df)}'})}\n\n"
+                    
+                    # Single UPDATE JOIN — replaces 100k individual UPDATEs!
+                    con.execute(text("""
+                        UPDATE s
+                        SET s.target_documenttype = t.target_documenttype,
+                            s.target_documentnumber = t.target_documentnumber,
+                            s.target_documentnumber_sanitized = t.target_documentnumber_sanitized,
+                            s.target_documentversion = t.target_documentversion,
+                            s.target_documentpart = t.target_documentpart,
+                            s.authorization_group = t.authorization_group,
+                            s.target_dokob = t.target_dokob,
+                            s.target_objky = t.target_objky,
+                            s.target_document_status = t.target_document_status
+                        FROM dbo.migration_staging s
+                        INNER JOIN #rules_update t ON s.id = t.staging_id
+                    """))
+                    
+                    con.execute(text("DROP TABLE #rules_update"))
+                    
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Rule updates complete'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Skipped rule updates (all records already successful)'})}\n\n"
             
             # ========== PHASE 5: Object-Link Counts ==========
             yield f"data: {json.dumps({'type': 'status', 'phase': 'link_counts', 'message': 'Phase 5/5: Calculating object link counts...'})}\n\n"
@@ -998,6 +1030,8 @@ def refresh_batch_data_stream(batch_id):
             # Calculate statistics
             total_bytes = size_df['file_size'].dropna().sum() if len(size_df) > 0 else 0
             max_bytes = size_df['file_size'].dropna().max() if len(size_df) > 0 else 0
+            links_excluded_total = sum(lu['excluded_link_count'] for lu in link_updates)
+            records_zero_links = sum(1 for lu in link_updates if lu['source_link_count'] == 0)
             
             # Convert numpy types to native Python types for JSON serialization
             yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0, 'links_excluded': int(links_excluded_total), 'records_zero_links': int(records_zero_links)})}\n\n"

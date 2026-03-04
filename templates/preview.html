@@ -13,6 +13,14 @@
     .workflow-step.active { background: #007bff; color: #fff; }
     .workflow-step.done   { background: #28a745; color: #fff; }
     .workflow-arrow { margin: 0 10px; color: #adb5bd; font-size: 1.2rem; }
+    /* Highlight cells modified by migration rules */
+    .rule-modified {
+        background-color: #fff3cd !important;
+        border-left: 3px solid #ffc107 !important;
+    }
+    .rule-modified small, .rule-modified code {
+        font-weight: 600;
+    }
 </style>
 {% endblock %}
 
@@ -200,7 +208,8 @@
                                     <th data-column="file_count" data-i18n="prev.th.file_count">Dateien (Q/Z)</th>
                                     <th data-column="link_count" data-i18n="prev.th.link_count">Links (Q/V/Z)</th>
                                     <th data-column="ablage" data-i18n="prev.th.ablage">Ablage</th>
-                                    <th data-column="auth_group" data-i18n="prev.th.auth_group">Berecht.gruppe</th>
+                                    <th data-column="source_auth_group" data-i18n="prev.th.source_auth_group">Quell-Ber.gr.</th>
+                                    <th data-column="target_auth_group" class="target-col" data-i18n="prev.th.target_auth_group">Ziel-Ber.gr.</th>
                                     <th data-column="execution" data-i18n="prev.th.execution">Ausführung</th>
                                     <th data-column="link_status" data-i18n="prev.th.link_status">Link-Status</th>
                                     <th data-column="error_category" data-i18n="prev.th.error_cat">Fehlerkategorie</th>
@@ -335,8 +344,12 @@
                     <label class="form-check-label" for="col_ablage" data-i18n="prev.columns.storage">Ablage (KPRO/DB)</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input column-toggle" type="checkbox" id="col_auth_group" value="auth_group" checked>
-                    <label class="form-check-label" for="col_auth_group" data-i18n="prev.columns.authgrp">Berechtigungsgruppe</label>
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_source_auth_group" value="source_auth_group" checked>
+                    <label class="form-check-label" for="col_source_auth_group" data-i18n="prev.columns.source_authgrp">Quell-Ber.gruppe</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input column-toggle" type="checkbox" id="col_target_auth_group" value="target_auth_group" checked>
+                    <label class="form-check-label" for="col_target_auth_group" data-i18n="prev.columns.target_authgrp">Ziel-Ber.gruppe</label>
                 </div>
                 <hr class="my-2">
                 <div class="form-check">
@@ -393,6 +406,9 @@
     </div>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
     <script>window.BATCH_ID = '{{ batch_id }}';</script>
     <script src="/static/js/preview.js"></script>
 {% endblock %}

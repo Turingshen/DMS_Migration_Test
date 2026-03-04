@@ -3,6 +3,51 @@ let selectedRecords = new Set();
 let currentAblageFilter = '';
 const batchId = window.BATCH_ID;
 
+// Progress polling for execution (declared early to avoid TDZ issues)
+let progressInterval = null;
+let pollingTimeoutId = null; // Track the delayed start timeout
+let executionStartTime = null;
+let completionAlertShown = false; // Prevent duplicate completion alerts
+
+// Error Category Details - lazy initialized because t() may not be available yet
+let ERROR_CATEGORY_DETAILS = null;
+
+function getErrorCategoryDetails() {
+    if (!ERROR_CATEGORY_DETAILS) {
+        ERROR_CATEGORY_DETAILS = {
+            'API_KEY_INVALID': { desc: t('err.API_KEY'), class: 'badge-danger' },
+            'TOKEN_EXPIRED': { desc: t('err.TOKEN_EXPIRED'), class: 'badge-danger' },
+            'TOKEN_INVALID': { desc: t('err.INVALID_TOKEN'), class: 'badge-danger' },
+            'CSRF_FAILED': { desc: t('err.CSRF_ERROR'), class: 'badge-danger' },
+            'SOURCE_NOT_FOUND': { desc: t('err.NOT_FOUND'), class: 'badge-warning' },
+            'SOURCE_EMPTY': { desc: t('err.NO_FILES'), class: 'badge-secondary' },
+            'SOURCE_READ_ERROR': { desc: t('err.READ_ERROR'), class: 'badge-warning' },
+            'TARGET_CREATE_FAILED': { desc: t('err.CONTAINER_CREATE_FAIL'), class: 'badge-info' },
+            'TARGET_EXISTS': { desc: t('err.ALREADY_EXISTS'), class: 'badge-info' },
+            'TARGET_LOCKED': { desc: t('err.LOCKED'), class: 'badge-info' },
+            'UPLOAD_SIZE_EXCEEDED': { desc: t('err.PAYLOAD_TOO_LARGE'), class: 'badge-warning' },
+            'UPLOAD_TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-secondary' },
+            'GATEWAY_TIMEOUT': { desc: t('err.GATEWAY_TIMEOUT'), class: 'badge-secondary' },
+            'RATE_LIMITED': { desc: t('err.RATE_LIMIT'), class: 'badge-secondary' },
+            'SERVER_ERROR': { desc: t('err.SERVER_ERROR'), class: 'badge-dark' },
+            'BAD_REQUEST': { desc: t('err.BAD_REQUEST'), class: 'badge-warning' },
+            'UNKNOWN': { desc: t('err.UNKNOWN'), class: 'badge-secondary' },
+            'READ_EMPTY': { desc: t('err.NO_SOURCE_FILES'), class: 'badge-secondary' },
+            'TIMEOUT_RETRY': { desc: t('err.TIMEOUT_RETRY'), class: 'badge-warning' },
+            'API_NOT_IMPLEMENTED': { desc: t('err.NOT_IMPLEMENTED'), class: 'badge-dark' },
+            'CODE_BUG_FIXED': { desc: t('err.BUG_FIXED'), class: 'badge-success' },
+            'CONNECTION_ERROR': { desc: t('err.CONNECTION_ERROR'), class: 'badge-warning' },
+            'TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-warning' },
+            'AUTH_ERROR': { desc: t('err.AUTH_ERROR'), class: 'badge-danger' },
+            'AUTH_FORBIDDEN': { desc: t('err.FORBIDDEN'), class: 'badge-danger' },
+            'CODE_BUG': { desc: t('err.CODE_BUG'), class: 'badge-dark' },
+            'UPLOAD_ERROR': { desc: t('err.UPLOAD_FAIL'), class: 'badge-warning' },
+            'SIZE_EXCEEDED': { desc: t('err.FILE_TOO_LARGE'), class: 'badge-warning' }
+        };
+    }
+    return ERROR_CATEGORY_DETAILS;
+}
+
 // Column visibility state
 let visibleColumns = {
     'id': true,
@@ -21,7 +66,8 @@ let visibleColumns = {
     'file_count': true,
     'link_count': true,
     'ablage': true,
-    'auth_group': true,
+    'source_auth_group': true,
+    'target_auth_group': true,
     'execution': true,
     'link_status': true,
     'error_category': true,
@@ -121,7 +167,7 @@ const defaultVisibleColumns = {
     'objky': true, 'target_objky': true,
     'doc_status': true, 'description': true,
     'filename': true, 'file_size': true, 'file_count': true, 'link_count': true, 'ablage': true,
-    'auth_group': true, 'execution': true,
+    'source_auth_group': true, 'target_auth_group': true, 'execution': true,
     'link_status': true, 'error_category': true,
     'source_loioid': false, 'mime_type': false, 'batch_id': false,
     'created_at': false, 'created_by': false,
@@ -227,8 +273,9 @@ function loadErrorCategories() {
         .then(data => {
             if (data.success && data.categories) {
                 const select = document.getElementById('errorCategoryFilter');
+                const categoryDetails = getErrorCategoryDetails();
                 data.categories.forEach(cat => {
-                    const info = ERROR_CATEGORY_DETAILS[cat.category] || { desc: cat.category };
+                    const info = categoryDetails[cat.category] || { desc: cat.category };
                     const option = document.createElement('option');
                     option.value = cat.category;
                     option.textContent = `${info.desc} (${cat.count})`;
@@ -434,15 +481,24 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     if (failedOpt) failedOpt.textContent = `${t('prev.filter.failed')} (${failedCount.toLocaleString()})`;
     if (partialOpt) partialOpt.textContent = `${t('prev.filter.partial')} (${partialCount.toLocaleString()})`;
     
-    // Calculate runtime based on response-based pacing
-    const transferRate = 1.0;  // seconds per MB
-    const containerOverhead = 1.5;  // API overhead + minimal delay per container
+    // Calculate runtime based on REALISTIC estimates:
+    // - API initialization (test ping, auth, etc.): ~60 seconds fixed overhead
+    // - Transfer rate: ~1 sec/MB
+    // - Container creation: ~5 seconds per container (includes API latency)
+    // - Safety buffer: 30% (accounts for network variability)
+    const apiInitOverhead = 60;
+    const transferRate = 1.0;
+    const containerOverhead = 5.0;
+    const safetyBuffer = 1.3;
     
     const totalSizeMB = (stats.total_size_bytes || 0) / (1024 * 1024);
-    const totalSerialRuntime = (totalSizeMB * transferRate) + (toExecuteCount * containerOverhead);
+    const transferTime = totalSizeMB * transferRate;
+    const processingTime = toExecuteCount * containerOverhead;
+    const totalSerialRuntime = (transferTime + processingTime) * safetyBuffer;
     
     const maxWorkers = currentMaxWorkers;
-    const totalRuntime = totalSerialRuntime / maxWorkers;
+    const parallelRuntime = totalSerialRuntime / maxWorkers;
+    const totalRuntime = toExecuteCount > 0 ? apiInitOverhead + parallelRuntime : 0;
     
     // Update statistics display (use toExecuteCount for "remaining work", totalActive excludes skipped)
     document.getElementById('statRecords').innerHTML = toExecuteCount > 0 
@@ -475,7 +531,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     if (buckets.unknown > 0) breakdown.push(`❓${buckets.unknown}`);
     
     const detailText = toExecuteCount > 0 
-        ? `${breakdown.join(' ')} | ${formatFileSize(stats.total_size_bytes)} | ${maxWorkers} Worker`
+        ? `~1min Init + (${formatFileSize(stats.total_size_bytes)} + ${toExecuteCount}×5s) ÷ ${maxWorkers}`
         : t('runtime.no_pending');
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
@@ -483,12 +539,15 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     window.runtimeStats = {
         buckets: buckets,
         totalSize: stats.total_size_bytes,
+        totalRuntime: totalRuntime,
+        totalSerialRuntime: totalSerialRuntime,
+        parallelRuntime: parallelRuntime,
+        apiInitOverhead: apiInitOverhead,
+        maxWorkers: maxWorkers,
         transferRate: transferRate,
         containerOverhead: containerOverhead,
-        containerCount: toExecuteCount,
-        totalSerialRuntime: totalSerialRuntime,
-        maxWorkers: maxWorkers,
-        totalRuntime: totalRuntime
+        safetyBuffer: safetyBuffer,
+        containerCount: toExecuteCount
     };
 }
 
@@ -533,19 +592,30 @@ function updateBatchStatistics(records) {
     });
     
     // Calculate runtime based on response-based pacing
-    // Transfer rate: ~0.5 sec/MB (download) + ~0.5 sec/MB (upload) = 1 sec/MB
-    // Plus minimal container delay (0.5s) + API overhead (~1s per container)
-    const transferRate = 1.0;  // seconds per MB
-    const containerOverhead = 1.5;  // API overhead + minimal delay per container
+    // REALISTIC ESTIMATES based on actual observations:
+    // - API initialization (test ping, auth, etc.): ~60 seconds fixed overhead
+    // - Transfer rate: ~1 sec/MB (download + upload combined)
+    // - Container creation: ~3-4 seconds per container (API call, processing, response)
+    // - Safety buffer: 20% for network variability
     
-    // Total runtime = transfer time + overhead per container
+    const apiInitOverhead = 60;    // Fixed startup cost in seconds
+    const transferRate = 1.0;      // seconds per MB
+    const containerOverhead = 5.0; // API overhead per container (includes latency)
+    const safetyBuffer = 1.3;      // 30% buffer for network variability
+    
+    // Total runtime = init + (transfer time + overhead per container) * safety
     const totalSizeMB = totalSize / (1024 * 1024);
     const containerCount = pendingRecords.length;
-    const totalSerialRuntime = (totalSizeMB * transferRate) + (containerCount * containerOverhead);
+    const transferTime = totalSizeMB * transferRate;
+    const processingTime = containerCount * containerOverhead;
+    const totalSerialRuntime = (transferTime + processingTime) * safetyBuffer;
     
     // Divide by number of workers for parallel execution
     const maxWorkers = currentMaxWorkers;
-    const totalRuntime = totalSerialRuntime / maxWorkers;
+    const parallelRuntime = totalSerialRuntime / maxWorkers;
+    
+    // Add fixed init overhead (not parallelizable)
+    const totalRuntime = pendingRecords.length > 0 ? apiInitOverhead + parallelRuntime : 0;
     
     // Update statistics display - show pending count and success count
     document.getElementById('statRecords').innerHTML = pendingRecords.length > 0 
@@ -568,7 +638,7 @@ function updateBatchStatistics(records) {
     if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}`);
     
     const detailText = pendingRecords.length > 0 
-        ? `(${formatFileSize(totalSize)}@1s/MB + ${containerCount}×1.5s) ÷ ${maxWorkers} workers`
+        ? `~1min Init + (${formatFileSize(totalSize)} + ${containerCount}×5s) ÷ ${maxWorkers}`
         : t('runtime.no_pending');
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
@@ -578,9 +648,12 @@ function updateBatchStatistics(records) {
         totalSize: totalSize,
         totalRuntime: totalRuntime,
         totalSerialRuntime: totalSerialRuntime,
+        parallelRuntime: parallelRuntime,
+        apiInitOverhead: apiInitOverhead,
         maxWorkers: maxWorkers,
         transferRate: transferRate,
         containerOverhead: containerOverhead,
+        safetyBuffer: safetyBuffer,
         containerCount: containerCount
     };
 }
@@ -592,7 +665,7 @@ function showRuntimeDetails() {
     const b = stats.buckets;
     
     const details = `
-═══ Runtime Calculation (Response-Based) ═══
+═══ Runtime Calculation (Realistic Estimate) ═══
 
 📦 PACKAGE BREAKDOWN:
 ┌─────────────┬───────┬──────────┐
@@ -605,23 +678,28 @@ function showRuntimeDetails() {
 │ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │
 └─────────────┴───────┴──────────┘
 
-📊 CALCULATION (Response-Based Pacing):
-• Total Size: ${formatFileSize(stats.totalSize)}
-• Transfer Time = Size × ${stats.transferRate} sec/MB = ${formatDuration(stats.totalSize / (1024*1024) * stats.transferRate)}
-• Container Overhead = ${stats.containerCount} × ${stats.containerOverhead}s = ${formatDuration(stats.containerCount * stats.containerOverhead)}
-• Serial Runtime = ${formatDuration(stats.totalSerialRuntime)}
+📊 CALCULATION:
+1️⃣ API-Initialisierung (Ping, Auth): ~${stats.apiInitOverhead}s (fix)
+
+2️⃣ Transfer Time:
+   ${formatFileSize(stats.totalSize)} × ${stats.transferRate}s/MB = ${formatDuration(stats.totalSize / (1024*1024) * stats.transferRate)}
+
+3️⃣ Container-Verarbeitung:
+   ${stats.containerCount} Container × ${stats.containerOverhead}s = ${formatDuration(stats.containerCount * stats.containerOverhead)}
+
+4️⃣ Sicherheitspuffer: +${Math.round((stats.safetyBuffer - 1) * 100)}%
 
 🚀 PARALLEL EXECUTION:
 • Workers: ${stats.maxWorkers}
-• Parallel Runtime = ${formatDuration(stats.totalSerialRuntime)} ÷ ${stats.maxWorkers} = ${formatDuration(stats.totalRuntime)}
+• Serielle Zeit: ${formatDuration(stats.totalSerialRuntime)}
+• Parallel: ${formatDuration(stats.parallelRuntime)}
+• + Init: ${formatDuration(stats.apiInitOverhead)}
 
-⏱️ ESTIMATED RUNTIME: ${formatDuration(stats.totalRuntime)}
+⏱️ GESCHÄTZTE LAUFZEIT: ${formatDuration(stats.totalRuntime)}
 
-💡 RESPONSE-BASED PACING:
-• ${t('runtime.immediate')}
-• ${t('runtime.no_wait')}
-• Overhead = 0.5s Delay + ~1s API-Roundtrip pro Container
-• ${t('runtime.faster')}
+💡 HINWEIS:
+• Grobe Schätzung basierend auf Erfahrungswerten
+• Tatsächliche Zeit variiert je nach Netzwerk/Last
     `.trim();
     
     alert(details);
@@ -653,6 +731,18 @@ function displayRecords(records) {
         const execStarted = record.execution_started_at ? formatDateTime(record.execution_started_at) : '-';
         const execCompleted = record.execution_completed_at ? formatDateTime(record.execution_completed_at) : '-';
         
+        // Detect rule-modified values (target differs from source)
+        const isTypeModified = record.target_documenttype && record.source_documenttype && 
+                              record.target_documenttype !== record.source_documenttype;
+        const isDokobModified = record.target_dokob && record.source_dokob && 
+                               record.target_dokob !== record.source_dokob;
+        const isObjkyModified = record.target_objky && record.source_objky && 
+                               record.target_objky !== record.source_objky;
+        const isDocStatusModified = record.target_document_status && record.source_document_status && 
+                                   record.target_document_status !== record.source_document_status;
+        const isAuthGroupModified = record.authorization_group && record.source_authorization_group !== undefined &&
+                                   record.authorization_group !== record.source_authorization_group;
+        
         return `
             <tr class="${record.skip_migration ? 'table-secondary' : ''}">
                 <td>
@@ -665,19 +755,20 @@ function displayRecords(records) {
                 <td data-column="source_doc"><code>${record.source_documentnumber}</code></td>
                 <td data-column="target_doc" class="target-col"><code>${record.target_documentnumber || '-'}</code></td>
                 <td data-column="type_info"><small>${typeInfo}</small></td>
-                <td data-column="target_type" class="target-col"><small>${record.target_documenttype || '-'}</small></td>
+                <td data-column="target_type" class="target-col${isTypeModified ? ' rule-modified' : ''}"><small>${record.target_documenttype || '-'}</small></td>
                 <td data-column="dokob"><small>${formatDokob(record)}</small></td>
-                <td data-column="target_dokob" class="target-col"><small>${record.target_dokob || '-'}</small></td>
+                <td data-column="target_dokob" class="target-col${isDokobModified ? ' rule-modified' : ''}"><small>${record.target_dokob || '-'}</small></td>
                 <td data-column="objky"><small>${formatObjky(record)}</small></td>
-                <td data-column="target_objky" class="target-col"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
-                <td data-column="doc_status"><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
+                <td data-column="target_objky" class="target-col${isObjkyModified ? ' rule-modified' : ''}"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
+                <td data-column="doc_status"${isDocStatusModified ? ' class="rule-modified"' : ''}><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
                 <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
                 <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
                 <td data-column="file_size"><small>${fileSize}</small></td>
                 <td data-column="file_count"><small>${formatFileCount(record)}</small></td>
                 <td data-column="link_count"><small>${formatLinkCount(record)}</small></td>
                 <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
-                <td data-column="auth_group"><small>${record.authorization_group || '-'}</small></td>
+                <td data-column="source_auth_group"><small>${record.source_authorization_group || '-'}</small></td>
+                <td data-column="target_auth_group"${isAuthGroupModified ? ' class="rule-modified"' : ''}><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
                 <td data-column="link_status">${getLinkStatusBadge(record.link_status, record.execution_status, record.target_dokob)}</td>
                 <td data-column="error_category">${getErrorCategoryBadge(record.error_category)}</td>
@@ -734,43 +825,10 @@ function getLinkStatusBadge(linkStatus, execStatus, targetDokob) {
     return map[linkStatus] || '<span class="badge badge-secondary">' + (linkStatus || 'pending') + '</span>';
 }
 
-// Error Category Details (from Python get_error_details)
-const ERROR_CATEGORY_DETAILS = {
-    'API_KEY_INVALID': { desc: t('err.API_KEY'), class: 'badge-danger' },
-    'TOKEN_EXPIRED': { desc: t('err.TOKEN_EXPIRED'), class: 'badge-danger' },
-    'TOKEN_INVALID': { desc: t('err.INVALID_TOKEN'), class: 'badge-danger' },
-    'CSRF_FAILED': { desc: t('err.CSRF_ERROR'), class: 'badge-danger' },
-    'SOURCE_NOT_FOUND': { desc: t('err.NOT_FOUND'), class: 'badge-warning' },
-    'SOURCE_EMPTY': { desc: t('err.NO_FILES'), class: 'badge-secondary' },
-    'SOURCE_READ_ERROR': { desc: t('err.READ_ERROR'), class: 'badge-warning' },
-    'TARGET_CREATE_FAILED': { desc: t('err.CONTAINER_CREATE_FAIL'), class: 'badge-info' },
-    'TARGET_EXISTS': { desc: t('err.ALREADY_EXISTS'), class: 'badge-info' },
-    'TARGET_LOCKED': { desc: t('err.LOCKED'), class: 'badge-info' },
-    'UPLOAD_SIZE_EXCEEDED': { desc: t('err.PAYLOAD_TOO_LARGE'), class: 'badge-warning' },
-    'UPLOAD_TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-secondary' },
-    'GATEWAY_TIMEOUT': { desc: t('err.GATEWAY_TIMEOUT'), class: 'badge-secondary' },
-    'RATE_LIMITED': { desc: t('err.RATE_LIMIT'), class: 'badge-secondary' },
-    'SERVER_ERROR': { desc: t('err.SERVER_ERROR'), class: 'badge-dark' },
-    'BAD_REQUEST': { desc: t('err.BAD_REQUEST'), class: 'badge-warning' },
-    'UNKNOWN': { desc: t('err.UNKNOWN'), class: 'badge-secondary' },
-    // New categories from staging-level errors
-    'READ_EMPTY': { desc: t('err.NO_SOURCE_FILES'), class: 'badge-secondary' },
-    'TIMEOUT_RETRY': { desc: t('err.TIMEOUT_RETRY'), class: 'badge-warning' },
-    'API_NOT_IMPLEMENTED': { desc: t('err.NOT_IMPLEMENTED'), class: 'badge-dark' },
-    'CODE_BUG_FIXED': { desc: t('err.BUG_FIXED'), class: 'badge-success' },
-    // Categories from partial records (file-level errors)
-    'CONNECTION_ERROR': { desc: t('err.CONNECTION_ERROR'), class: 'badge-warning' },
-    'TIMEOUT': { desc: t('err.TIMEOUT'), class: 'badge-warning' },
-    'AUTH_ERROR': { desc: t('err.AUTH_ERROR'), class: 'badge-danger' },
-    'AUTH_FORBIDDEN': { desc: t('err.FORBIDDEN'), class: 'badge-danger' },
-    'CODE_BUG': { desc: t('err.CODE_BUG'), class: 'badge-dark' },
-    'UPLOAD_ERROR': { desc: t('err.UPLOAD_FAIL'), class: 'badge-warning' },
-    'SIZE_EXCEEDED': { desc: t('err.FILE_TOO_LARGE'), class: 'badge-warning' }
-};
-
 function getErrorCategoryBadge(category) {
     if (!category) return '-';
-    const info = ERROR_CATEGORY_DETAILS[category] || { desc: category, class: 'badge-secondary' };
+    const categoryDetails = getErrorCategoryDetails();
+    const info = categoryDetails[category] || { desc: category, class: 'badge-secondary' };
     return `<span class="badge ${info.class}" title="${category}">${info.desc}</span>`;
 }
 
@@ -854,10 +912,6 @@ function updateSelectionInfo() {
     document.getElementById('selectionInfo').textContent = t('prev.records_selected', {n: selectedRecords.size});
     document.getElementById('executeSelectedBtn').disabled = selectedRecords.size === 0;
 }
-
-// Progress polling for execution
-let progressInterval = null;
-let executionStartTime = null;
 
 /**
  * Auto-reconnect: on page load, check if this batch is currently executing.
@@ -996,21 +1050,25 @@ function pollProgress() {
                     
                     const btn = document.getElementById('executeBtn');
                     const cancelBtn = document.getElementById('cancelBtn');
+                    const retryBtn = document.getElementById('retryBtn');
                     
-                    // Show final summary
-                    if (data.status === 'stopped' && data.background_result && data.background_result.stopped) {
-                        const r = data.background_result;
-                        let message = t('mig.stopped') + `\n\n`;
-                        message += `${t('mig.reason')} ${r.stop_reason}\n`;
-                        message += `${t('mig.processed')} ${r.processed}/${r.total}\n`;
-                        message += `${t('mig.successful')} ${r.successful}\n${t('mig.failed')} ${r.failed}\n`;
-                        message += `${t('mig.remaining2')} ${r.remaining}`;
-                        if (r.circuit_breaker_tripped) {
-                            message += '\n\n⚠️ ' + t('mig.token_expired');
+                    // Show final summary (only once)
+                    if (!completionAlertShown) {
+                        completionAlertShown = true;
+                        if (data.status === 'stopped' && data.background_result && data.background_result.stopped) {
+                            const r = data.background_result;
+                            let message = t('mig.stopped') + `\n\n`;
+                            message += `${t('mig.reason')} ${r.stop_reason}\n`;
+                            message += `${t('mig.processed')} ${r.processed}/${r.total}\n`;
+                            message += `${t('mig.successful')} ${r.successful}\n${t('mig.failed')} ${r.failed}\n`;
+                            message += `${t('mig.remaining2')} ${r.remaining}`;
+                            if (r.circuit_breaker_tripped) {
+                                message += '\n\n⚠️ ' + t('mig.token_expired');
+                            }
+                            alert(message);
+                        } else if (data.status === 'completed' || data.status === 'completed_with_errors') {
+                            alert(t('mig.completed') + `\n\n${t('mig.total_label')} ${data.total}\n${t('mig.successful')} ${data.successful}\n${t('mig.failed')} ${data.failed}`);
                         }
-                        alert(message);
-                    } else if (data.status === 'completed' || data.status === 'completed_with_errors') {
-                        alert(t('mig.completed') + `\n\n${t('mig.total_label')} ${data.total}\n${t('mig.successful')} ${data.successful}\n${t('mig.failed')} ${data.failed}`);
                     }
                     
                     // Reset UI
@@ -1026,6 +1084,11 @@ function pollProgress() {
                         selBtn.disabled = selectedRecords.size === 0;
                         selBtn.innerHTML = '<i class="fas fa-play-circle"></i> ' + t('prev.btn.execute_selected');
                     }
+                    // Also reset retry button
+                    if (retryBtn) {
+                        retryBtn.disabled = false;
+                        retryBtn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
+                    }
                     loadRecords();
                 } else {
                     // Other status (e.g. 'pending', 'linking') — show status text
@@ -1040,15 +1103,28 @@ function pollProgress() {
 }
 
 function startProgressPolling() {
+    // Prevent duplicate polling
+    if (progressInterval || pollingTimeoutId) {
+        console.log('[polling] Already running, skipping duplicate start');
+        return;
+    }
     showProgressBar();
+    completionAlertShown = false; // Reset flag when starting new polling
     // Delay polling to give server time to reset counters and start execution
-    setTimeout(() => {
+    pollingTimeoutId = setTimeout(() => {
+        pollingTimeoutId = null;
         progressInterval = setInterval(pollProgress, 1000); // Poll every 1 second
         pollProgress(); // Initial poll after delay
     }, 2000); // Wait 2 seconds before first poll
 }
 
 function stopProgressPolling() {
+    // Clear the delayed start timeout
+    if (pollingTimeoutId) {
+        clearTimeout(pollingTimeoutId);
+        pollingTimeoutId = null;
+    }
+    // Clear the interval
     if (progressInterval) {
         clearInterval(progressInterval);
         progressInterval = null;
@@ -1235,7 +1311,8 @@ function displayRecordDetail(record) {
     html += `<tr><th>${t('detail.target_doc')}</th><td><code>${record.target_documentnumber || '-'}</code></td></tr>`;
     html += `<tr><th>${t('detail.doc_type')}</th><td>${record.source_documenttype}</td></tr>`;
     html += `<tr><th>${t('detail.description')}</th><td>${record.source_description || '-'}</td></tr>`;
-    html += `<tr><th>${t('detail.auth_group')}</th><td>${record.authorization_group || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.source_auth_group')}</th><td>${record.source_authorization_group || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.target_auth_group')}</th><td>${record.authorization_group || '-'}</td></tr>`;
     html += `</table></div>`;
     
     // Execution Information
@@ -1481,22 +1558,33 @@ function retryFailed() {
     .then(data => {
         if (!data) return; // No reset happened
         
+        // Background execution started - let polling handle completion
+        if (data.background) {
+            console.log('[retry] Background migration started, polling for progress');
+            // Polling is already running, just let it handle everything
+            return;
+        }
+        
+        // Non-background response (error cases)
         stopProgressPolling();
         hideProgressBar();
         
         if (data.success) {
             alert(t('mig.retry_done') + `\n\n${t('mig.total_label')} ${data.total}\n${t('mig.successful')} ${data.successful}\n${t('mig.failed')} ${data.failed}`);
             loadRecords();
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
         } else if (data.login_required) {
             alert('⚠️ ' + t('mig.not_logged_in'));
             window.location.href = '/';
         } else if (data.already_running) {
             alert('⚠️ ' + t('mig.already_running') + '\n\n' + data.error);
+            // Polling is already running from the initial start, continue showing progress
         } else {
             alert(t('mig.retry_failed', {msg: data.error}));
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
         }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-redo"></i> ' + t('prev.btn.retry_failed');
     })
     .catch(error => {
         stopProgressPolling();

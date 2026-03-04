@@ -408,7 +408,7 @@ function loadDMSObjects() {
                     hideDmsProgress();
                     displayResults(data.data);
                     renderDokobBadges(data.stats, data.stats_excluded || {}, data.stats_no_file || {});
-                    updateDBStatusFull(data.count, data.stats_excluded || {}, data.stats_no_file || {});
+                    updateDBStatusFull(data.count, data.stats_excluded || {}, data.stats_no_file || {}, data.stats || {});
                 }, 500);
                 break;
             case 'error':
@@ -492,21 +492,30 @@ function applyTableFilter() {
 function renderDokobBadges(stats, excluded, noFile) {
     const container = $('#detailedStats'); container.empty();
     excluded = excluded || {}; noFile = noFile || {};
-    let totalCount = 0, totalExcl = 0, totalNoFile = 0;
+    // Filter out non-DOKOB keys (meta stats like total, total_raw, duplicates_removed)
+    const nonDokobKeys = ['total', 'total_raw', 'duplicates_removed'];
+    
+    // Sum of object links per DOKOB (before deduplication)
+    let totalObjLinks = 0, totalExcl = 0, totalNoFile = 0;
     for (const [k, v] of Object.entries(stats)) {
-        if (k !== 'total' && typeof v === 'number') {
-            totalCount += v; totalExcl += (excluded[k] || 0); totalNoFile += (noFile[k] || 0);
+        if (!nonDokobKeys.includes(k) && typeof v === 'number') {
+            totalObjLinks += v; totalExcl += (excluded[k] || 0); totalNoFile += (noFile[k] || 0);
         }
     }
-    const grandTotal = totalCount + totalExcl + totalNoFile;
+    
+    // Use deduplicated document count if available, otherwise fall back to sum
+    const totalDocs = stats.total || totalObjLinks;
+    const totalRaw = stats.total_raw || totalObjLinks;
+    const dupsRemoved = stats.duplicates_removed || 0;
+    const grandTotal = totalObjLinks + totalExcl + totalNoFile;
 
     // --- Summary row ---
     let summaryHtml = '<div class="stats-summary-row">';
     summaryHtml += `<div class="stats-summary-card summary-batch">
         <i class="fas fa-rocket"></i>
-        <span class="summary-count">${totalCount.toLocaleString()}</span>
+        <span class="summary-count">${totalDocs.toLocaleString()}</span>
         <span>${t('prep.stats.batch_label')}</span>
-        <span class="summary-sub">${t('prep.stats.of_total', {n: grandTotal.toLocaleString()})}</span>
+        <span class="summary-sub">${dupsRemoved > 0 ? `${totalRaw.toLocaleString()} Objektlinks` : t('prep.stats.of_total', {n: grandTotal.toLocaleString()})}</span>
     </div>`;
     if (totalNoFile > 0) {
         summaryHtml += `<div class="stats-summary-card summary-nofile">
@@ -522,12 +531,20 @@ function renderDokobBadges(stats, excluded, noFile) {
             <span>${t('prep.stats.status_excl')}</span>
         </div>`;
     }
+    // Show deduplication info if duplicates were removed
+    if (dupsRemoved > 0) {
+        summaryHtml += `<div class="stats-summary-card summary-dedup">
+            <i class="fas fa-compress-arrows-alt"></i>
+            <span class="summary-count">${dupsRemoved.toLocaleString()}</span>
+            <span>Duplikate entfernt</span>
+        </div>`;
+    }
     summaryHtml += '</div>';
     container.append(summaryHtml);
 
     // Per-DOKOB cards — clickable for batch DOKOB filter
     const entries = Object.entries(stats)
-        .filter(([k, v]) => k !== 'total' && typeof v === 'number')
+        .filter(([k, v]) => !nonDokobKeys.includes(k) && typeof v === 'number')
         .map(([dokob, count]) => [dokob, count, excluded[dokob] || 0, noFile[dokob] || 0])
         .filter(([d, c, e, n]) => c > 0)
         .sort((a, b) => (b[1]+b[2]+b[3]) - (a[1]+a[2]+a[3]));
@@ -570,7 +587,7 @@ function loadDBStatus() {
     }).catch(() => $('#dbStatus').removeClass('badge-success').addClass('badge-secondary'));
 }
 
-function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
+function updateDBStatusFull(batchCount, statsExcluded, statsNoFile, stats) {
     $('#dbCount').text(batchCount.toLocaleString());
     if (batchCount > 0) { $('#dbStatus').removeClass('badge-secondary').addClass('badge-success'); }
     else { $('#dbStatus').removeClass('badge-success').addClass('badge-warning'); }
@@ -578,6 +595,7 @@ function updateDBStatusFull(batchCount, statsExcluded, statsNoFile) {
     for (const v of Object.values(statsNoFile || {})) { if (typeof v === 'number') totalNoFile += v; }
     for (const v of Object.values(statsExcluded || {})) { if (typeof v === 'number') totalExcluded += v; }
     let parts = [];
+    // Deduplication info is shown in the stats-summary-row (via renderDokobBadges), not here
     if (totalNoFile > 0) parts.push(`<span class="badge badge-no-file"><i class="fas fa-file-excel"></i> ${t('prep.msg.db_no_file', {n: totalNoFile.toLocaleString()})}</span>`);
     if (totalExcluded > 0) parts.push(`<span class="badge badge-status-excl"><i class="fas fa-ban"></i> ${t('prep.msg.db_status', {n: totalExcluded.toLocaleString()})}</span>`);
     if (parts.length > 0) { $('#dbExcludedInfo').html(parts.join(' ')).show(); }

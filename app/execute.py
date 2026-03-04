@@ -1112,6 +1112,7 @@ def execute_single_document(staging_record, session_snapshot):
         # Update staging with API metadata (DOKOB, OBJKY, Authoritygroup) and resolved target values
         # NOTE: authorization_group is ONLY updated from API if it was NULL in staging.
         # If a rule already set it (even to empty string ''), the rule takes precedence.
+        # source_authorization_group always stores the original API value for reference.
         if api_dokob or api_objky or doc_authgroup or target_dokob or target_objky:
             try:
                 with misc_engine.begin() as con:
@@ -1119,6 +1120,7 @@ def execute_single_document(staging_record, session_snapshot):
                         UPDATE dbo.migration_staging
                         SET source_dokob = COALESCE(:dokob, source_dokob),
                             source_objky = COALESCE(:objky, source_objky),
+                            source_authorization_group = COALESCE(:authgroup, source_authorization_group),
                             authorization_group = CASE 
                                 WHEN authorization_group IS NULL THEN :authgroup
                                 ELSE authorization_group  
@@ -1434,13 +1436,13 @@ def execute_single_document(staging_record, session_snapshot):
                 }
                 
                 # Document number handling:
-                # For types with internal numbering (IY1, IY2):
-                #   - Purely numeric values → omit field (S4 auto-generates)
-                #   - Alphanumeric values → include (manual override / rule-assigned)
-                # For types with external numbering (I9D, I9S, I9T etc.):
-                #   - Always include the document number
-                INTERNAL_NUMBERING_TYPES = {'IY1', 'IY2'}
-                target_has_internal_numbering = doc_type in INTERNAL_NUMBERING_TYPES
+                # The decision is based on the VALUE (numeric vs alphanumeric), NOT the document type!
+                # - Numeric value (e.g. "123456") → Internal numbering → omit field (S4 auto-generates)
+                # - Alphanumeric value (e.g. "ABLAGEORT") → External numbering → include (value is used)
+                # - Translation rule set a specific target_documentnumber → Has priority, always include
+                
+                # Check if a rule explicitly set a different target_documentnumber
+                rule_set_doc_number = doc_number and doc_number != source_doc_number
                 effective_doc_number = doc_number or source_doc_number
                 
                 # Use pre-sanitized value from Prepare phase if available, else sanitize inline (safety net)
@@ -1460,23 +1462,26 @@ def execute_single_document(staging_record, session_snapshot):
                     """Check if value is purely numeric (digits only)."""
                     return bool(val) and str(val).strip().isdigit()
                 
-                if target_has_internal_numbering:
-                    # Internal numbering: only send non-numeric (alphanumeric) values
-                    if effective_doc_number and not _is_purely_numeric(effective_doc_number):
-                        dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
-                        logger.info(f"Using alphanumeric document number for {doc_type}: {effective_doc_number}", category="CREATE")
-                    else:
-                        logger.info(f"Omitting numeric document number for {doc_type} — S4 will auto-generate", category="CREATE")
-                else:
-                    # External numbering: always include document number
+                # Track whether we send a doc number to S4 (needed later for response validation)
+                doc_number_sent_to_s4 = False
+                
+                # Decide based on VALUE, not on document type
+                if rule_set_doc_number:
+                    # Rule explicitly set a target_documentnumber → always use it
                     if effective_doc_number:
                         dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
-                        if doc_number:
-                            logger.debug(f"Using target document number from rules: {doc_number}", category="CREATE")
-                        else:
-                            logger.info(f"Using source document number for type {doc_type}: {source_doc_number}", category="CREATE")
+                        doc_number_sent_to_s4 = True
+                        logger.info(f"Using rule-defined document number: {effective_doc_number}", category="CREATE")
                     else:
-                        logger.warning(f"No document number available for external numbering type {doc_type}", category="CREATE")
+                        logger.warning(f"Rule set empty document number — S4 will auto-generate", category="CREATE")
+                elif effective_doc_number and not _is_purely_numeric(effective_doc_number):
+                    # Alphanumeric value → External numbering → include the value
+                    dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
+                    doc_number_sent_to_s4 = True
+                    logger.info(f"Using alphanumeric document number: {effective_doc_number}", category="CREATE")
+                else:
+                    # Numeric value or empty → Internal numbering → S4 auto-generates
+                    logger.info(f"Omitting numeric document number — S4 will auto-generate", category="CREATE")
                 
                 # Add authorization group if available
                 # Priority: staging_record.authorization_group (set by rules) > doc_authgroup (from API)
@@ -1559,11 +1564,11 @@ def execute_single_document(staging_record, session_snapshot):
                     except Exception as e:
                         logger.warning(f"Failed to extract document number from response: {e}", category="CREATE")
                     
-                    # CRITICAL: For internal-numbering types (IY1/IY2), the doc_number MUST
-                    # be captured from the CREATE response. If extraction failed, we must NOT
-                    # mark container_created=1 — otherwise retries skip CREATE and the
-                    # auto-generated number is lost forever (upload URL gets 'None').
-                    if target_has_internal_numbering and not doc_number:
+                    # CRITICAL: If we did NOT send a doc_number to S4 (because it was numeric,
+                    # allowing S4 to auto-generate), we MUST capture the auto-generated number
+                    # from the CREATE response. If extraction failed, we must NOT mark container_created=1
+                    # — otherwise retries skip CREATE and the auto-generated number is lost forever.
+                    if not doc_number_sent_to_s4 and not doc_number:
                         error_msg = (
                             f"CREATE_DOC_NUMBER_LOST: S4 created {doc_type} document (HTTP {create_resp.status_code}) "
                             f"but auto-generated document number could not be extracted from response. "
@@ -2820,12 +2825,13 @@ def update_link_status(staging_id, status, error=None):
     
     Args:
         staging_id: The staging record ID
-        status: 'pending', 'linking', 'linked', 'link_failed', 'link_exists', 'skipped'
+        status: 'pending', 'linking', 'linked', 'link_failed', 'link_exists', 'skipped', 
+                'partial_linked', 'link_skipped'
         error: Error message (optional)
     """
     try:
         completed_clause = ""
-        if status in ('linked', 'link_failed', 'link_exists', 'skipped'):
+        if status in ('linked', 'link_failed', 'link_exists', 'skipped', 'partial_linked', 'link_skipped'):
             completed_clause = ", link_completed_at = GETUTCDATE()"
         
         update_query = f"""
@@ -2853,7 +2859,7 @@ def load_linkable_records(batch_id, record_ids=None):
       - execution_status IN ('success', 'partial') — container was uploaded
       - container_created = 1 — container confirmed
       - link_status IN ('pending', 'link_failed') — not yet linked (or retry)
-      - target_dokob and target_objky populated — mapping available
+      - source_object_links populated (for multi-link) OR target_dokob/target_objky (legacy)
     """
     base_query = """
         SELECT 
@@ -2867,6 +2873,8 @@ def load_linkable_records(batch_id, record_ids=None):
             target_documentpart,
             target_documenttype,
             target_documentversion,
+            source_object_links,
+            source_link_count,
             target_dokob,
             target_objky,
             link_status,
@@ -2877,8 +2885,10 @@ def load_linkable_records(batch_id, record_ids=None):
             AND execution_status IN ('success', 'partial')
             AND ISNULL(container_created, 0) = 1
             AND ISNULL(link_status, 'pending') IN ('pending', 'link_failed')
-            AND target_dokob IS NOT NULL AND target_dokob != ''
-            AND target_objky IS NOT NULL AND target_objky != ''
+            AND (
+                (source_object_links IS NOT NULL AND source_object_links != '' AND source_object_links != '[]')
+                OR (target_dokob IS NOT NULL AND target_dokob != '' AND target_objky IS NOT NULL AND target_objky != '')
+            )
     """
     
     if record_ids:
@@ -2894,13 +2904,17 @@ def load_linkable_records(batch_id, record_ids=None):
 
 
 def link_single_record(staging_record, session_snapshot):
-    """Create Object Link for a single staging record (Phase 2).
+    """Create Object Links for a single staging record (Phase 2).
     
-    Makes a lightweight POST to A_DocumentInfoRecordObjLink.
+    Makes lightweight POST(s) to A_DocumentInfoRecordObjLink.
     No file transfer — only metadata.
     
+    Supports multiple object links per document: iterates through source_object_links JSON,
+    applies object mapping for each, and creates all target links.
+    
     Returns:
-        dict with 'staging_id', 'status', 'error' (optional), 'status_code' (optional)
+        dict with 'staging_id', 'status', 'error' (optional), 'status_code' (optional),
+              'links_created' (count), 'links_failed' (count), 'links_skipped' (count)
     """
     staging_id = staging_record['id']
     batch_id = staging_record.get('batch_id')
@@ -2910,8 +2924,46 @@ def link_single_record(staging_record, session_snapshot):
     doc_number = staging_record['target_documentnumber']
     doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
     doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
-    target_dokob = staging_record['target_dokob']
-    target_objky = staging_record['target_objky']
+    
+    # Build list of source links to process
+    source_links = []
+    source_object_links_json = staging_record.get('source_object_links')
+    if source_object_links_json:
+        try:
+            parsed = json.loads(source_object_links_json)
+            if isinstance(parsed, list):
+                source_links = [(item.get('dokob'), item.get('objky')) for item in parsed if item.get('dokob') and item.get('objky')]
+        except (json.JSONDecodeError, TypeError):
+            logger.debug(f"Could not parse source_object_links JSON", category="OBJLINK")
+    
+    # Fallback: if no source_object_links, use legacy single target_dokob/target_objky
+    if not source_links:
+        legacy_dokob = staging_record.get('target_dokob')
+        legacy_objky = staging_record.get('target_objky')
+        if legacy_dokob and legacy_objky:
+            source_links = [(legacy_dokob, legacy_objky)]  # These are already target values
+            use_legacy_targets = True
+        else:
+            # No links to create
+            update_link_status(staging_id, 'linked')  # Nothing to link is success
+            return {
+                'staging_id': staging_id,
+                'status': 'linked',
+                'links_created': 0,
+                'links_failed': 0,
+                'links_skipped': 0,
+                'note': 'no_object_links'
+            }
+    else:
+        use_legacy_targets = False
+    
+    # Load object mappings for this batch (used to resolve source -> target)
+    mappings = {}
+    if not use_legacy_targets:
+        try:
+            mappings = load_object_mappings(batch_id) or {}
+        except Exception as e:
+            logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
     
     # Mark as linking
     update_link_status(staging_id, 'linking')
@@ -2923,10 +2975,7 @@ def link_single_record(staging_record, session_snapshot):
         prepare_session_headers(server_session, session_snapshot, target_system)
         server_session.headers.update({'Content-Type': 'application/json'})
         
-        # Create Object Link via POST on navigation property to_ProductObj.
-        # Per OpenAPI spec: POST /A_DocumentInfoRecord(...)/to_ProductObj
-        # The document is identified by the URL path, the target object
-        # (EQUI, IFLOT, etc.) is in the request body.
+        # Build base URL for object link POSTs
         doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
         doc_key = (
             f"DocumentInfoRecordDocType='{doc_type}',"
@@ -2936,57 +2985,108 @@ def link_single_record(staging_record, session_snapshot):
         )
         post_url = f"{doc_base_url}/A_DocumentInfoRecord({doc_key})/to_ProductObj"
         
-        object_link_payload = {
-            'LinkedSAPObject': target_dokob,
-            'LinkedSAPObjectKey': target_objky,
-            'DocObjectLinkCounter': '001'
-        }
+        # Track results
+        links_created = 0
+        links_failed = 0
+        links_skipped = 0
+        links_existed = 0
+        last_error = None
         
-        logger.info(f"Creating object link: {target_dokob}/{target_objky} -> POST {post_url}", category="OBJLINK")
-        logger.debug(f"Object link payload: {object_link_payload}", category="OBJLINK")
-        
-        link_resp = server_session.post(post_url, json=object_link_payload)
-        body_txt_lower = link_resp.text.lower() if link_resp.text else ''
-        
-        # Debug: log full response for non-success
-        if link_resp.status_code not in (200, 201, 204):
-            resp_body = link_resp.text[:500] if link_resp.text else '(empty)'
-            logger.warning(f"Link response {link_resp.status_code}: {resp_body}", category="OBJLINK_DEBUG")
-        
-        if link_resp.status_code in (200, 201, 204):
-            logger.info(f"Object link created: {target_dokob}/{target_objky}", category="OBJLINK")
-            update_link_status(staging_id, 'linked')
-            return {
-                'staging_id': staging_id,
-                'status': 'linked',
-                'status_code': link_resp.status_code
+        # Process each object link
+        for link_idx, (src_dokob, src_objky) in enumerate(source_links, start=1):
+            counter = f"{link_idx:03d}"  # DocObjectLinkCounter: 001, 002, 003, ...
+            
+            # Resolve target values
+            if use_legacy_targets:
+                # Legacy mode: values are already target values
+                target_dokob, target_objky = src_dokob, src_objky
+            else:
+                # Apply object mapping: source -> target
+                key = (str(src_dokob).upper(), str(src_objky))
+                if key in mappings:
+                    target_dokob, target_objky = mappings[key]
+                else:
+                    # No mapping found -> skip this link
+                    logger.debug(f"No object mapping for {key}, skipping link #{link_idx}", category="OBJLINK")
+                    links_skipped += 1
+                    continue
+            
+            object_link_payload = {
+                'LinkedSAPObject': target_dokob,
+                'LinkedSAPObjectKey': target_objky,
+                'DocObjectLinkCounter': counter
             }
+            
+            logger.info(f"Creating object link #{link_idx}: {target_dokob}/{target_objky}", category="OBJLINK")
+            logger.debug(f"Object link payload: {object_link_payload}", category="OBJLINK")
+            
+            try:
+                link_resp = server_session.post(post_url, json=object_link_payload)
+                body_txt_lower = link_resp.text.lower() if link_resp.text else ''
+                
+                if link_resp.status_code not in (200, 201, 204):
+                    resp_body = link_resp.text[:500] if link_resp.text else '(empty)'
+                    logger.warning(f"Link #{link_idx} response {link_resp.status_code}: {resp_body}", category="OBJLINK_DEBUG")
+                
+                if link_resp.status_code in (200, 201, 204):
+                    logger.info(f"Object link #{link_idx} created: {target_dokob}/{target_objky}", category="OBJLINK")
+                    links_created += 1
+                
+                elif link_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
+                    logger.info(f"Object link #{link_idx} already exists: {target_dokob}/{target_objky}", category="OBJLINK")
+                    links_existed += 1
+                
+                else:
+                    error_info = _extract_error_fields(link_resp)
+                    last_error = f"LINK_FAIL_{link_resp.status_code}: {error_info.get('detail', 'Unknown')}"
+                    logger.warning(f"Object link #{link_idx} failed: {last_error}", category="OBJLINK")
+                    links_failed += 1
+                    
+            except Exception as e:
+                logger.warning(f"Exception creating link #{link_idx}: {e}", category="OBJLINK")
+                last_error = str(e)
+                links_failed += 1
         
-        elif link_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
-            logger.info(f"Object link already exists: {target_dokob}/{target_objky}", category="OBJLINK")
-            update_link_status(staging_id, 'link_exists')
-            return {
-                'staging_id': staging_id,
-                'status': 'link_exists',
-                'status_code': link_resp.status_code
-            }
-        
-        else:
-            error_info = _extract_error_fields(link_resp)
-            error_msg = f"LINK_FAIL_{link_resp.status_code}"
-            if error_info.get('detail'):
-                error_msg += f": {error_info['detail']}"
-            logger.warning(f"Object link failed ({link_resp.status_code}): {error_info.get('detail', 'Unknown')}", category="OBJLINK")
-            update_link_status(staging_id, 'link_failed', error_msg)
+        # Determine overall status
+        total_attempted = links_created + links_failed + links_existed
+        if links_failed > 0 and links_created == 0:
+            # All failed
+            update_link_status(staging_id, 'link_failed', last_error)
             return {
                 'staging_id': staging_id,
                 'status': 'link_failed',
-                'error': error_msg,
-                'status_code': link_resp.status_code
+                'error': last_error,
+                'links_created': links_created,
+                'links_failed': links_failed,
+                'links_skipped': links_skipped,
+                'links_existed': links_existed
+            }
+        elif links_created > 0 or links_existed > 0:
+            # At least some succeeded or already existed
+            status = 'linked' if links_failed == 0 else 'partial_linked'
+            update_link_status(staging_id, status)
+            return {
+                'staging_id': staging_id,
+                'status': status,
+                'links_created': links_created,
+                'links_failed': links_failed,
+                'links_skipped': links_skipped,
+                'links_existed': links_existed
+            }
+        else:
+            # All were skipped (no mappings found)
+            update_link_status(staging_id, 'link_skipped', 'No object mappings found for any source link')
+            return {
+                'staging_id': staging_id,
+                'status': 'link_skipped',
+                'links_created': 0,
+                'links_failed': 0,
+                'links_skipped': links_skipped,
+                'links_existed': 0
             }
     
     except Exception as e:
-        logger.error(f"Exception creating object link: {e}", category="OBJLINK")
+        logger.error(f"Exception in link_single_record: {e}", category="OBJLINK")
         update_link_status(staging_id, 'link_failed', str(e))
         return {
             'staging_id': staging_id,
@@ -3145,10 +3245,10 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                         completed_count += 1
                         
                         status = result.get('status', '')
-                        if status == 'linked':
+                        if status in ('linked', 'partial_linked'):
                             linked_count += 1
                             consecutive_auth_errors = 0
-                        elif status == 'link_exists':
+                        elif status in ('link_exists', 'link_skipped'):
                             exists_count += 1
                             consecutive_auth_errors = 0
                         elif status == 'link_failed':

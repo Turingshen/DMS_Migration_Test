@@ -645,6 +645,9 @@ def enrich_with_metadata(data_df, session_snapshot=None):
         data_df['authorization_group'] = None
     # else: Keep Excel authorization_group values as-is
     
+    # Store source authorization group BEFORE rule application (for UI display)
+    data_df['source_authorization_group'] = data_df['authorization_group'].copy()
+    
     # Apply translation rules
     translation_map = load_translations()
     if translation_map:
@@ -841,6 +844,7 @@ def prepare_staging_records(data_df, batch_id, source_file_name=None):
             'target_objky': row.get('target_objky'),
             'source_document_status': row.get('source_document_status'),
             'target_document_status': row.get('target_document_status'),
+            'source_authorization_group': row.get('source_authorization_group'),
             'authorization_group': row.get('authorization_group'),
             'filename': row.get('source_filename'),  # From DIL.DRAW.filep (with extension)
             'file_size_bytes': row.get('file_size_bytes'),

@@ -19,6 +19,58 @@
     }
     .edit-icon:hover { color: #007bff; }
     .delete-icon:hover { color: #dc3545; }
+    /* Inactive rule row styling */
+    .rule-inactive {
+        opacity: 0.5;
+        background-color: #f8f9fa !important;
+    }
+    .rule-inactive td {
+        text-decoration: line-through;
+    }
+    .rule-inactive td:first-child,
+    .rule-inactive td:last-child {
+        text-decoration: none;
+    }
+    /* Toggle switch styling */
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 42px;
+        height: 22px;
+    }
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: .3s;
+        border-radius: 22px;
+    }
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 16px;
+        width: 16px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .3s;
+        border-radius: 50%;
+    }
+    input:checked + .toggle-slider {
+        background-color: #28a745;
+    }
+    input:checked + .toggle-slider:before {
+        transform: translateX(20px);
+    }
     /* Distinct styling for optional condition section */
     .condition-wrapper {
         margin-top: 10px;
@@ -54,6 +106,7 @@
                 <table class="table table-striped table-bordered" id="translationsTable">
                     <thead class="thead-dark">
                         <tr>
+                            <th data-i18n="rules.th.active">Aktiv</th>
                             <th data-i18n="rules.th.order">Reihenfolge</th>
                             <th data-i18n="rules.th.type">Typ</th>
                             <th data-i18n="rules.th.source_col">Quellspalte</th>
@@ -69,7 +122,7 @@
                     </thead>
                     <tbody id="translationsBody">
                         <tr>
-                            <td colspan="11" class="text-center">
+                            <td colspan="12" class="text-center">
                                 <div class="spinner-border text-primary" role="status">
                                     <span class="sr-only">Loading...</span>
                                 </div>

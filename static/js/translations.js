@@ -56,7 +56,7 @@ function displayRules(rules) {
     tbody.empty();
     
     if (rules.length === 0) {
-        tbody.append('<tr><td colspan="11" class="text-center text-muted">' + t('rules.empty') + '</td></tr>');
+        tbody.append('<tr><td colspan="12" class="text-center text-muted">' + t('rules.empty') + '</td></tr>');
         return;
     }
     
@@ -68,8 +68,17 @@ function displayRules(rules) {
         const type = (rule.rule_type || 'translation').toLowerCase();
         const typeClass = type === 'overwrite' ? 'badge-warning' : 'badge-info';
         const execOrder = rule.execution_order !== undefined ? rule.execution_order : 100;
+        const isActive = rule.active === 1 || rule.active === true;
+        const rowClass = isActive ? '' : 'rule-inactive';
+        const checkedAttr = isActive ? 'checked' : '';
         const row = `
-            <tr>
+            <tr class="${rowClass}" data-rule-id="${rule.id}">
+                <td>
+                    <label class="toggle-switch" title="${isActive ? t('rules.deactivate') : t('rules.activate')}">
+                        <input type="checkbox" ${checkedAttr} onchange="toggleRuleActive(${rule.id})">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </td>
                 <td><span class="badge badge-secondary">${execOrder}</span></td>
                 <td><span class="badge ${typeClass}">${escapeHtml(rule.rule_type || 'translation')}</span></td>
                 <td><code>${escapeHtml(rule.source_column)}</code></td>
@@ -289,6 +298,35 @@ function moveRuleDown(id) {
         error: function(xhr) {
             const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
             showError(t('rules.move_error') + ': ' + error);
+        }
+    });
+}
+
+function toggleRuleActive(id) {
+    $.ajax({
+        url: `/rules/${id}/toggle`,
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                // Update the row visually without full reload for better UX
+                const row = $(`tr[data-rule-id="${id}"]`);
+                const isNowActive = response.active === 1 || response.active === true;
+                if (isNowActive) {
+                    row.removeClass('rule-inactive');
+                    row.find('.toggle-switch').attr('title', t('rules.deactivate'));
+                } else {
+                    row.addClass('rule-inactive');
+                    row.find('.toggle-switch').attr('title', t('rules.activate'));
+                }
+            } else {
+                showError(response.error || t('rules.toggle_error'));
+                loadRules(); // Reload to reset checkbox state
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON ? xhr.responseJSON.error : xhr.responseText;
+            showError(t('rules.toggle_error') + ': ' + error);
+            loadRules(); // Reload to reset checkbox state
         }
     });
 }

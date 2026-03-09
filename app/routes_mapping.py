@@ -10,6 +10,83 @@ from app.blueprint import (
 )
 
 
+def _write_instructions_sheet(writer):
+    """Write a formatted 'Instructions' sheet as the first sheet in the workbook."""
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    instructions = [
+        ('Object Mapping – Anleitung / Instructions', ''),
+        ('', ''),
+        ('Zweck', 'Diese Datei dient der Zuordnung von Quell-Objektverknüpfungen (DOKOB/OBJKY) '
+                  'zu neuen Ziel-Objektverknüpfungen im S4-System.'),
+        ('', ''),
+        ('Sheets in dieser Datei', ''),
+        ('  Mappings', 'Bereits gespeicherte Zuordnungen aus der Datenbank.'),
+        ('  Batch Objects', 'Alle DOKOB/OBJKY-Kombinationen des Batches. '
+                           'target_dokob ist bereits mit dem Quellwert vorbelegt.'),
+        ('  Unmapped Objects', 'Objekte, für die noch KEINE Zuordnung existiert. '
+                              'Hier sollten Sie vorzugsweise arbeiten.'),
+        ('  Info', 'Batch-Statistiken und Metadaten.'),
+        ('', ''),
+        ('So geht\'s – Schritt für Schritt', ''),
+        ('1.', 'Öffnen Sie das Sheet "Unmapped Objects" (oder "Batch Objects").'),
+        ('2.', 'Füllen Sie die Spalte target_objky mit dem neuen Zielwert aus. '
+               'target_dokob ist bereits vorbelegt – ändern Sie es nur, wenn nötig.'),
+        ('3.', 'Speichern Sie die Datei (.xlsx).'),
+        ('4.', 'Laden Sie die Datei über den Upload-Button in der Anwendung hoch.'),
+        ('', ''),
+        ('Wichtig', ''),
+        ('', '• Der Upload erkennt automatisch, welches Sheet ausgefüllte Mappings enthält.'),
+        ('', '• Es wird das Sheet verwendet, das die meisten ausgefüllten target_objky-Werte hat.'),
+        ('', '• Zeilen ohne target_objky werden übersprungen.'),
+        ('', '• Spalten: source_dokob, source_objky, target_dokob, target_objky (alle erforderlich).'),
+        ('', '• Groß-/Kleinschreibung bei DOKOB wird automatisch korrigiert (→ Großbuchstaben).'),
+        ('', ''),
+        ('Typische Werte für DOKOB', ''),
+        ('  IFLOT', 'Technischer Platz (Functional Location)'),
+        ('  EQUNR', 'Equipment'),
+        ('  PMQMEL', 'Meldung (Notification)'),
+        ('  PMAUFK', 'Auftrag (Order)'),
+        ('  BUS2032', 'Stückliste (BOM)'),
+    ]
+
+    df_instr = pd.DataFrame(instructions, columns=['Thema', 'Beschreibung'])
+    df_instr.to_excel(writer, sheet_name='Instructions', index=False)
+
+    # -- format the sheet --
+    ws = writer.sheets['Instructions']
+    ws.column_dimensions['A'].width = 32
+    ws.column_dimensions['B'].width = 90
+
+    header_font = Font(bold=True, size=14, color='FFFFFF')
+    header_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+    section_font = Font(bold=True, size=11, color='2F5496')
+    normal_font = Font(size=11)
+    wrap = Alignment(wrap_text=True, vertical='top')
+
+    # style header row (row 1 = pandas header)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, size=11, color='FFFFFF')
+        cell.fill = header_fill
+
+    # title row (row 2 in Excel = index 0 in data)
+    title_cell = ws.cell(row=2, column=1)
+    title_cell.font = Font(bold=True, size=14, color='2F5496')
+
+    section_labels = {
+        'Zweck', 'Sheets in dieser Datei', 'So geht\'s – Schritt für Schritt',
+        'Wichtig', 'Typische Werte für DOKOB',
+    }
+    for row_idx in range(2, ws.max_row + 1):
+        a_val = ws.cell(row=row_idx, column=1).value or ''
+        if a_val in section_labels:
+            ws.cell(row=row_idx, column=1).font = section_font
+        else:
+            ws.cell(row=row_idx, column=1).font = normal_font
+        ws.cell(row=row_idx, column=2).font = normal_font
+        ws.cell(row=row_idx, column=2).alignment = wrap
+
+
 @migrate_bp.route('/batch/<batch_id>/object-mapping')
 def batch_object_mapping_page(batch_id):
     """Object mapping management page for a specific batch."""
@@ -181,8 +258,7 @@ def download_batch_object_mapping(batch_id):
                     source_dokob,
                     source_objky,
                     target_dokob,
-                    target_objky,
-                    description
+                    target_objky
                 FROM dbo.migration_object_mapping
                 WHERE batch_id = :batch_id AND active = 1
                 ORDER BY source_dokob, source_objky
@@ -233,15 +309,17 @@ def download_batch_object_mapping(batch_id):
         
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Sheet 0: Instructions
+            _write_instructions_sheet(writer)
+
             # Sheet 1: Existing Mappings
             df_mappings.to_excel(writer, sheet_name='Mappings', index=False)
             
             # Sheet 2: Source values from staging (for reference when creating mappings)
             # Add empty target columns for convenience
             if not df_staging.empty:
-                df_staging['target_dokob'] = ''
+                df_staging['target_dokob'] = df_staging['source_dokob']
                 df_staging['target_objky'] = ''
-                df_staging['description'] = ''
             df_staging.to_excel(writer, sheet_name='Batch Objects', index=False)
             
             # Sheet 3: Unmapped objects (objects in staging without a mapping)
@@ -317,11 +395,11 @@ def download_object_mapping_template():
             'source_objky': ['DE-LU-E-B211-MA10', '000100012345', '000012345678'],
             'target_dokob': ['IFLOT', 'PMQMEL', 'PMAUFK'],
             'target_objky': ['DE-LU-E-B211-MA10', '000100012345', '000012345678'],
-            'description': ['Functional Location', 'Notification', 'Order']
         })
         
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            _write_instructions_sheet(writer)
             df.to_excel(writer, sheet_name='Object Mapping', index=False)
         output.seek(0)
         
@@ -346,14 +424,33 @@ def upload_batch_object_mapping(batch_id):
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        # Read Excel file
-        df = pd.read_excel(file)
-        
-        # Validate required columns
+        # Read Excel file – smart scan: check headers first, then read best sheet
         required_cols = ['source_dokob', 'source_objky', 'target_dokob', 'target_objky']
-        missing_cols = [c for c in required_cols if c not in df.columns]
-        if missing_cols:
-            return jsonify({'success': False, 'error': f'Missing columns: {missing_cols}'}), 400
+        xls = pd.ExcelFile(file)
+        
+        # Phase 1: identify candidate sheets by reading ONLY the header row (fast)
+        candidate_sheets = []
+        for sheet in xls.sheet_names:
+            header_df = pd.read_excel(xls, sheet_name=sheet, nrows=0)
+            if all(c in header_df.columns for c in required_cols):
+                candidate_sheets.append(sheet)
+        
+        # Phase 2: read candidates fully, pick the one with the most filled target_objky
+        df = pd.DataFrame()
+        used_sheet = None
+        for sheet in candidate_sheets:
+            df_sheet = pd.read_excel(xls, sheet_name=sheet)
+            mask = df_sheet['target_objky'].notna() & (df_sheet['target_objky'].astype(str).str.strip() != '')
+            df_filled = df_sheet[mask]
+            if len(df_filled) > len(df):
+                df = df_filled.copy()
+                used_sheet = sheet
+        
+        if df.empty:
+            return jsonify({'success': False,
+                            'error': 'Keine Mappings gefunden. Bitte target_objky in einem der Sheets ausfüllen.'}), 400
+        
+        print(f"[UPLOAD] Using sheet '{used_sheet}' with {len(df)} mapping rows")
         
         # Get mode: 'replace' = delete all and insert, 'append' = add only new
         mode = request.form.get('mode', 'append')
@@ -363,61 +460,120 @@ def upload_batch_object_mapping(batch_id):
         skipped = 0
         updated = 0
         
+        # Clean and validate all rows in pandas (vectorized, fast)
+        df['source_dokob'] = df['source_dokob'].astype(str).str.strip().str.upper()
+        df['source_objky'] = df['source_objky'].astype(str).str.strip()
+        df['target_dokob'] = df['target_dokob'].astype(str).str.strip().str.upper()
+        df['target_objky'] = df['target_objky'].astype(str).str.strip()
+        if 'description' in df.columns:
+            df['description'] = df['description'].fillna('').astype(str).str.strip()
+        else:
+            df['description'] = ''
+        
+        # Filter out invalid rows (missing required fields)
+        valid_mask = (
+            (df['source_dokob'] != '') & (df['source_dokob'] != 'NAN') &
+            (df['source_objky'] != '') & (df['source_objky'] != 'NAN') &
+            (df['target_dokob'] != '') & (df['target_dokob'] != 'NAN') &
+            (df['target_objky'] != '') & (df['target_objky'] != 'NAN')
+        )
+        skipped = int((~valid_mask).sum())
+        df_valid = df[valid_mask].copy()
+        
         with misc_engine.begin() as con:
             if mode == 'replace':
                 # Deactivate all existing mappings for this batch
                 con.execute(text("UPDATE dbo.migration_object_mapping SET active = 0 WHERE batch_id = :batch_id"), 
                            {'batch_id': batch_id})
             
-            for _, row in df.iterrows():
-                source_dokob = str(row['source_dokob']).strip().upper()
-                source_objky = str(row['source_objky']).strip()
-                target_dokob = str(row['target_dokob']).strip().upper()
-                target_objky = str(row['target_objky']).strip()
-                description = str(row.get('description', '') or '').strip()
+            if not df_valid.empty:
+                # Load existing mappings in ONE query → build lookup dict
+                existing_rows = con.execute(text("""
+                    SELECT id, source_dokob, source_objky 
+                    FROM dbo.migration_object_mapping
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id}).fetchall()
+                existing_map = {(r[1], r[2]): r[0] for r in existing_rows}  # (dokob, objky) → id
                 
-                if not source_dokob or not source_objky or not target_dokob or not target_objky:
-                    skipped += 1
-                    continue
+                # Split into update vs insert batches
+                insert_rows = []
+                update_rows = []
+                for _, row in df_valid.iterrows():
+                    key = (row['source_dokob'], row['source_objky'])
+                    if key in existing_map:
+                        update_rows.append({
+                            'id': existing_map[key],
+                            'target_dokob': row['target_dokob'],
+                            'target_objky': row['target_objky'],
+                            'description': row['description'],
+                        })
+                    else:
+                        insert_rows.append({
+                            'batch_id': batch_id,
+                            'source_dokob': row['source_dokob'],
+                            'source_objky': row['source_objky'],
+                            'target_dokob': row['target_dokob'],
+                            'target_objky': row['target_objky'],
+                            'description': row['description'],
+                            'created_by': current_user,
+                        })
                 
-                # Check if mapping exists in this batch
-                existing = con.execute(text("""
-                    SELECT id, active FROM dbo.migration_object_mapping
-                    WHERE batch_id = :batch_id 
-                    AND source_dokob = :source_dokob 
-                    AND source_objky = :source_objky
-                """), {'batch_id': batch_id, 'source_dokob': source_dokob, 'source_objky': source_objky}).fetchone()
-                
-                if existing:
-                    # Update existing mapping
+                print(f"[UPLOAD] insert={len(insert_rows)}, update={len(update_rows)}")
+                # Bulk UPDATE existing rows via temp table + JOIN (pymssql executemany is too slow)
+                if update_rows:
                     con.execute(text("""
-                        UPDATE dbo.migration_object_mapping
-                        SET target_dokob = :target_dokob, target_objky = :target_objky, 
-                            description = :description, active = 1
-                        WHERE id = :id
-                    """), {
-                        'target_dokob': target_dokob,
-                        'target_objky': target_objky,
-                        'description': description,
-                        'id': existing[0]
-                    })
-                    updated += 1
-                else:
-                    # Insert new mapping
+                        CREATE TABLE #tmp_upd (
+                            id INT, target_dokob NVARCHAR(100),
+                            target_objky NVARCHAR(200), description NVARCHAR(500)
+                        )
+                    """))
+                    CHUNK = 1000
+                    upd_cols = ['id', 'target_dokob', 'target_objky', 'description']
+                    for i in range(0, len(update_rows), CHUNK):
+                        chunk = update_rows[i:i+CHUNK]
+                        value_clauses = []
+                        params = {}
+                        for j, row in enumerate(chunk):
+                            placeholders = ', '.join(f':u{j}_{c}' for c in upd_cols)
+                            value_clauses.append(f'({placeholders})')
+                            for c in upd_cols:
+                                params[f'u{j}_{c}'] = row[c]
+                        sql = "INSERT INTO #tmp_upd (id, target_dokob, target_objky, description) VALUES " + ', '.join(value_clauses)
+                        con.execute(text(sql), params)
                     con.execute(text("""
-                        INSERT INTO dbo.migration_object_mapping 
-                        (batch_id, source_dokob, source_objky, target_dokob, target_objky, description, created_by, active)
-                        VALUES (:batch_id, :source_dokob, :source_objky, :target_dokob, :target_objky, :description, :created_by, 1)
-                    """), {
-                        'batch_id': batch_id,
-                        'source_dokob': source_dokob,
-                        'source_objky': source_objky,
-                        'target_dokob': target_dokob,
-                        'target_objky': target_objky,
-                        'description': description,
-                        'created_by': current_user
-                    })
-                    added += 1
+                        UPDATE m
+                        SET m.target_dokob = t.target_dokob,
+                            m.target_objky = t.target_objky,
+                            m.description  = t.description,
+                            m.active       = 1
+                        FROM dbo.migration_object_mapping m
+                        INNER JOIN #tmp_upd t ON t.id = m.id
+                    """))
+                    con.execute(text("DROP TABLE #tmp_upd"))
+                    updated = len(update_rows)
+                
+                # Bulk INSERT new rows – use multi-row VALUES (max 1000 per statement for SQL Server)
+                if insert_rows:
+                    CHUNK = 1000
+                    cols = ['batch_id', 'source_dokob', 'source_objky', 'target_dokob',
+                            'target_objky', 'description', 'created_by']
+                    for i in range(0, len(insert_rows), CHUNK):
+                        chunk = insert_rows[i:i+CHUNK]
+                        # Build multi-row VALUES clause with numbered params
+                        value_clauses = []
+                        params = {}
+                        for j, row in enumerate(chunk):
+                            placeholders = ', '.join(f':c{j}_{c}' for c in cols)
+                            value_clauses.append(f'({placeholders}, 1)')
+                            for c in cols:
+                                params[f'c{j}_{c}'] = row[c]
+                        sql = (
+                            "INSERT INTO dbo.migration_object_mapping "
+                            "(batch_id, source_dokob, source_objky, target_dokob, target_objky, description, created_by, active) "
+                            "VALUES " + ', '.join(value_clauses)
+                        )
+                        con.execute(text(sql), params)
+                    added = len(insert_rows)
         
         # Auto-apply mappings to staging records immediately after upload
         staging_applied = 0

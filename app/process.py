@@ -31,6 +31,81 @@ MAX_DESC_LEN = 40
 MAX_FILENAME_LEN = 80  # Maximum length for stored/uploaded filenames (extension preserved when truncating)
 FORBIDDEN_FILENAME_CHARS = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t']  # replaced with '_'
 
+
+def detect_non_latin_chars(text_value):
+    """Detect non-Latin/non-ASCII characters in a string.
+    
+    Returns a dict with:
+      - has_non_latin: True if non-Latin chars found
+      - scripts: set of detected script names (e.g. {'HANGUL', 'CJK'})
+      - char_count: number of non-Latin chars
+      - utf8_bytes: total UTF-8 byte length
+      - sample_chars: first 5 non-Latin characters for display
+    """
+    if not text_value:
+        return {'has_non_latin': False, 'scripts': set(), 'char_count': 0, 'utf8_bytes': 0, 'sample_chars': ''}
+    
+    import unicodedata
+    scripts = set()
+    non_latin_chars = []
+    
+    for ch in text_value:
+        cp = ord(ch)
+        if cp <= 0x024F:  # Basic Latin + Latin Extended-A/B
+            continue
+        try:
+            name = unicodedata.name(ch, '')
+            if name:
+                script = name.split()[0]
+                # Map common prefixes to readable names
+                if script in ('HANGUL', 'CJK', 'HIRAGANA', 'KATAKANA', 'THAI',
+                              'ARABIC', 'HEBREW', 'CYRILLIC', 'DEVANAGARI', 'BENGALI'):
+                    scripts.add(script)
+                elif 'CJK' in name:
+                    scripts.add('CJK')
+                else:
+                    scripts.add(script)
+        except ValueError:
+            scripts.add('UNKNOWN')
+        non_latin_chars.append(ch)
+    
+    return {
+        'has_non_latin': len(non_latin_chars) > 0,
+        'scripts': scripts,
+        'char_count': len(non_latin_chars),
+        'utf8_bytes': len(text_value.encode('utf-8')),
+        'sample_chars': ''.join(non_latin_chars[:5])
+    }
+
+
+def validate_non_latin_fields(description, filename, max_desc_len=MAX_DESC_LEN):
+    """Validate description and filename for non-Latin characters.
+    
+    Returns a list of INFO strings (not errors). Empty list = no issues.
+    Used during Enrich Data to populate validation_notes.
+    
+    NOTE: Non-Latin characters are NOT a problem for S4/HANA (Unicode system).
+    This is purely informational so the user is aware of the character set.
+    Data is migrated as-is without modification.
+    """
+    warnings = []
+    
+    # Check description — informational only, S4/HANA handles Unicode fine
+    if description:
+        desc_info = detect_non_latin_chars(description)
+        if desc_info['has_non_latin']:
+            script_names = ', '.join(sorted(desc_info['scripts']))
+            warnings.append(f"NON_LATIN_DESC: {script_names} ({desc_info['char_count']} Zeichen)")
+    
+    # Check filename — informational: Slug header will use _ but file is uploaded correctly
+    if filename:
+        fn_info = detect_non_latin_chars(filename)
+        if fn_info['has_non_latin']:
+            script_names = ', '.join(sorted(fn_info['scripts']))
+            warnings.append(f"NON_LATIN_FILE: {script_names} ({fn_info['char_count']} Zeichen)")
+    
+    return warnings
+
 # Defaults — can be overridden per session via /switch_system
 DEFAULT_SOURCE_SYSTEM = "zhl"
 DEFAULT_TARGET_SYSTEM = "zbq"
@@ -268,6 +343,37 @@ def _extract_error_fields(resp, max_raw_len=500):
                 app_inner = inner.get('application') if isinstance(inner.get('application'), dict) else None
                 if app_inner and isinstance(app_inner.get('messages'), list):
                     info['messages'] = app_inner['messages'][:10]
+    
+    # ── Enrich 'detail' if it looks like a bare correlation-ID ──────────
+    # SAP OData often puts a transaction/correlation ID in error.message.value
+    # (e.g. 'IJ9x3icYhAhFA3qctUbdvqWNekGW1fAdlCT') while the real error text
+    # sits in innererror.errordetails[].message.  Detect & replace.
+    detail_val = info.get('detail', '')
+    _looks_like_corr_id = (
+        detail_val
+        and len(detail_val) < 80
+        and ' ' not in detail_val
+        and detail_val.isalnum()
+    )
+    if _looks_like_corr_id or not detail_val:
+        # Try to get a real message from errordetails
+        _real_msgs = []
+        for ed in info.get('errordetails', []):
+            if isinstance(ed, dict):
+                m = ed.get('message', '')
+                if m and m != detail_val:
+                    _real_msgs.append(m)
+        if _real_msgs:
+            info['correlation_id'] = detail_val  # preserve the original ID
+            info['detail'] = ' | '.join(_real_msgs[:5])
+        elif body_text and not detail_val:
+            # Last resort: first 300 chars of body
+            info['detail'] = body_text[:300]
+    
+    # Store raw body snippet for debugging (always)
+    if body_text:
+        info['raw_body'] = body_text[:1000]
+    
     return info
 
 
@@ -547,6 +653,22 @@ def get_error_details(category):
 # OData-unsafe characters that break API URLs or key syntax
 _DOKNR_UNSAFE_CHARS = set("/'\\#()")
 
+# Invisible Unicode characters that must be stripped from DOKNR.
+# SAP HANA stores these (e.g. Zero-Width Space U+200B) but SQL Server
+# VARCHAR columns cannot represent them → they become '?' on storage.
+_DOKNR_INVISIBLE_CHARS = {
+    '\u200B',  # Zero-Width Space
+    '\u200C',  # Zero-Width Non-Joiner
+    '\u200D',  # Zero-Width Joiner
+    '\u200E',  # Left-to-Right Mark
+    '\u200F',  # Right-to-Left Mark
+    '\u00AD',  # Soft Hyphen
+    '\uFEFF',  # BOM / Zero-Width No-Break Space
+    '\u2060',  # Word Joiner
+    '\u2028',  # Line Separator
+    '\u2029',  # Paragraph Separator
+}
+
 # Umlaut / special char replacement map
 _DOKNR_CHAR_MAP = {
     'Ä': 'AE', 'Ö': 'OE', 'Ü': 'UE', 'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'SS',
@@ -566,10 +688,11 @@ def sanitize_doknr(doknr):
     
     Handles the critical cases that cause API failures:
     1. Leading/trailing whitespace  → strip
-    2. Slashes /                    → replace with -
-    3. Quotes ', backslash, #, ()  → remove (OData-unsafe)
-    4. Umlauts ÄÖÜß, Turkish İĞÇŞ → transliterate (avoids UTF-8 byte-length issues)
-    5. Truncate to 25 chars         → CHAR(25) field limit
+    2. Invisible Unicode chars      → remove (U+200B etc. become '?' in SQL Server)
+    3. Slashes /                    → replace with -
+    4. Quotes ', backslash, #, ()  → remove (OData-unsafe)
+    5. Umlauts ÄÖÜß, Turkish İĞÇŞ → transliterate (avoids UTF-8 byte-length issues)
+    6. Truncate to 25 chars         → CHAR(25) field limit
     
     Returns the original value unchanged if no sanitization is needed.
     Returns (sanitized_value, changed: bool) tuple.
@@ -579,6 +702,10 @@ def sanitize_doknr(doknr):
     
     original = doknr
     result = doknr.strip()
+    
+    # Remove invisible Unicode characters (U+200B Zero-Width Space etc.)
+    # These come from SAP HANA but cannot be stored in SQL Server VARCHAR → become '?'
+    result = ''.join(c for c in result if c not in _DOKNR_INVISIBLE_CHARS)
     
     # Replace umlauts / special chars via mapping
     for old_char, new_chars in _DOKNR_CHAR_MAP.items():

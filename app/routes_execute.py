@@ -125,7 +125,9 @@ def get_batch_preview_stats(batch_id):
                 SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 52428800 THEN 1 ELSE 0 END) as large_count,
                 -- Total size only for non-skipped, non-success records
                 SUM(CAST(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' AND file_size_bytes > 0 THEN file_size_bytes ELSE 0 END AS BIGINT)) as total_size_bytes,
-                MAX(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' THEN file_size_bytes ELSE 0 END) as max_file_size
+                MAX(CASE WHEN ISNULL(skip_migration, 0) = 0 AND execution_status != 'success' THEN file_size_bytes ELSE 0 END) as max_file_size,
+                -- Non-Latin character warnings
+                SUM(CASE WHEN ISNULL(skip_migration, 0) = 0 AND validation_notes LIKE '%NON_LATIN%' THEN 1 ELSE 0 END) as non_latin_count
             FROM dbo.migration_staging
             WHERE batch_id = :batch_id
         """)
@@ -165,7 +167,8 @@ def get_batch_preview_stats(batch_id):
                     'unknown': result.unknown_size_count or 0
                 },
                 'total_size_bytes': int(result.total_size_bytes or 0),
-                'max_file_size': int(result.max_file_size or 0)
+                'max_file_size': int(result.max_file_size or 0),
+                'non_latin_count': int(result.non_latin_count or 0)
             }
         })
         

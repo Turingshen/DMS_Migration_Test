@@ -535,6 +535,19 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
         : t('runtime.no_pending');
     document.getElementById('statRuntimeDetail').textContent = detailText;
     
+    // Non-Latin character warnings
+    const nonLatinCount = stats.non_latin_count || 0;
+    const nlBox = document.getElementById('statNonLatinBox');
+    if (nlBox) {
+        if (nonLatinCount > 0) {
+            nlBox.style.display = '';
+            document.getElementById('statNonLatin').textContent = nonLatinCount;
+            document.getElementById('statNonLatin').title = t('val.non_latin_summary');
+        } else {
+            nlBox.style.display = 'none';
+        }
+    }
+    
     // Store for modal details
     window.runtimeStats = {
         buckets: buckets,
@@ -761,8 +774,8 @@ function displayRecords(records) {
                 <td data-column="objky"><small>${formatObjky(record)}</small></td>
                 <td data-column="target_objky" class="target-col${isObjkyModified ? ' rule-modified' : ''}"><small>${truncate(record.target_objky, 25) || '-'}</small></td>
                 <td data-column="doc_status"${isDocStatusModified ? ' class="rule-modified"' : ''}><small>${record.source_document_status ? record.source_document_status : '-'}${record.target_document_status ? ' → ' + record.target_document_status : ''}</small></td>
-                <td data-column="description"><small>${truncate(record.source_description, 30)}</small></td>
-                <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}</small></td>
+                <td data-column="description"><small>${truncate(record.source_description, 30)}${record.validation_notes && record.validation_notes.includes('NON_LATIN') ? ' <i class="fas fa-exclamation-triangle text-warning" title="' + escapeHtml(record.validation_notes) + '"></i>' : ''}</small></td>
+                <td data-column="filename"><small>${truncate(record.filename, 25) || '-'}${record.validation_notes && record.validation_notes.includes('NON_LATIN_FILE') ? ' <i class="fas fa-exclamation-triangle text-warning" title="' + t('val.non_latin_file_tip') + '"></i>' : ''}</small></td>
                 <td data-column="file_size"><small>${fileSize}</small></td>
                 <td data-column="file_count"><small>${formatFileCount(record)}</small></td>
                 <td data-column="link_count"><small>${formatLinkCount(record)}</small></td>
@@ -807,6 +820,10 @@ function getExecutionBadge(status) {
 }
 
 function getLinkStatusBadge(linkStatus, execStatus, targetDokob) {
+    // "link_skipped" records (e.g. READ_EMPTY) always show their status regardless of execStatus
+    if (linkStatus === 'link_skipped') {
+        return `<span class="badge badge-info" title="${t('link.not_needed_tip')}"><i class="fas fa-minus-circle"></i> ${t('link.not_needed')}</span>`;
+    }
     // If not uploaded yet or no mapping, show dash
     if (!execStatus || execStatus === 'pending' || execStatus === 'failed') {
         return '<span class="text-muted">—</span>';
@@ -1481,6 +1498,10 @@ function refreshData() {
             if (data.total_size_mb) {
                 message += `\n📊 ${t('mig.total_size')} ${data.total_size_mb} MB\n`;
                 message += `📊 ${t('mig.largest_file')} ${data.max_file_mb} MB\n`;
+            }
+            
+            if (data.non_latin_warnings > 0) {
+                message += `\n⚠ ${data.non_latin_warnings} ${t('val.non_latin_summary')}\n`;
             }
             
             alert(message);

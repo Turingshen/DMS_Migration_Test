@@ -118,6 +118,7 @@ def apply_object_mappings_for_batch(batch_id):
     Apply object mappings to staging records for a specific batch.
     This should be called AFTER mappings have been uploaded for the batch.
     Updates target_dokob and target_objky in the staging table.
+    Uses a single bulk UPDATE via JOIN for performance.
     
     Args:
         batch_id: The batch ID to apply mappings for
@@ -130,24 +131,24 @@ def apply_object_mappings_for_batch(batch_id):
             print(f"[PREPARE] No mappings to apply for batch {batch_id}")
             return 0
         
-        # Update staging records with target values
+        # Bulk UPDATE staging records via JOIN with mapping table
         updated = 0
         with misc_engine.begin() as con:
-            for (source_dokob, source_objky), (target_dokob, target_objky) in mappings.items():
-                result = con.execute(text("""
-                    UPDATE dbo.migration_staging
-                    SET target_dokob = :target_dokob, target_objky = :target_objky
-                    WHERE batch_id = :batch_id 
-                    AND source_dokob = :source_dokob 
-                    AND source_objky = :source_objky
-                """), {
-                    'batch_id': batch_id,
-                    'source_dokob': source_dokob,
-                    'source_objky': source_objky,
-                    'target_dokob': target_dokob,
-                    'target_objky': target_objky
-                })
-                updated += result.rowcount
+            result = con.execute(text("""
+                UPDATE s
+                SET s.target_dokob = m.target_dokob,
+                    s.target_objky = m.target_objky
+                FROM dbo.migration_staging s
+                INNER JOIN dbo.migration_object_mapping m
+                    ON  m.batch_id      = s.batch_id
+                    AND m.source_dokob  = s.source_dokob
+                    AND m.source_objky  = s.source_objky
+                    AND m.active        = 1
+                WHERE s.batch_id = :batch_id
+                  AND s.source_dokob IS NOT NULL
+                  AND s.source_objky IS NOT NULL
+            """), {'batch_id': batch_id})
+            updated = result.rowcount
         
         print(f"[PREPARE] Applied mappings to {updated} staging records for batch {batch_id}")
         return updated

@@ -44,6 +44,10 @@
         <a href="/details?batch_id={{ batch_id }}" class="workflow-step text-decoration-none" title="Auswertung &amp; Details" data-i18n-title="wf.step4_title">
             <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> <span data-i18n="wf.step4">Auswertung</span>
         </a>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <a href="/batch/{{ batch_id }}/validation" class="workflow-step text-decoration-none" title="Validierung &amp; Prüfung" data-i18n-title="wf.step5_title">
+            <span class="step-num" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">5</span> <span data-i18n="wf.step5">Validierung</span>
+        </a>
     </div>
 
     <div class="row">
@@ -112,6 +116,10 @@
                             <small class="text-muted" data-i18n="prev.stats.runtime_details">Laufzeit-Details</small>
                             <small id="statRuntimeDetail" class="d-block text-muted">-</small>
                         </div>
+                        <div class="col" id="statNonLatinBox" style="display:none; max-width:120px;">
+                            <small class="text-warning"><i class="fas fa-exclamation-triangle"></i> Non-Latin</small>
+                            <h5 id="statNonLatin" class="text-warning" title="">0</h5>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -131,7 +139,7 @@
                             <i class="fas fa-columns"></i> <span data-i18n="prev.btn.columns">Spalten</span>
                         </button>
                         <button onclick="refreshData()" class="btn btn-info" id="refreshDataBtn" title="Metadaten, Dateinamen abrufen und Regeln anwenden" data-i18n-title="prev.btn.refresh_title">
-                            <i class="fas fa-sync-alt"></i> <span data-i18n="prev.btn.refresh">Daten aktualisieren</span>
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="prev.btn.refresh">Daten anreichern</span>
                         </button>
                         <label class="btn btn-outline-warning mb-0" id="excludeLargeLabel" title="Dateien größer als 99MB ausschließen" data-i18n-title="prev.btn.exclude_title">
                             <input type="checkbox" id="excludeLargeCheckbox" onchange="excludeLargeFiles(this.checked)" style="margin-right: 5px;">

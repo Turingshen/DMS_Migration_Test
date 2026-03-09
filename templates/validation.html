@@ -1,0 +1,301 @@
+{% extends "base_simple.html" %}
+
+{% block title %}Validierung — {{ batch_id }}{% endblock %}
+
+{% block head %}
+<style>
+    /* ── KPI Cards ──────────────────────────────────── */
+    .kpi-card {
+        border-radius: 10px;
+        transition: transform .15s;
+        border: none;
+        box-shadow: 0 2px 6px rgba(0,0,0,.08);
+    }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+    .kpi-card .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+    .kpi-card .kpi-label { font-size: .8rem; color: #6c757d; }
+
+    /* ── Coverage donut ─────────────────────────────── */
+    .coverage-ring { position:relative; width:110px; height:110px; margin:0 auto; }
+    .coverage-ring canvas { position:absolute; top:0; left:0; }
+    .coverage-ring .pct { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+        font-size:1.4rem; font-weight:700; }
+
+    /* ── Section card ───────────────────────────────── */
+    .section-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin-bottom:20px; }
+    .section-card .card-header { background:transparent; border-bottom:1px solid #eee; font-weight:600; font-size:1rem; }
+
+    /* ── Tables ──────────────────────────────────────── */
+    .val-table { font-size: .85rem; }
+    .val-table th { white-space: nowrap; background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+    .val-table td { vertical-align: middle; }
+    .val-table .text-truncate { max-width: 220px; display: inline-block; vertical-align: middle; }
+    .scroll-table { max-height: 520px; overflow-y: auto; }
+
+    /* ── Status badges ──────────────────────────────── */
+    .badge-linked      { background:#28a745; color:#fff; }
+    .badge-link_failed { background:#dc3545; color:#fff; }
+    .badge-pending     { background:#ffc107; color:#333; }
+    .badge-linking     { background:#17a2b8; color:#fff; }
+    .badge-link_skipped{ background:#6c757d; color:#fff; }
+    .badge-success     { background:#28a745; color:#fff; }
+    .badge-failed      { background:#dc3545; color:#fff; }
+    .badge-partial     { background:#fd7e14; color:#fff; }
+
+    /* ── Error card ─────────────────────────────────── */
+    .err-pattern { font-family: 'Consolas', monospace; font-size: .8rem; word-break: break-all; }
+
+    /* ── Filter tabs ────────────────────────────────── */
+    .filter-pills .btn { font-size: .8rem; padding: .25rem .65rem; border-radius: 20px; }
+    .filter-pills .btn.active { font-weight: 600; }
+
+    /* ── Progress bars ──────────────────────────────── */
+    .mini-progress { height: 6px; border-radius: 3px; background: #e9ecef; overflow: hidden; }
+    .mini-progress .bar { height: 100%; border-radius: 3px; transition: width .4s ease; }
+
+    /* ── Responsive ─────────────────────────────────── */
+    @media (max-width: 768px) {
+        .kpi-card .kpi-value { font-size: 1.4rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4 mb-5" id="validationApp" data-batch-id="{{ batch_id }}">
+    <!-- Header -->
+    <div class="row mb-3">
+        <div class="col-12 d-flex justify-content-between align-items-center flex-wrap">
+            <div>
+                <h2><i class="fas fa-check-double"></i> <span data-i18n="val.title">Validierung</span></h2>
+                <p class="text-muted mb-0">
+                    <span data-i18n="val.subtitle">Ergebnisübersicht nach Verlinkung</span>
+                    — <strong id="valBatchId">{{ batch_id }}</strong>
+                    <span id="valBatchDesc" class="text-muted ml-2"></span>
+                </p>
+            </div>
+            <div class="d-flex align-items-center">
+                <a href="/preview?batch_id={{ batch_id }}" class="btn btn-outline-secondary btn-sm mr-2">
+                    <i class="fas fa-arrow-left"></i> <span data-i18n="val.back_to_batch">Zurück zum Batch</span>
+                </a>
+                <button class="btn btn-outline-primary btn-sm mr-2" onclick="loadValidationData()">
+                    <i class="fas fa-sync-alt"></i> <span data-i18n="val.refresh">Aktualisieren</span>
+                </button>
+                <button class="btn btn-outline-success btn-sm" onclick="exportCSV()">
+                    <i class="fas fa-file-csv"></i> <span data-i18n="val.export_csv">CSV Export</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading spinner -->
+    <div id="loadingSpinner" class="text-center py-5">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="text-muted mt-2" data-i18n="val.loading">Lade Validierungsdaten...</p>
+    </div>
+
+    <!-- Content (hidden until loaded) -->
+    <div id="validationContent" style="display:none">
+
+        <!-- ═══ KPI Row ═══ -->
+        <div class="row mb-4" id="kpiRow">
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center">
+                    <div class="card-body py-3">
+                        <div class="kpi-value" id="kpiTotal">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.total">Gesamt</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center border-left-success" style="border-left:4px solid #28a745">
+                    <div class="card-body py-3">
+                        <div class="kpi-value text-success" id="kpiLinked">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.linked">Verlinkt</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center" style="border-left:4px solid #dc3545">
+                    <div class="card-body py-3">
+                        <div class="kpi-value text-danger" id="kpiFailed">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.link_failed">Link-Fehler</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center" style="border-left:4px solid #ffc107">
+                    <div class="card-body py-3">
+                        <div class="kpi-value text-warning" id="kpiPending">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.pending">Ausstehend</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center" style="border-left:4px solid #6c757d">
+                    <div class="card-body py-3">
+                        <div class="kpi-value" id="kpiSkipped" style="color:#6c757d">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.skipped">Übersprungen</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-6 mb-2">
+                <div class="card kpi-card text-center" style="border-left:4px solid #007bff">
+                    <div class="card-body py-3">
+                        <div class="kpi-value text-primary" id="kpiCoverage">-</div>
+                        <div class="kpi-label" data-i18n="val.kpi.coverage">Abdeckung</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Progress Bars ═══ -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card section-card">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between mb-1">
+                            <small class="font-weight-bold" data-i18n="val.progress.upload">Upload-Fortschritt</small>
+                            <small id="uploadProgressLabel">-</small>
+                        </div>
+                        <div class="mini-progress mb-3">
+                            <div class="bar bg-success" id="uploadProgressBar" style="width:0%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between mb-1">
+                            <small class="font-weight-bold" data-i18n="val.progress.linking">Verlinkung-Fortschritt</small>
+                            <small id="linkProgressLabel">-</small>
+                        </div>
+                        <div class="mini-progress">
+                            <div class="bar bg-info" id="linkProgressBar" style="width:0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Mapping Coverage by DOKOB ═══ -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card section-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="fas fa-project-diagram"></i> <span data-i18n="val.dokob.title">Mapping-Abdeckung nach DOKOB</span></span>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover val-table mb-0" id="dokobTable">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="val.dokob.source">Quell-DOKOB</th>
+                                        <th data-i18n="val.dokob.total_records">Datensätze</th>
+                                        <th data-i18n="val.dokob.mapped">Gemappt</th>
+                                        <th data-i18n="val.dokob.unmapped">Ungemappt</th>
+                                        <th data-i18n="val.dokob.linked">Verlinkt</th>
+                                        <th data-i18n="val.dokob.link_failed">Fehler</th>
+                                        <th data-i18n="val.dokob.coverage">Abdeckung</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Error Analysis ═══ -->
+        <div class="row mb-4">
+            <div class="col-lg-6 mb-3">
+                <div class="card section-card h-100">
+                    <div class="card-header">
+                        <i class="fas fa-unlink"></i> <span data-i18n="val.errors.link_title">Link-Fehler Analyse</span>
+                        <span class="badge badge-danger ml-1" id="linkErrorCount">0</span>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="scroll-table" id="linkErrorContainer">
+                            <table class="table table-sm val-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="val.errors.pattern">Fehlermuster</th>
+                                        <th data-i18n="val.errors.count">Anzahl</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="linkErrorBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6 mb-3">
+                <div class="card section-card h-100">
+                    <div class="card-header">
+                        <i class="fas fa-upload"></i> <span data-i18n="val.errors.upload_title">Upload-Fehler Analyse</span>
+                        <span class="badge badge-danger ml-1" id="uploadErrorCount">0</span>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="scroll-table" id="uploadErrorContainer">
+                            <table class="table table-sm val-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="val.errors.pattern">Fehlermuster</th>
+                                        <th data-i18n="val.errors.count">Anzahl</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="uploadErrorBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Source → Target Comparison ═══ -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card section-card">
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+                        <span><i class="fas fa-exchange-alt"></i> <span data-i18n="val.comp.title">Quell- / Ziel-Vergleich</span></span>
+                        <div class="d-flex align-items-center">
+                            <div class="filter-pills mr-2" id="compFilterPills">
+                                <button class="btn btn-sm btn-outline-secondary active" data-filter="all" data-i18n="val.comp.all">Alle</button>
+                                <button class="btn btn-sm btn-outline-danger" data-filter="link_failed" data-i18n="val.comp.failed">Fehler</button>
+                                <button class="btn btn-sm btn-outline-warning" data-filter="pending" data-i18n="val.comp.pending">Ausstehend</button>
+                                <button class="btn btn-sm btn-outline-success" data-filter="linked" data-i18n="val.comp.linked">Verlinkt</button>
+                                <button class="btn btn-sm btn-outline-secondary" data-filter="link_skipped" data-i18n="val.comp.skipped">Übersprungen</button>
+                            </div>
+                            <input type="text" class="form-control form-control-sm" id="compSearch"
+                                   placeholder="Suchen..." style="width:180px;" data-i18n-placeholder="val.comp.search">
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="scroll-table" style="max-height:600px">
+                            <table class="table table-sm table-hover val-table mb-0" id="compTable">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th data-i18n="val.comp.source_doc">Quell-Dok</th>
+                                        <th data-i18n="val.comp.target_doc">Ziel-Dok</th>
+                                        <th>DOKOB</th>
+                                        <th>OBJKY</th>
+                                        <th data-i18n="val.comp.target_dokob">Ziel-DOKOB</th>
+                                        <th data-i18n="val.comp.target_objky">Ziel-OBJKY</th>
+                                        <th data-i18n="val.comp.upload">Upload</th>
+                                        <th data-i18n="val.comp.link">Link</th>
+                                        <th data-i18n="val.comp.error">Fehler</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="compBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="card-footer text-muted text-center py-2" id="compFooter">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /validationContent -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/validation.js') }}"></script>
+{% endblock %}

@@ -405,6 +405,10 @@
         <a href="/details?batch_id={{ batch_id }}" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Auswertung &amp; Details" data-i18n-title="wf.step4_title">
             <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">4</span> <span data-i18n="wf.step4">Auswertung</span>
         </a>
+        <i class="fas fa-chevron-right" style="margin:0 10px;color:#adb5bd;font-size:1.2rem;"></i>
+        <a href="/batch/{{ batch_id }}/validation" style="display:flex;align-items:center;padding:8px 18px;border-radius:20px;font-weight:600;font-size:0.85rem;background:#e9ecef;color:#6c757d;text-decoration:none;" title="Validierung &amp; Prüfung" data-i18n-title="wf.step5_title">
+            <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.3);margin-right:8px;font-size:0.8rem;">5</span> <span data-i18n="wf.step5">Validierung</span>
+        </a>
     </div>
 
     <!-- Batch Header -->
@@ -431,11 +435,11 @@
             <button class="btn btn-primary" onclick="showUploadModal()" data-i18n="map.upload_excel">
                 📤 Excel hochladen
             </button>
-            <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
-                💾 Zuordnungen exportieren
-            </button>
             <button class="btn btn-apply" onclick="applyMappings()" data-i18n="map.apply">
                 ✨ Auf Staging anwenden
+            </button>
+            <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
+                💾 Zuordnungen exportieren
             </button>
             <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
             <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" data-i18n-title="map.link_all_title" style="background: #28a745;" data-i18n="map.link_all">
@@ -487,6 +491,7 @@
     <div class="tabs">
         <div class="tab active" data-tab="unmapped" data-i18n="map.tab.unmapped">Nicht zugeordnet</div>
         <div class="tab" data-tab="mappings" data-i18n="map.tab.mappings">Zuordnungen</div>
+        <div class="tab" data-tab="link-errors" data-i18n="map.tab.link_errors">Link-Fehler <span id="linkErrorBadge" class="badge badge-danger-count" style="display:none; background:#dc3545; color:#fff; padding:2px 7px; border-radius:10px; font-size:11px; margin-left:4px;">0</span></div>
     </div>
 
     <!-- Tab: Unmapped Objects -->
@@ -559,6 +564,97 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Link Errors -->
+    <div id="tab-link-errors" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="fas fa-unlink" style="color:#dc3545"></i> <span data-i18n="map.link_errors.title">Link-Fehler</span></h3>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="resetAndRelinkAll()" id="resetAndRelinkBtn" style="background:#28a745; color:#fff; font-size:13px; padding:6px 14px;">
+                        🔗 <span data-i18n="map.link_errors.reset_and_relink">Zurücksetzen & neu verlinken</span>
+                    </button>
+                    <button class="btn btn-primary" onclick="resetSelectedAndRelink()" id="resetSelectedRelinkBtn" disabled style="background:#17a2b8; color:#fff; font-size:13px; padding:6px 14px;">
+                        🔗 <span data-i18n="map.link_errors.reset_sel_relink">Ausgewählte zurücksetzen & verlinken</span>
+                    </button>
+                    <span style="border-left: 2px solid #ccc; height: 24px; display: inline-block; margin: 0 2px; align-self:center;"></span>
+                    <button class="btn btn-primary" onclick="resetAllLinkErrors()" id="resetAllLinkErrorsBtn" style="background:#ffc107; color:#333; font-size:13px; padding:6px 14px;">
+                        🔄 <span data-i18n="map.link_errors.reset_all">Alle zurücksetzen</span>
+                    </button>
+                    <button class="btn btn-primary" onclick="resetSelectedLinkErrors()" id="resetSelectedBtn" disabled style="background:#ffc107; color:#333; font-size:13px; padding:6px 14px;">
+                        🔄 <span data-i18n="map.link_errors.reset_selected">Ausgewählte zurücksetzen</span>
+                    </button>
+                    <span style="border-left: 2px solid #ccc; height: 24px; display: inline-block; margin: 0 2px; align-self:center;"></span>
+                    <button class="btn btn-primary" onclick="loadLinkErrors()" style="font-size:13px; padding:6px 14px;">
+                        🔄 <span data-i18n="val.refresh">Aktualisieren</span>
+                    </button>
+                    <a href="/batch/{{ batch_id }}/validation" class="btn btn-info" style="font-size:13px; padding:6px 14px;">
+                        📊 <span data-i18n="map.link_errors.validation">Validierung öffnen</span>
+                    </a>
+                </div>
+            </div>
+            <div class="card-body" style="padding:10px 20px;">
+                <div class="alert alert-info" style="font-size:13px;" data-i18n="map.link_errors.info">
+                    Datensätze mit fehlgeschlagener Verlinkung. "Zurücksetzen & neu verlinken" setzt die Fehler zurück und startet die Verlinkung sofort erneut.
+                </div>
+
+                <!-- Error category summary -->
+                <div id="linkErrorCategorySummary" style="display:none; margin-bottom:12px;">
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;" id="linkErrorCategories"></div>
+                </div>
+
+                <div class="search-box" style="margin-bottom:10px;">
+                    <input type="text" id="searchLinkErrors" placeholder="Fehler suchen..." data-i18n-placeholder="map.link_errors.search" onkeyup="filterLinkErrors()">
+                    <label style="display:flex;align-items:center;gap:4px;font-size:13px;white-space:nowrap;margin:0;">
+                        <input type="checkbox" id="selectAllLinkErrors" onchange="toggleSelectAllLinkErrors(this)"> <span data-i18n="map.link_errors.select_all">Alle auswählen</span>
+                    </label>
+                </div>
+                <div class="table-container" style="max-height:520px; overflow-y:auto;">
+                    <table id="linkErrorsTable">
+                        <thead>
+                            <tr>
+                                <th style="width:30px;"><input type="checkbox" id="selectAllLinkErrorsHead" onchange="toggleSelectAllLinkErrors(this)"></th>
+                                <th>ID</th>
+                                <th data-i18n="map.link_errors.source_doc">Quell-Dok</th>
+                                <th data-i18n="map.link_errors.target_doc">Ziel-Dok</th>
+                                <th>DOKOB</th>
+                                <th data-i18n="map.link_errors.target_mapping">Ziel-Mapping</th>
+                                <th data-i18n="map.link_errors.error_cat">Kategorie</th>
+                                <th data-i18n="map.link_errors.error">Fehler</th>
+                                <th style="width:40px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="linkErrorsBody">
+                            <tr>
+                                <td colspan="9" class="loading">
+                                    <div class="spinner"></div> <span data-i18n="loading">Lade...</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="linkErrorsFooter" style="text-align:center; padding:8px; color:#666; font-size:13px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Detail Modal -->
+    <div id="errorDetailModal" class="modal">
+        <div class="modal-content" style="max-width:700px;">
+            <div class="modal-header" style="background:#dc3545; color:#fff;">
+                <h3><i class="fas fa-exclamation-triangle"></i> <span data-i18n="map.link_errors.detail_title">Fehler-Details</span></h3>
+                <button class="modal-close" onclick="closeErrorDetailModal()" style="color:#fff;">&times;</button>
+            </div>
+            <div class="modal-body" id="errorDetailBody" style="padding:20px; font-size:13px;">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeErrorDetailModal()" data-i18n="close">Schließen</button>
+                <button class="btn btn-primary" id="errorDetailResetBtn" style="background:#ffc107; color:#333;" onclick="resetSingleFromModal()">
+                    🔄 <span data-i18n="map.link_errors.reset_this">Diesen zurücksetzen</span>
+                </button>
             </div>
         </div>
     </div>

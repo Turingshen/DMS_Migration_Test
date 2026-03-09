@@ -958,6 +958,142 @@ def refresh_batch_data_stream(batch_id):
                 else:
                     yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 90, 'message': 'Skipped rule updates (all records already successful)'})}\n\n"
             
+            # ========== PHASE 4b: Non-Latin Character Validation ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'validate', 'message': 'Validating character sets (non-Latin detection)...'})}\n\n"
+            
+            from app.process import validate_non_latin_fields
+            
+            # Reload current description + filename from staging (after metadata update)
+            with misc_engine.begin() as con:
+                val_rows = con.execute(text("""
+                    SELECT id, source_description, filename
+                    FROM dbo.migration_staging
+                    WHERE batch_id = :bid AND skip_migration = 0
+                """), {'bid': batch_id}).fetchall()
+            
+            validation_updates = []
+            non_latin_count = 0
+            for vrow in val_rows:
+                vid, vdesc, vfn = vrow[0], vrow[1], vrow[2]
+                warnings = validate_non_latin_fields(vdesc, vfn)
+                if warnings:
+                    non_latin_count += 1
+                    note_text = ' | '.join(warnings)
+                    validation_updates.append({'staging_id': vid, 'validation_notes': note_text})
+                else:
+                    # Clear any previous warnings (re-validation)
+                    validation_updates.append({'staging_id': vid, 'validation_notes': None})
+            
+            if validation_updates:
+                with misc_engine.begin() as con:
+                    con.execute(text("""
+                        IF OBJECT_ID('tempdb..#val_update') IS NOT NULL DROP TABLE #val_update;
+                        CREATE TABLE #val_update (
+                            staging_id INT PRIMARY KEY,
+                            validation_notes NVARCHAR(MAX)
+                        );
+                    """))
+                    val_df = pd.DataFrame(validation_updates)
+                    for i in range(0, len(val_df), 900):
+                        chunk = val_df.iloc[i:i + 900]
+                        chunk.to_sql('#val_update', con, if_exists='append', index=False, method='multi')
+                    con.execute(text("""
+                        UPDATE s
+                        SET s.validation_notes = t.validation_notes
+                        FROM dbo.migration_staging s
+                        INNER JOIN #val_update t ON s.id = t.staging_id
+                    """))
+                    con.execute(text("DROP TABLE #val_update"))
+            
+            if non_latin_count > 0:
+                print(f"[REFRESH] Non-Latin character warnings: {non_latin_count} records")
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'validate', 'percent': 91, 'message': f'Validation: {non_latin_count} records with non-Latin characters'})}\n\n"
+            
+            # ========== PHASE 4c: Local Link Detection (DAPPL=HTM without file content) ==========
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'validate_local', 'message': 'Detecting local links (DAPPL check)...'})}\n\n"
+            
+            local_link_count = 0
+            try:
+                # Find candidates: records with no filename or no file_size (potential local links)
+                with misc_engine.begin() as con:
+                    candidates = con.execute(text("""
+                        SELECT id, source_documentnumber, source_documenttype,
+                               source_documentversion, source_documentpart,
+                               filename, file_size_bytes, source_loioid
+                        FROM dbo.migration_staging
+                        WHERE batch_id = :bid AND skip_migration = 0
+                          AND (filename IS NULL OR file_size_bytes IS NULL)
+                    """), {'bid': batch_id}).fetchall()
+                
+                if candidates:
+                    # Build bulk query for DMS_DOC_FILES DAPPL lookup
+                    conditions = []
+                    for c in candidates:
+                        doknr = str(c[1] or '').strip()
+                        dokar = str(c[2] or '').strip()
+                        dokvr = str(c[3] or '').zfill(2)
+                        doktl = str(c[4] or '').zfill(3)
+                        conditions.append(
+                            f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
+                        )
+                    
+                    # Query DIL.DMS_DOC_FILES for DAPPL in chunks
+                    dappl_results = {}  # (doknr, dokar, dokvr, doktl) -> DAPPL
+                    chunk_sz = 200
+                    for ci in range(0, len(conditions), chunk_sz):
+                        chunk = conditions[ci:ci + chunk_sz]
+                        where_clause = " OR ".join(chunk)
+                        dappl_query = f"""
+                            SELECT DOKNR, DOKAR, DOKVR, DOKTL, DAPPL
+                            FROM DIL.DMS_DOC_FILES
+                            WHERE ({where_clause})
+                        """
+                        with dil_engine.begin() as con:
+                            dappl_rows = con.execute(text(dappl_query)).fetchall()
+                        for dr in dappl_rows:
+                            dk = (str(dr[0]).strip(), str(dr[1]).strip(),
+                                  str(dr[2]).strip(), str(dr[3]).strip())
+                            dappl_results[dk] = str(dr[4] or '').strip().upper()
+                    
+                    # Detect local links: DAPPL='HTM' with no file content
+                    local_link_updates = []
+                    for c in candidates:
+                        sid = c[0]
+                        doknr = str(c[1] or '').strip()
+                        dokar = str(c[2] or '').strip()
+                        dokvr = str(c[3] or '').zfill(2)
+                        doktl = str(c[4] or '').zfill(3)
+                        fn = c[5]      # filename
+                        fsz = c[6]     # file_size_bytes
+                        key = (doknr, dokar, dokvr, doktl)
+                        dappl = dappl_results.get(key, '')
+                        
+                        if dappl == 'HTM' and (fn is None or fn == '') and (fsz is None or fsz == 0):
+                            local_link_count += 1
+                            warning = f"Lokaler Link vermutet (DAPPL=HTM, keine Datei im Content Repository)"
+                            local_link_updates.append({'staging_id': sid, 'note': warning})
+                    
+                    # Append warnings to validation_notes (don't overwrite non-Latin warnings)
+                    if local_link_updates:
+                        with misc_engine.begin() as con:
+                            for upd in local_link_updates:
+                                con.execute(text("""
+                                    UPDATE dbo.migration_staging
+                                    SET validation_notes = CASE
+                                        WHEN validation_notes IS NULL THEN :note
+                                        WHEN validation_notes LIKE '%Lokaler Link%' THEN validation_notes
+                                        ELSE validation_notes + ' | ' + :note
+                                    END
+                                    WHERE id = :sid
+                                """), {'note': upd['note'], 'sid': upd['staging_id']})
+                
+                if local_link_count > 0:
+                    print(f"[REFRESH] Local link warnings (DAPPL=HTM): {local_link_count} records")
+            except Exception as e:
+                print(f"[REFRESH] Local link detection failed: {e}")
+            
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'validate_local', 'percent': 92, 'message': f'Validation: {local_link_count} lokale Links erkannt (DAPPL=HTM)'})}\n\n"
+            
             # ========== PHASE 5: Object-Link Counts ==========
             yield f"data: {json.dumps({'type': 'status', 'phase': 'link_counts', 'message': 'Phase 5/5: Calculating object link counts...'})}\n\n"
             
@@ -1034,7 +1170,7 @@ def refresh_batch_data_stream(batch_id):
             records_zero_links = sum(1 for lu in link_updates if lu['source_link_count'] == 0)
             
             # Convert numpy types to native Python types for JSON serialization
-            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0, 'links_excluded': int(links_excluded_total), 'records_zero_links': int(records_zero_links)})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Refresh complete', 'metadata_updated': int(updated_count), 'rules_applied': int(rules_applied), 'filenames_found': int(filenames_found), 'descriptions_found': int(descriptions_found), 'total_records': int(total_records), 'total_size_mb': round(float(total_bytes) / (1024 * 1024), 1) if total_bytes else 0, 'max_file_mb': round(float(max_bytes) / (1024 * 1024), 1) if max_bytes else 0, 'links_excluded': int(links_excluded_total), 'records_zero_links': int(records_zero_links), 'non_latin_warnings': int(non_latin_count), 'local_link_warnings': int(local_link_count)})}\n\n"
             
         except Exception as e:
             import traceback

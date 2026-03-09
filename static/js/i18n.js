@@ -71,6 +71,8 @@
         'wf.step2_title':              { de: 'Vorschau und Vorbereitung', en: 'Preview and preparation' },
         'wf.step3_title':              { de: 'Objekt Link & Verlinkung', en: 'Object link & linking' },
         'wf.step4_title':              { de: 'Auswertung & Details', en: 'Results & details' },
+        'wf.step5':                    { de: 'Validierung', en: 'Validation' },
+        'wf.step5_title':              { de: 'Validierung & Prüfung', en: 'Validation & verification' },
 
         // ══════════════════════════════════════════════════════════════
         // DASHBOARD (index.html)
@@ -363,7 +365,7 @@
         'prev.staging_records':         { de: 'Staging-Datensätze', en: 'Staging Records' },
         'prev.records_selected':        { de: '{{n}} Datensätze ausgewählt', en: '{{n}} records selected' },
         'prev.btn.columns':             { de: 'Spalten', en: 'Columns' },
-        'prev.btn.refresh':             { de: 'Daten aktualisieren', en: 'Refresh Data' },
+        'prev.btn.refresh':             { de: 'Daten anreichern', en: 'Enrich Data' },
         'prev.btn.exclude_99mb':        { de: '>99MB ausschließen', en: 'Exclude >99MB' },
         'prev.btn.execute_selected':    { de: 'Ausgewählte ausführen', en: 'Execute Selected' },
         'prev.btn.execute_all':         { de: 'Alle ausführen', en: 'Execute All' },
@@ -485,6 +487,12 @@
         'link.exists':                 { de: 'Existiert', en: 'Exists' },
         'link.error':                  { de: 'Fehler', en: 'Error' },
         'link.skipped':                { de: 'Übersprungen', en: 'Skipped' },
+        'link.not_needed':             { de: 'Nicht notwendig', en: 'Not needed' },
+        'link.not_needed_tip':         { de: 'Keine Dateien im Quellsystem – Link nicht notwendig', en: 'No files in source system – linking not needed' },
+
+        // Validation warnings (non-Latin characters)
+        'val.non_latin_summary':       { de: 'Records mit nicht-lateinischen Zeichen (z.B. Koreanisch, CJK)', en: 'Records with non-Latin characters (e.g. Korean, CJK)' },
+        'val.non_latin_file_tip':      { de: 'Dateiname enthält nicht-lateinische Zeichen – wird im SAP Slug-Header durch _ ersetzt', en: 'Filename contains non-Latin chars – replaced with _ in SAP Slug header' },
         'link.open_tip':               { de: 'Bereit zur Verlinkung', en: 'Ready for linking' },
         'link.linking_tip':            { de: 'Wird verlinkt', en: 'Being linked' },
         'link.linked_tip':             { de: 'Verlinkt', en: 'Linked' },
@@ -576,7 +584,7 @@
         'mig.reset_done':              { de: 'Zurücksetzen abgeschlossen!', en: 'Reset completed!' },
         'mig.reset_failed':            { de: 'Zurücksetzen fehlgeschlagen: {{msg}}', en: 'Reset failed: {{msg}}' },
         'mig.reset_error':             { de: 'Fehler beim Zurücksetzen: {{msg}}', en: 'Reset error: {{msg}}' },
-        'mig.refresh_confirm':         { de: 'Daten aktualisieren?\n\nDies führt folgende Schritte aus:\n1. Metadata aus DIL holen\n2. Dateinamen aus DIL.DRAW holen\n3. Migration Rules anwenden', en: 'Refresh data?\n\nThis will perform the following steps:\n1. Fetch metadata from DIL\n2. Fetch filenames from DIL.DRAW\n3. Apply migration rules' },
+        'mig.refresh_confirm':         { de: 'Daten anreichern?\n\nDies führt folgende Schritte aus:\n1. Metadata aus DIL holen\n2. Dateinamen aus DIL.DRAW holen\n3. Migration Rules anwenden', en: 'Enrich data?\n\nThis will perform the following steps:\n1. Fetch metadata from DIL\n2. Fetch filenames from DIL.DRAW\n3. Apply migration rules' },
         'mig.metadata_updated':        { de: 'Metadata aktualisiert:', en: 'Metadata updated:' },
         'mig.filenames_found':         { de: 'Dateinamen gefunden:', en: 'Filenames found:' },
         'mig.rules_applied':           { de: 'Regeln angewendet:', en: 'Rules applied:' },
@@ -895,6 +903,51 @@
         'map.link_all_title':          { de: 'Objektlinks für alle verlinkbaren Datensätze erstellen', en: 'Create object links for all linkable records' },
         'map.link_selected_title':     { de: 'Objektlinks für ausgewählte Datensätze erstellen', en: 'Create object links for selected records' },
 
+        // Link errors tab
+        'map.tab.link_errors':         { de: 'Link-Fehler', en: 'Link Errors' },
+        'map.link_errors.title':       { de: 'Link-Fehler', en: 'Link Errors' },
+        'map.link_errors.info':        { de: 'Datensätze mit fehlgeschlagener Verlinkung. "Zurücksetzen & neu verlinken" setzt die Fehler zurück und startet die Verlinkung sofort erneut.', en: 'Records with failed linking. "Reset & Relink" resets errors and immediately starts linking again.' },
+        'map.link_errors.none':        { de: 'Keine Link-Fehler — alles verlinkt!', en: 'No link errors — all linked!' },
+        'map.link_errors.load_error':  { de: 'Fehler beim Laden der Link-Fehler', en: 'Error loading link errors' },
+        'map.link_errors.showing':     { de: '{{n}} fehlerhafte Datensätze', en: '{{n}} failed records' },
+        'map.link_errors.source_doc':  { de: 'Quell-Dok', en: 'Source Doc' },
+        'map.link_errors.target_doc':  { de: 'Ziel-Dok', en: 'Target Doc' },
+        'map.link_errors.target_mapping': { de: 'Ziel-Mapping', en: 'Target Mapping' },
+        'map.link_errors.error':       { de: 'Fehler', en: 'Error' },
+        'map.link_errors.error_cat':   { de: 'Kategorie', en: 'Category' },
+        'map.link_errors.search':      { de: 'Fehler suchen...', en: 'Search errors...' },
+        'map.link_errors.select_all':  { de: 'Alle auswählen', en: 'Select all' },
+        'map.link_errors.reset_all':   { de: 'Alle zurücksetzen', en: 'Reset All' },
+        'map.link_errors.reset_selected': { de: 'Ausgewählte zurücksetzen', en: 'Reset Selected' },
+        'map.link_errors.reset_n':     { de: '{{n}} zurücksetzen', en: 'Reset {{n}}' },
+        'map.link_errors.reset_all_confirm': { de: 'Alle {{n}} fehlerhaften Link-Datensätze auf "Ausstehend" zurücksetzen?', en: 'Reset all {{n}} failed link records to "Pending"?' },
+        'map.link_errors.reset_selected_confirm': { de: '{{n}} ausgewählte Datensätze auf "Ausstehend" zurücksetzen?', en: 'Reset {{n}} selected records to "Pending"?' },
+        'map.link_errors.reset_done':  { de: '{{n}} Datensätze zurückgesetzt.', en: '{{n}} records reset.' },
+        'map.link_errors.reset_error': { de: 'Fehler beim Zurücksetzen: {{msg}}', en: 'Reset error: {{msg}}' },
+        'map.link_errors.validation':  { de: 'Validierung öffnen', en: 'Open Validation' },
+        'map.link_errors.reset_and_relink':  { de: 'Zurücksetzen & neu verlinken', en: 'Reset & Relink' },
+        'map.link_errors.reset_sel_relink':  { de: 'Ausgewählte zurücksetzen & verlinken', en: 'Reset Selected & Relink' },
+        'map.link_errors.reset_n_relink':    { de: '{{n}} zurücksetzen & verlinken', en: 'Reset {{n}} & Relink' },
+        'map.link_errors.reset_relink_confirm':     { de: 'Alle {{n}} fehlerhaften Datensätze zurücksetzen und Verlinkung sofort neu starten?', en: 'Reset all {{n}} failed records and immediately restart linking?' },
+        'map.link_errors.reset_relink_sel_confirm': { de: '{{n}} ausgewählte Datensätze zurücksetzen und Verlinkung sofort neu starten?', en: 'Reset {{n}} selected records and immediately restart linking?' },
+        'map.link_errors.show_detail': { de: 'Details anzeigen', en: 'Show details' },
+        'map.link_errors.detail_title':  { de: 'Fehler-Details', en: 'Error Details' },
+        'map.link_errors.detail_source': { de: 'Quell-Dokument', en: 'Source Document' },
+        'map.link_errors.detail_target': { de: 'Ziel-Dokument', en: 'Target Document' },
+        'map.link_errors.detail_docnr':  { de: 'Dokumentnummer', en: 'Document Number' },
+        'map.link_errors.detail_type':   { de: 'Dokumentart', en: 'Document Type' },
+        'map.link_errors.detail_version':{ de: 'Version', en: 'Version' },
+        'map.link_errors.detail_part':   { de: 'Teil', en: 'Part' },
+        'map.link_errors.detail_error_msg': { de: 'Fehlermeldung', en: 'Error Message' },
+        'map.link_errors.reset_this':    { de: 'Diesen zurücksetzen', en: 'Reset this record' },
+        'map.link_errors.cat_auth':      { de: 'Authentifizierung', en: 'Authentication' },
+        'map.link_errors.cat_duplicate': { de: 'Bereits vorhanden', en: 'Already exists' },
+        'map.link_errors.cat_connection':{ de: 'Verbindungsfehler', en: 'Connection Error' },
+        'map.link_errors.cat_no_mapping':{ de: 'Kein Mapping', en: 'No Mapping' },
+        'map.link_errors.cat_other':     { de: 'Sonstige', en: 'Other' },
+        'map.link_errors.cat_unknown':   { de: 'Unbekannt', en: 'Unknown' },
+        'close':                         { de: 'Schließen', en: 'Close' },
+
         // ══════════════════════════════════════════════════════════════
         // MIGRATION DETAILS (migration_details.html)
         // ══════════════════════════════════════════════════════════════
@@ -998,6 +1051,63 @@
         'det.error_detail_label':        { de: 'Fehlerdetails:', en: 'Error Details:' },
         'det.notes_label':               { de: 'Notizen:', en: 'Notes:' },
         'det.th.actions':              { de: 'Aktionen', en: 'Actions' },
+
+        // ══════════════════════════════════════════════════════════════
+        // VALIDATION DASHBOARD (validation.html + validation.js)
+        // ══════════════════════════════════════════════════════════════
+        'val.title':                   { de: 'Validierung', en: 'Validation' },
+        'val.subtitle':                { de: 'Ergebnisübersicht nach Verlinkung', en: 'Results overview after linking' },
+        'val.back_to_batch':           { de: 'Zurück zum Batch', en: 'Back to Batch' },
+        'val.refresh':                 { de: 'Aktualisieren', en: 'Refresh' },
+        'val.export_csv':              { de: 'CSV Export', en: 'CSV Export' },
+        'val.loading':                 { de: 'Lade Validierungsdaten...', en: 'Loading validation data...' },
+        'val.no_data':                 { de: 'Keine Daten vorhanden', en: 'No data available' },
+        'val.no_errors':               { de: 'Keine Fehler — alles in Ordnung!', en: 'No errors — all good!' },
+
+        // KPI cards
+        'val.kpi.total':               { de: 'Gesamt', en: 'Total' },
+        'val.kpi.linked':              { de: 'Verlinkt', en: 'Linked' },
+        'val.kpi.link_failed':         { de: 'Link-Fehler', en: 'Link Errors' },
+        'val.kpi.pending':             { de: 'Ausstehend', en: 'Pending' },
+        'val.kpi.skipped':             { de: 'Übersprungen', en: 'Skipped' },
+        'val.kpi.coverage':            { de: 'Abdeckung', en: 'Coverage' },
+
+        // Progress bars
+        'val.progress.upload':         { de: 'Upload-Fortschritt', en: 'Upload Progress' },
+        'val.progress.linking':        { de: 'Verlinkung-Fortschritt', en: 'Linking Progress' },
+
+        // DOKOB mapping section
+        'val.dokob.title':             { de: 'Mapping-Abdeckung nach DOKOB', en: 'Mapping Coverage by DOKOB' },
+        'val.dokob.source':            { de: 'Quell-DOKOB', en: 'Source DOKOB' },
+        'val.dokob.total_records':     { de: 'Datensätze', en: 'Records' },
+        'val.dokob.mapped':            { de: 'Gemappt', en: 'Mapped' },
+        'val.dokob.unmapped':          { de: 'Ungemappt', en: 'Unmapped' },
+        'val.dokob.linked':            { de: 'Verlinkt', en: 'Linked' },
+        'val.dokob.link_failed':       { de: 'Fehler', en: 'Errors' },
+        'val.dokob.coverage':          { de: 'Abdeckung', en: 'Coverage' },
+
+        // Error analysis
+        'val.errors.link_title':       { de: 'Link-Fehler Analyse', en: 'Link Error Analysis' },
+        'val.errors.upload_title':     { de: 'Upload-Fehler Analyse', en: 'Upload Error Analysis' },
+        'val.errors.pattern':          { de: 'Fehlermuster', en: 'Error Pattern' },
+        'val.errors.count':            { de: 'Anzahl', en: 'Count' },
+
+        // Source → Target comparison
+        'val.comp.title':              { de: 'Quell- / Ziel-Vergleich', en: 'Source / Target Comparison' },
+        'val.comp.all':                { de: 'Alle', en: 'All' },
+        'val.comp.failed':             { de: 'Fehler', en: 'Errors' },
+        'val.comp.pending':            { de: 'Ausstehend', en: 'Pending' },
+        'val.comp.linked':             { de: 'Verlinkt', en: 'Linked' },
+        'val.comp.skipped':            { de: 'Übersprungen', en: 'Skipped' },
+        'val.comp.search':             { de: 'Suchen...', en: 'Search...' },
+        'val.comp.source_doc':         { de: 'Quell-Dok', en: 'Source Doc' },
+        'val.comp.target_doc':         { de: 'Ziel-Dok', en: 'Target Doc' },
+        'val.comp.target_dokob':       { de: 'Ziel-DOKOB', en: 'Target DOKOB' },
+        'val.comp.target_objky':       { de: 'Ziel-OBJKY', en: 'Target OBJKY' },
+        'val.comp.upload':             { de: 'Upload', en: 'Upload' },
+        'val.comp.link':               { de: 'Link', en: 'Link' },
+        'val.comp.error':              { de: 'Fehler', en: 'Error' },
+        'val.comp.showing':            { de: 'Zeige {{shown}} von {{total}} Datensätzen', en: 'Showing {{shown}} of {{total}} records' },
 
         // ══════════════════════════════════════════════════════════════
         // WAVE OVERVIEW (wave_overview.html)

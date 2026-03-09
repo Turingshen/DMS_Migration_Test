@@ -38,7 +38,7 @@
                 { num: '0',  label: 'Einstellungen',                 page: 'settings',    desc: 'SAP-Systeme konfigurieren, Credentials speichern, Performance-Parameter setzen' },
                 { num: '0b', label: 'Regeln definieren',             page: 'rules',       desc: 'Übersetzungs- und Überschreibungsregeln für Dokumenttypen und -felder festlegen' },
                 { num: '1',  label: 'Batch erstellen',               page: 'prepare',     desc: 'Werke auswählen, DMS-Objekte laden, optional Ausschlüsse definieren, Batch anlegen' },
-                { num: '2',  label: 'Vorschau & Daten aktualisieren',page: 'preview',     desc: 'Batch prüfen, Daten aktualisieren (LOIO, Dateigröße, Regeln anwenden), Datensätze überspringen' },
+                { num: '2',  label: 'Vorschau & Daten anreichern',page: 'preview',     desc: 'Batch prüfen, Daten anreichern (LOIO, Dateigröße, Regeln anwenden), Datensätze überspringen' },
                 { num: '3a', label: 'Migration ausführen',           page: 'preview',     desc: 'Dokumente ins Zielsystem hochladen — Container erstellen und Dateien übertragen' },
                 { num: '3b', label: 'Objekt-Zuordnung & Verlinkung', page: 'mapping',     desc: 'Quell-Objekte auf Ziel-Objekte mappen, dann Verlinkung im Zielsystem erstellen' },
                 { num: '4',  label: 'Auswertung',                    page: 'details',     desc: 'Ergebnisse analysieren, Fehler untersuchen, fehlgeschlagene Datensätze erneut versuchen' },
@@ -114,7 +114,7 @@
         rules: {
             title: 'Migrationsregeln',
             icon: 'fas fa-tasks',
-            intro: 'Regeln transformieren Dokumentfelder automatisch während „Daten aktualisieren" (Phase 4/4). Sie werden in der festgelegten Reihenfolge auf jeden Datensatz angewandt.',
+            intro: 'Regeln transformieren Dokumentfelder automatisch während „Daten anreichern" (Phase 4/4). Sie werden in der festgelegten Reihenfolge auf jeden Datensatz angewandt.',
             sections: [
                 {
                     title: 'Übersetzungsregeln (Translation)',
@@ -134,8 +134,8 @@
                 }
             ],
             warnings: [
-                'Regeln werden nur beim „Daten aktualisieren" in der Vorschau angewandt — nicht beim Batch-Erstellen.',
-                'Änderungen an Regeln erfordern ein erneutes „Daten aktualisieren" für bestehende Batches.'
+                'Regeln werden nur beim „Daten anreichern" in der Vorschau angewandt — nicht beim Batch-Erstellen.',
+                'Änderungen an Regeln erfordern ein erneutes „Daten anreichern" für bestehende Batches.'
             ]
         },
 
@@ -182,8 +182,8 @@
                     content: 'Oben sehen Sie:\n• <b>Gesamtanzahl</b> Datensätze\n• <b>Dateigrößen-Verteilung</b> (Mini/Klein/Mittel/Groß)\n• <b>Ablage-Typ</b>: KPRO (Content Repository) vs. DB (Datenbank)\n• <b>Status-Verteilung</b>: Pending, Success, Failed, Partial'
                 },
                 {
-                    title: '⭐ 2. „Daten aktualisieren" ausführen',
-                    content: '<b>Das ist der wichtigste Schritt!</b> Klicken Sie den Button „Daten aktualisieren" / „Refresh". Das System durchläuft 5 Phasen:\n\n<b>Phase 1/4</b>: LOIO-Lookup — Dateireferenzen aus dem Content Repository laden\n<b>Phase 2/4</b>: Dateigrößen — Tatsächliche Dateigrößen ermitteln\n<b>Phase 3/4</b>: Dateinamen + Beschreibungen — aus DRAW/DRAT (Englisch bevorzugt, dann Deutsch)\n<b>Phase 4/4</b>: Migrationsregeln anwenden — Übersetzungs-/Überschreibungsregeln ausführen\n<b>Phase 5/5</b>: Linkzählung — Quell-/Ziel-Verknüpfungen zählen',
+                    title: '⭐ 2. „Daten anreichern" ausführen',
+                    content: '<b>Das ist der wichtigste Schritt!</b> Klicken Sie den Button „Daten anreichern" / „Enrich Data". Das System durchläuft 5 Phasen:\n\n<b>Phase 1/4</b>: LOIO-Lookup — Dateireferenzen aus dem Content Repository laden\n<b>Phase 2/4</b>: Dateigrößen — Tatsächliche Dateigrößen ermitteln\n<b>Phase 3/4</b>: Dateinamen + Beschreibungen — aus DRAW/DRAT (Englisch bevorzugt, dann Deutsch)\n<b>Phase 4/4</b>: Migrationsregeln anwenden — Übersetzungs-/Überschreibungsregeln ausführen\n<b>Phase 5/5</b>: Linkzählung — Quell-/Ziel-Verknüpfungen zählen',
                     highlight: true
                 },
                 {
@@ -204,7 +204,7 @@
                 }
             ],
             warnings: [
-                '⚠️ WICHTIG: „Daten aktualisieren" MUSS vor der Ausführung gemacht werden! Ohne dies fehlen LOIO-IDs, Dateigrößen und Dateinamen.',
+                '⚠️ WICHTIG: „Daten anreichern" MUSS vor der Ausführung gemacht werden! Ohne dies fehlen LOIO-IDs, Dateigrößen und Dateinamen.',
                 'Stellen Sie sicher, dass Sie angemeldet sind und das Token gültig ist.',
                 'Große Batches (>10.000 Dokumente) können mehrere Stunden dauern. Die Session wird automatisch am Leben gehalten.'
             ]

@@ -10,6 +10,7 @@ _refresh_token_standalone().
 
 import pandas as pd
 import time
+import json
 import requests
 import threading
 import unicodedata
@@ -71,6 +72,61 @@ except Exception:
     dil_engine = None
 
 
+# Extension normalization: map non-standard extensions to SAP-recognized equivalents.
+# SAP determines DAPPL (Application type) from the file extension in the Slug header.
+# Unrecognized extensions (e.g. .zipx) result in DAPPL=BIN ("Any kind of binary data").
+EXTENSION_NORMALIZE_MAP = {
+    'zipx': 'zip',    # WinZip extended → standard ZIP
+    'jpeg': 'jpg',    # JPEG alias
+    'jfif': 'jpg',    # JPEG File Interchange Format
+    'tiff': 'tif',    # TIFF alias
+    'htm':  'html',   # HTML alias
+    'mpeg': 'mpg',    # MPEG alias
+    'docm': 'docx',   # Word macro-enabled
+    'xlsm': 'xlsx',   # Excel macro-enabled
+    'pptm': 'pptx',   # PowerPoint macro-enabled
+}
+
+# Additional MIME types for extensions Python's mimetypes module doesn't know
+CUSTOM_MIME_TYPES = {
+    '.zipx': 'application/zip',
+    '.jfif': 'image/jpeg',
+    '.dwg':  'application/acad',
+    '.dwf':  'application/x-dwf',
+    '.msg':  'application/vnd.ms-outlook',
+    '.eml':  'message/rfc822',
+}
+
+
+def _normalize_extension(filename):
+    """Normalize file extension so SAP assigns the correct DAPPL.
+    
+    Example: 'report.zipx' → 'report.zip' (SAP: ZIP instead of BIN)
+    
+    Returns:
+        tuple: (normalized_filename, was_changed)
+    """
+    if not filename or '.' not in filename:
+        return filename, False
+    name, ext = filename.rsplit('.', 1)
+    ext_lower = ext.lower()
+    if ext_lower in EXTENSION_NORMALIZE_MAP:
+        new_ext = EXTENSION_NORMALIZE_MAP[ext_lower]
+        return f"{name}.{new_ext}", True
+    return filename, False
+
+
+def _get_mime_type(filename):
+    """Get MIME type for a filename, including custom mappings for uncommon extensions."""
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(filename)
+    if not mime_type and filename:
+        # Check our custom map
+        ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        mime_type = CUSTOM_MIME_TYPES.get(ext)
+    return mime_type or 'application/octet-stream'
+
+
 def _sanitize_slug(filename):
     """Sanitize a filename for use in the HTTP Slug header.
     
@@ -80,23 +136,35 @@ def _sanitize_slug(filename):
     
     Strategy:
         1. NFC-normalize (compose precomposed accents: à instead of a + \\u0300)
-        2. Replace any remaining non-latin-1 chars with '_'
-        3. Preserve the file extension
+        2. Percent-encode non-latin-1 chars (e.g. Korean 창 → %EC%B0%BD)
+           This preserves the original characters in a way SAP can decode them,
+           and stays within ASCII which is valid for HTTP headers.
+        3. Normalize the file extension for SAP compatibility
     """
     if not filename:
         return 'unnamed'
     try:
+        # Step 0: Normalize extension (e.g. .zipx → .zip)
+        filename, ext_changed = _normalize_extension(filename)
+        if ext_changed:
+            import logging
+            logging.getLogger('dms_migration').info(f"Extension normalized in Slug: {filename}")
+        
         # Step 1: Normalize composable sequences (e.g. a + \\u0300 → à)
         normalized = unicodedata.normalize('NFC', filename)
         
-        # Step 2: Replace characters that can't be encoded as latin-1
+        # Step 2: Percent-encode characters that can't be encoded as latin-1
+        # This keeps the original information intact (SAP can decode %XX sequences)
+        # while staying within the ASCII range for HTTP header safety.
+        from urllib.parse import quote
         safe_chars = []
         for ch in normalized:
             try:
                 ch.encode('latin-1')
                 safe_chars.append(ch)
             except UnicodeEncodeError:
-                safe_chars.append('_')
+                # Percent-encode the UTF-8 bytes: 창 → %EC%B0%BD
+                safe_chars.append(quote(ch, safe=''))
         return ''.join(safe_chars) or 'unnamed'
     except Exception:
         # Absolute fallback: ASCII-only
@@ -693,6 +761,8 @@ def _auto_classify_error(error):
     error_str = str(error).upper()
     
     # Check for common patterns
+    if 'LOCAL_LINK' in error_str:
+        return 'LOCAL_LINK'
     if 'READ_EMPTY' in error_str or 'NO DOCUMENTS FOUND' in error_str:
         return 'READ_EMPTY'
     if 'READ_TIMEOUT' in error_str or 'TIMEOUT' in error_str:
@@ -1020,6 +1090,47 @@ def execute_single_document(staging_record, session_snapshot):
                 container_already_created = False  # Force normal read path
         
         if not container_already_created:
+            # LOCAL LINK DETECTION: DAPPL=HTM with no file content → likely a local link
+            # that cannot be read from SAP Content Repository.
+            staging_fn = staging_record.get('filename')
+            staging_fsz = staging_record.get('file_size_bytes')
+            if (staging_fn is None or staging_fn == '') and (staging_fsz is None or staging_fsz == 0):
+                # Check DAPPL from DIL.DMS_DOC_FILES
+                _local_link_dappl = ''
+                try:
+                    if DIL_AVAILABLE and dil_engine:
+                        with dil_engine.begin() as _llcon:
+                            _ll_row = _llcon.execute(text("""
+                                SELECT DAPPL FROM DIL.DMS_DOC_FILES
+                                WHERE DOKNR = :doknr AND DOKAR = :dokar
+                                  AND DOKVR = :dokvr AND DOKTL = :doktl
+                            """), {
+                                'doknr': staging_record['source_documentnumber'],
+                                'dokar': staging_record['source_documenttype'],
+                                'dokvr': str(staging_record['source_documentversion']).zfill(2),
+                                'doktl': str(staging_record['source_documentpart']).zfill(3)
+                            }).fetchone()
+                            if _ll_row:
+                                _local_link_dappl = str(_ll_row[0] or '').strip().upper()
+                except Exception as _lle:
+                    logger.debug(f"Local link DAPPL check failed: {_lle}", category="READ")
+                
+                if _local_link_dappl == 'HTM':
+                    error_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
+                                 "Datei nicht im Content Repository gespeichert. "
+                                 "Lokale Pfad-Referenz kann nicht migriert werden.")
+                    logger.info(error_msg, category="READ")
+                    update_execution_status(staging_id, 'success', error_msg)
+                    update_link_status(staging_id, 'link_skipped',
+                                       'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
+                    return {
+                        'staging_id': staging_id,
+                        'status': 'success',
+                        'error': error_msg,
+                        'error_category': 'LOCAL_LINK',
+                        'status_code': 200
+                    }
+            
             # NORMAL MODE: Read from source system
             # Prepare session headers for read system
             prepare_session_headers(server_session, session_snapshot, source_system)
@@ -1048,15 +1159,17 @@ def execute_single_document(staging_record, session_snapshot):
         
         if not documents[2] or len(documents[2]) == 0:
             error_msg = "READ_EMPTY - No documents found"
-            error_info = {'status_code': 404, 'detail': 'Container has no files attached'}
-            logger.warning(error_msg, category="READ")
-            update_execution_status(staging_id, 'failed', error_msg)
+            logger.info(error_msg + " (treated as success - no files to migrate)", category="READ")
+            # Treat as success: no files in source = nothing to migrate = OK
+            update_execution_status(staging_id, 'success', error_msg)
+            # Mark link as not needed (no container → no linking)
+            update_link_status(staging_id, 'link_skipped', 'Nicht notwendig - Keine Dateien im Quellsystem')
             return {
                 'staging_id': staging_id, 
-                'status': 'failed', 
+                'status': 'success', 
                 'error': error_msg, 
                 'error_category': 'SOURCE_EMPTY',
-                'status_code': 404
+                'status_code': 200
             }
         
         source_file_count = len(documents[2])
@@ -1366,12 +1479,14 @@ def execute_single_document(staging_record, session_snapshot):
                         else:
                             logger.warning(f"No valid extension found for: {filename} (Wsapplication, DRAW and DMS_DOC_FILES fallbacks exhausted)", category="READ")
             
+            # Normalize extension BEFORE metadata/upload (e.g. .zipx → .zip)
+            filename, ext_normalized = _normalize_extension(filename)
+            if ext_normalized:
+                logger.info(f"Extension normalized: {filename} (original had non-standard extension)", category="READ")
+            
             # Update metadata fields in staging table (once, on first successful file read)
             if not metadata_updated:
-                import mimetypes
-                mime_type, _ = mimetypes.guess_type(filename)
-                if not mime_type:
-                    mime_type = 'application/octet-stream'
+                mime_type = _get_mime_type(filename)
                 file_size = len(response.content) if response.content else 0
                 
                 update_metadata_fields(
@@ -1625,14 +1740,12 @@ def execute_single_document(staging_record, session_snapshot):
                     update_execution_status(staging_id, 'failed', error_msg)
                     return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
                 
-                import mimetypes
-                mime_type, _ = mimetypes.guess_type(filename)
-                if not mime_type:
-                    mime_type = 'application/octet-stream'
+                mime_type = _get_mime_type(filename)
                 
                 # Sanitize filename for HTTP Slug header: requests encodes headers
-                # as latin-1, so non-latin-1 characters (e.g. \u0300 combining grave
-                # accent) cause UnicodeEncodeError. Normalize and strip them.
+                # as latin-1, so non-latin-1 characters (e.g. Korean, CJK) are
+                # percent-encoded (e.g. 창 → %EC%B0%BD) to stay HTTP-header-safe.
+                # Extension is also normalized (e.g. .zipx → .zip) for SAP DAPPL.
                 slug_filename = _sanitize_slug(filename)
                 server_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
                 
@@ -1658,10 +1771,7 @@ def execute_single_document(staging_record, session_snapshot):
                 file_size_mb = file_size / 1024 / 1024
                 
                 # Get MIME type for file details
-                import mimetypes
-                current_mime_type, _ = mimetypes.guess_type(filename)
-                if not current_mime_type:
-                    current_mime_type = 'application/octet-stream'
+                current_mime_type = _get_mime_type(filename)
                 
                 logger.info(f"Uploading file: {filename} ({file_size:,} bytes / {file_size_mb:.2f} MB)", category="UPLOAD")
                 logger.info(f"Upload URL: {attachment_url}", category="UPLOAD")
@@ -2852,6 +2962,70 @@ def update_link_status(staging_id, status, error=None):
         print(f"[LINK_UPDATE_ERROR] Failed to update staging_id={staging_id}: {e}")
 
 
+def batch_update_link_statuses(updates):
+    """Bulk update link_status for multiple staging records in a single transaction.
+    
+    Much faster than calling update_link_status() individually for each record, 
+    since it uses one DB connection/transaction instead of N.
+    
+    Args:
+        updates: list of dicts with keys: staging_id, status, error (optional)
+    """
+    if not updates:
+        return
+    try:
+        with misc_engine.begin() as con:
+            # Split into completed (need timestamp) and non-completed
+            for upd in updates:
+                completed_clause = ""
+                if upd['status'] in ('linked', 'link_failed', 'link_exists', 'skipped', 'partial_linked', 'link_skipped'):
+                    completed_clause = ", link_completed_at = GETUTCDATE()"
+                
+                con.execute(text(f"""
+                    UPDATE dbo.migration_staging
+                    SET link_status = :status,
+                        link_error = :error
+                        {completed_clause}
+                    WHERE id = :staging_id
+                """), {
+                    'status': upd['status'],
+                    'error': upd.get('error'),
+                    'staging_id': upd['staging_id']
+                })
+        print(f"[LINK_BATCH_UPDATE] Updated {len(updates)} records in single transaction")
+    except Exception as e:
+        print(f"[LINK_BATCH_UPDATE_ERROR] Failed to batch update {len(updates)} records: {e}")
+        # Fallback: try individual updates
+        for upd in updates:
+            try:
+                update_link_status(upd['staging_id'], upd['status'], upd.get('error'))
+            except Exception:
+                pass
+
+
+def batch_set_linking(staging_ids):
+    """Set link_status='linking' for multiple records at once.
+    
+    Args:
+        staging_ids: list of staging record IDs
+    """
+    if not staging_ids:
+        return
+    try:
+        with misc_engine.begin() as con:
+            # Use IN clause with chunks of 1000
+            for i in range(0, len(staging_ids), 1000):
+                chunk = staging_ids[i:i+1000]
+                placeholders = ', '.join(str(int(sid)) for sid in chunk)
+                con.execute(text(f"""
+                    UPDATE dbo.migration_staging
+                    SET link_status = 'linking', link_error = NULL
+                    WHERE id IN ({placeholders})
+                """))
+    except Exception as e:
+        print(f"[LINK_BATCH_SET_ERROR] Failed to set linking for {len(staging_ids)} records: {e}")
+
+
 def load_linkable_records(batch_id, record_ids=None):
     """Load records that are eligible for linking (Phase 2).
     
@@ -2903,7 +3077,7 @@ def load_linkable_records(batch_id, record_ids=None):
     return df
 
 
-def link_single_record(staging_record, session_snapshot):
+def link_single_record(staging_record, session_snapshot, mappings_cache=None, skip_status_updates=False):
     """Create Object Links for a single staging record (Phase 2).
     
     Makes lightweight POST(s) to A_DocumentInfoRecordObjLink.
@@ -2911,6 +3085,13 @@ def link_single_record(staging_record, session_snapshot):
     
     Supports multiple object links per document: iterates through source_object_links JSON,
     applies object mapping for each, and creates all target links.
+    
+    Args:
+        staging_record: dict with staging record data
+        session_snapshot: SAP session/auth data
+        mappings_cache: Pre-loaded mappings dict (source_dokob, source_objky) -> (target_dokob, target_objky).
+                        If None, loads from DB (legacy, slower).
+        skip_status_updates: If True, skip individual DB status updates (caller handles batch updates).
     
     Returns:
         dict with 'staging_id', 'status', 'error' (optional), 'status_code' (optional),
@@ -2945,7 +3126,8 @@ def link_single_record(staging_record, session_snapshot):
             use_legacy_targets = True
         else:
             # No links to create
-            update_link_status(staging_id, 'linked')  # Nothing to link is success
+            if not skip_status_updates:
+                update_link_status(staging_id, 'linked')  # Nothing to link is success
             return {
                 'staging_id': staging_id,
                 'status': 'linked',
@@ -2957,16 +3139,20 @@ def link_single_record(staging_record, session_snapshot):
     else:
         use_legacy_targets = False
     
-    # Load object mappings for this batch (used to resolve source -> target)
+    # Load object mappings for this batch (use cache if provided)
     mappings = {}
     if not use_legacy_targets:
-        try:
-            mappings = load_object_mappings(batch_id) or {}
-        except Exception as e:
-            logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
+        if mappings_cache is not None:
+            mappings = mappings_cache
+        else:
+            try:
+                mappings = load_object_mappings(batch_id) or {}
+            except Exception as e:
+                logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
     
     # Mark as linking
-    update_link_status(staging_id, 'linking')
+    if not skip_status_updates:
+        update_link_status(staging_id, 'linking')
     
     try:
         # Create worker-specific session
@@ -2984,6 +3170,25 @@ def link_single_record(staging_record, session_snapshot):
             f"DocumentInfoRecordDocPart='{doc_part}'"
         )
         post_url = f"{doc_base_url}/A_DocumentInfoRecord({doc_key})/to_ProductObj"
+        
+        # ── Pre-check: fetch existing object links from SAP ──────────
+        existing_links = set()
+        try:
+            get_resp = server_session.get(post_url, params={'$format': 'json'})
+            if get_resp.status_code == 200:
+                data = get_resp.json()
+                results_list = data.get('d', {}).get('results', [])
+                for entry in results_list:
+                    ex_dokob = entry.get('LinkedSAPObject', '').strip()
+                    ex_objky = entry.get('LinkedSAPObjectKey', '').strip()
+                    if ex_dokob and ex_objky:
+                        existing_links.add((ex_dokob, ex_objky))
+                if existing_links:
+                    logger.info(f"Pre-check: {len(existing_links)} existing links found in SAP", category="OBJLINK")
+            else:
+                logger.debug(f"Pre-check GET returned {get_resp.status_code}, proceeding without pre-check", category="OBJLINK")
+        except Exception as pre_e:
+            logger.debug(f"Pre-check failed ({pre_e}), proceeding without pre-check", category="OBJLINK")
         
         # Track results
         links_created = 0
@@ -3011,6 +3216,12 @@ def link_single_record(staging_record, session_snapshot):
                     links_skipped += 1
                     continue
             
+            # ── Pre-check: skip if link already exists in SAP ──────
+            if (target_dokob, target_objky) in existing_links:
+                logger.info(f"Link #{link_idx} already exists in SAP (pre-check): {target_dokob}/{target_objky} — skipping POST", category="OBJLINK")
+                links_existed += 1
+                continue
+            
             object_link_payload = {
                 'LinkedSAPObject': target_dokob,
                 'LinkedSAPObjectKey': target_objky,
@@ -3032,14 +3243,32 @@ def link_single_record(staging_record, session_snapshot):
                     logger.info(f"Object link #{link_idx} created: {target_dokob}/{target_objky}", category="OBJLINK")
                     links_created += 1
                 
-                elif link_resp.status_code in (400, 409) and any(x in body_txt_lower for x in ['exist', 'duplicate', 'already']):
-                    logger.info(f"Object link #{link_idx} already exists: {target_dokob}/{target_objky}", category="OBJLINK")
+                elif any(x in body_txt_lower for x in ['exist', 'duplicate', 'already', 'vorhanden', 'bereits']):
+                    # SAP may return 400, 409, or even 500 for duplicates
+                    logger.info(f"Object link #{link_idx} already exists (HTTP {link_resp.status_code}): {target_dokob}/{target_objky}", category="OBJLINK")
                     links_existed += 1
                 
                 else:
                     error_info = _extract_error_fields(link_resp)
-                    last_error = f"LINK_FAIL_{link_resp.status_code}: {error_info.get('detail', 'Unknown')}"
+                    # Build rich error string with all available information
+                    err_detail = error_info.get('detail', 'Unknown')
+                    err_code = error_info.get('code', '')
+                    corr_id = error_info.get('correlation_id', '')
+                    parts = [f"LINK_FAIL_{link_resp.status_code}"]
+                    if err_code:
+                        parts.append(f"[{err_code}]")
+                    parts.append(err_detail)
+                    if corr_id:
+                        parts.append(f"(ID:{corr_id})")
+                    last_error = ': '.join(parts[:2]) + ((' ' + ' '.join(parts[2:])) if len(parts) > 2 else '')
+                    # Truncate to fit DB column (max 2000 chars)
+                    if len(last_error) > 2000:
+                        last_error = last_error[:1997] + '...'
                     logger.warning(f"Object link #{link_idx} failed: {last_error}", category="OBJLINK")
+                    # Log full response body for debugging
+                    raw = error_info.get('raw_body', '')
+                    if raw:
+                        logger.debug(f"Link #{link_idx} full response: {raw}", category="OBJLINK_DEBUG")
                     links_failed += 1
                     
             except Exception as e:
@@ -3049,9 +3278,10 @@ def link_single_record(staging_record, session_snapshot):
         
         # Determine overall status
         total_attempted = links_created + links_failed + links_existed
-        if links_failed > 0 and links_created == 0:
-            # All failed
-            update_link_status(staging_id, 'link_failed', last_error)
+        if links_failed > 0 and links_created == 0 and links_existed == 0:
+            # All failed, none succeeded or existed
+            if not skip_status_updates:
+                update_link_status(staging_id, 'link_failed', last_error)
             return {
                 'staging_id': staging_id,
                 'status': 'link_failed',
@@ -3064,7 +3294,8 @@ def link_single_record(staging_record, session_snapshot):
         elif links_created > 0 or links_existed > 0:
             # At least some succeeded or already existed
             status = 'linked' if links_failed == 0 else 'partial_linked'
-            update_link_status(staging_id, status)
+            if not skip_status_updates:
+                update_link_status(staging_id, status)
             return {
                 'staging_id': staging_id,
                 'status': status,
@@ -3075,7 +3306,8 @@ def link_single_record(staging_record, session_snapshot):
             }
         else:
             # All were skipped (no mappings found)
-            update_link_status(staging_id, 'link_skipped', 'No object mappings found for any source link')
+            if not skip_status_updates:
+                update_link_status(staging_id, 'link_skipped', 'No object mappings found for any source link')
             return {
                 'staging_id': staging_id,
                 'status': 'link_skipped',
@@ -3087,7 +3319,8 @@ def link_single_record(staging_record, session_snapshot):
     
     except Exception as e:
         logger.error(f"Exception in link_single_record: {e}", category="OBJLINK")
-        update_link_status(staging_id, 'link_failed', str(e))
+        if not skip_status_updates:
+            update_link_status(staging_id, 'link_failed', str(e))
         return {
             'staging_id': staging_id,
             'status': 'link_failed',
@@ -3151,6 +3384,26 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         except Exception as e:
             print(f"[LINK_WARN] Could not auto-apply mappings: {e}")
         
+        # Fix legacy READ_EMPTY records: change execution_status from 'failed' to 'success'
+        # and mark link_status as 'link_skipped' (no files = nothing to link)
+        try:
+            with misc_engine.begin() as con:
+                fixed = con.execute(text("""
+                    UPDATE dbo.migration_staging
+                    SET execution_status = 'success',
+                        link_status = 'link_skipped',
+                        link_error = 'Nicht notwendig - Keine Dateien im Quellsystem',
+                        link_completed_at = GETUTCDATE()
+                    WHERE batch_id = :batch_id
+                        AND execution_status = 'failed'
+                        AND execution_error LIKE '%READ_EMPTY%'
+                        AND ISNULL(link_status, 'pending') IN ('pending', 'link_failed')
+                """), {'batch_id': batch_id}).rowcount
+                if fixed > 0:
+                    print(f"[LINK] Fixed {fixed} READ_EMPTY records → success + link_skipped")
+        except Exception as e:
+            print(f"[LINK_WARN] Could not fix READ_EMPTY records: {e}")
+        
         # Load linkable records
         records_df = load_linkable_records(batch_id, record_ids)
         
@@ -3160,6 +3413,11 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 'success': False,
                 'error': 'Keine verlinkbaren Datensätze gefunden. Voraussetzungen: Upload erfolgreich, Container angelegt, Objekt-Mapping vorhanden, noch nicht verlinkt.'
             }
+        
+        # Pre-load object mappings ONCE for the entire batch (avoid N+1 queries)
+        mappings_cache = load_object_mappings(batch_id) or {}
+        if mappings_cache:
+            print(f"[LINK] Pre-loaded {len(mappings_cache)} object mappings (cached for all threads)")
         
         total_records = len(records_df)
         print(f"[LINK_START] Batch {batch_id}: {total_records} records for linking, {max_workers} workers")
@@ -3230,18 +3488,25 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
             
             print(f"[LINK_PACKAGE {package_num + 1}/{total_packages}] Processing records {start_idx + 1}-{end_idx}")
             
-            # Execute package in parallel
+            # Bulk set all records in this package to "linking" status
+            package_ids = [row.to_dict()['id'] for _, row in package_records]
+            batch_set_linking(package_ids)
+            
+            # Execute package in parallel (skip individual DB status updates - we batch them)
+            package_results = []
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 for _, row in package_records:
                     record_dict = row.to_dict()
-                    future = executor.submit(link_single_record, record_dict, session_snapshot)
+                    future = executor.submit(link_single_record, record_dict, session_snapshot, 
+                                             mappings_cache=mappings_cache, skip_status_updates=True)
                     futures[future] = record_dict['id']
                 
                 for future in futures:
                     try:
                         result = future.result(timeout=120)  # 2 min timeout per link
                         results.append(result)
+                        package_results.append(result)
                         completed_count += 1
                         
                         status = result.get('status', '')
@@ -3267,10 +3532,21 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                     
                     except Exception as exc:
                         staging_id = futures[future]
-                        update_link_status(staging_id, 'link_failed', str(exc))
+                        package_results.append({'staging_id': staging_id, 'status': 'link_failed', 'error': str(exc)})
                         results.append({'staging_id': staging_id, 'status': 'link_failed', 'error': str(exc)})
                         completed_count += 1
                         failed_count += 1
+            
+            # Batch update all final statuses for this package in one transaction
+            status_updates = []
+            for r in package_results:
+                sid = r.get('staging_id')
+                st = r.get('status', 'link_failed')
+                err = r.get('error')
+                if st == 'link_skipped' and not err:
+                    err = 'No object mappings found for any source link'
+                status_updates.append({'staging_id': sid, 'status': st, 'error': err})
+            batch_update_link_statuses(status_updates)
             
             # Update progress in batch table
             with misc_engine.begin() as con:

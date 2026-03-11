@@ -1296,6 +1296,7 @@ def execute_single_document(staging_record, session_snapshot):
                         SET source_dokob = COALESCE(:dokob, source_dokob),
                             source_objky = COALESCE(:objky, source_objky),
                             source_object_links = COALESCE(:links_json, source_object_links),
+                            source_link_count = CASE WHEN :link_count IS NOT NULL THEN :link_count ELSE source_link_count END,
                             source_authorization_group = COALESCE(:authgroup, source_authorization_group),
                             authorization_group = CASE 
                                 WHEN authorization_group IS NULL THEN :authgroup
@@ -1309,6 +1310,7 @@ def execute_single_document(staging_record, session_snapshot):
                         'dokob': api_dokob, 
                         'objky': api_objky,
                         'links_json': api_links_json,
+                        'link_count': len(api_all_links) if api_all_links else None,
                         'authgroup': doc_authgroup,
                         'target_dokob': target_dokob,
                         'target_objky': target_objky
@@ -3043,14 +3045,22 @@ def batch_update_link_statuses(updates):
             # Split into completed (need timestamp) and non-completed
             for upd in updates:
                 completed_clause = ""
+                target_link_clause = ""
                 if upd['status'] in ('linked', 'link_failed', 'link_exists', 'skipped', 'partial_linked', 'link_skipped'):
                     completed_clause = ", link_completed_at = GETUTCDATE()"
+                # Update target_link_count with actual links created + already existed
+                links_created = upd.get('links_created', 0) or 0
+                links_existed = upd.get('links_existed', 0) or 0
+                actual_target = links_created + links_existed
+                if actual_target > 0 or upd['status'] in ('linked', 'partial_linked', 'link_exists'):
+                    target_link_clause = f", target_link_count = {int(actual_target)}"
                 
                 con.execute(text(f"""
                     UPDATE dbo.migration_staging
                     SET link_status = :status,
                         link_error = :error
                         {completed_clause}
+                        {target_link_clause}
                     WHERE id = :staging_id
                 """), {
                     'status': upd['status'],
@@ -3627,7 +3637,11 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 err = r.get('error')
                 if st == 'link_skipped' and not err:
                     err = 'No object mappings found for any source link'
-                status_updates.append({'staging_id': sid, 'status': st, 'error': err})
+                status_updates.append({
+                    'staging_id': sid, 'status': st, 'error': err,
+                    'links_created': r.get('links_created', 0),
+                    'links_existed': r.get('links_existed', 0)
+                })
             batch_update_link_statuses(status_updates)
             
             # Update progress in batch table

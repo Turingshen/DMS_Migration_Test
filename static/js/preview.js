@@ -881,22 +881,29 @@ function formatFileCount(record) {
 }
 
 function formatLinkCount(record) {
-    const src = record.source_link_count;
+    // Derive source count from JSON (consistent with badge) with DB column fallback
+    const links = parseObjectLinks(record);
+    const src = links.length > 0 ? links.length : record.source_link_count;
     const excl = record.excluded_link_count;
-    const tgt = record.target_link_count;
-    if (src === null || src === undefined) return '-';
+    // Only trust target_link_count if linking actually happened
+    const linkDone = record.link_status && ['linked', 'partial_linked', 'link_exists'].includes(record.link_status);
+    const tgt = linkDone ? (record.target_link_count || 0) : 0;
+    if (src === null || src === undefined || src === 0) return '-';
     const exclStr = (excl !== null && excl !== undefined) ? excl : 0;
-    const tgtStr = (tgt !== null && tgt !== undefined) ? tgt : src;
-    // No exclusions: all green
+    // No exclusions and all linked: green ✓
+    if (exclStr === 0 && tgt >= src) {
+        return `<span class="text-success" title="Source: ${src}, Excluded: 0, Target: ${tgt}">${src} / 0 / ${tgt} ✓</span>`;
+    }
+    // No exclusions, not yet linked (or partially linked): neutral
     if (exclStr === 0) {
-        return `<span class="text-success" title="Source: ${src}, Excluded: 0, Target: ${tgtStr}">${src} / 0 / ${tgtStr} ✓</span>`;
+        return `<span title="Source: ${src}, Excluded: 0, Target: ${tgt}">${src} / 0 / ${tgt}</span>`;
     }
     // All links excluded: red — record will be skipped during execute
-    if (tgtStr === 0) {
+    if (tgt === 0) {
         return `<span class="text-danger font-weight-bold" title="${t('prev.tip.all_links_excluded', {n: src})}">${src} / ${exclStr} / 0 ⊘</span>`;
     }
     // Partial exclusion: orange
-    return `<span class="text-warning font-weight-bold" title="${t('prev.tip.partial_excluded', {src: src, excl: exclStr, tgt: tgtStr})}">${src} / ${exclStr} / ${tgtStr} ⚠</span>`;
+    return `<span class="text-warning font-weight-bold" title="${t('prev.tip.partial_excluded', {src: src, excl: exclStr, tgt: tgt})}">${src} / ${exclStr} / ${tgt} ⚠</span>`;
 }
 
 function toggleSelection(id) {

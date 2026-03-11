@@ -1130,7 +1130,6 @@ def refresh_batch_data_stream(batch_id):
                     'staging_id': rec_id,
                     'source_link_count': src_count,
                     'excluded_link_count': 0,
-                    'target_link_count': src_count
                 })
             
             # Bulk update via temp table
@@ -1142,8 +1141,7 @@ def refresh_batch_data_stream(batch_id):
                         CREATE TABLE #link_counts (
                             staging_id INT PRIMARY KEY,
                             source_link_count INT,
-                            excluded_link_count INT,
-                            target_link_count INT
+                            excluded_link_count INT
                         );
                     """))
                     
@@ -1154,8 +1152,7 @@ def refresh_batch_data_stream(batch_id):
                     con.execute(text("""
                         UPDATE s
                         SET s.source_link_count = t.source_link_count,
-                            s.excluded_link_count = t.excluded_link_count,
-                            s.target_link_count = t.target_link_count
+                            s.excluded_link_count = t.excluded_link_count
                         FROM dbo.migration_staging s
                         INNER JOIN #link_counts t ON s.id = t.staging_id
                     """))

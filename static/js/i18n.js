@@ -471,6 +471,8 @@
         'prev.btn.columns_title':      { de: 'Spalten ein-/ausblenden', en: 'Show/Hide columns' },
         'prev.btn.refresh_title':      { de: 'Metadaten, Dateinamen abrufen und Regeln anwenden', en: 'Fetch metadata, filenames and apply rules' },
         'prev.btn.exclude_title':      { de: 'Dateien größer als 99MB ausschließen', en: 'Exclude files larger than 99MB' },
+        'prev.btn.percent_encode':     { de: 'Non-Latin %-Encoding', en: 'Non-Latin %-Encoding' },
+        'prev.btn.percent_encode_title': { de: 'Non-Latin Zeichen percent-kodieren statt ersetzen', en: 'Percent-encode non-Latin characters instead of replacing' },
 
         // Execution badges
         'exec.success':                { de: 'Erfolgreich', en: 'Successful' },

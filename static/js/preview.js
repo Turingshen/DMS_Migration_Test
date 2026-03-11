@@ -1166,7 +1166,7 @@ function executeAll() {
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ batch_id: batchId })
+        body: JSON.stringify({ batch_id: batchId, percent_encode_slug: document.getElementById('percentEncodeCheckbox').checked })
     })
     .then(response => response.json())
     .then(data => {
@@ -1259,7 +1259,8 @@ function executeSelected() {
         },
         body: JSON.stringify({ 
             batch_id: batchId,
-            record_ids: Array.from(selectedRecords)
+            record_ids: Array.from(selectedRecords),
+            percent_encode_slug: document.getElementById('percentEncodeCheckbox').checked
         })
     })
     .then(response => response.json())
@@ -1570,7 +1571,7 @@ function retryFailed() {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ batch_id: batchId })
+            body: JSON.stringify({ batch_id: batchId, percent_encode_slug: document.getElementById('percentEncodeCheckbox').checked })
         });
     })
     .then(response => {

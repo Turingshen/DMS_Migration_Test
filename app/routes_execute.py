@@ -463,6 +463,7 @@ def execute():
         
         # Snapshot session and start background thread
         snapshot = _build_session_snapshot()
+        snapshot['percent_encode_slug'] = data.get('percent_encode_slug', True)
         run_migration_background(batch_id, snapshot)
         
         return jsonify({
@@ -537,6 +538,7 @@ def execute_selected():
         
         # Snapshot session and start background thread
         snapshot = _build_session_snapshot()
+        snapshot['percent_encode_slug'] = data.get('percent_encode_slug', True)
         run_migration_background(batch_id, snapshot, record_ids=record_ids)
         
         return jsonify({

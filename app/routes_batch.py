@@ -1068,7 +1068,7 @@ def refresh_batch_data_stream(batch_id):
                         key = (doknr, dokar, dokvr, doktl)
                         dappl = dappl_results.get(key, '')
                         
-                        if dappl == 'HTM' and (fn is None or fn == '') and (fsz is None or fsz == 0):
+                        if dappl == 'HTM' and ((fn is None or fn == '') or (fsz is None or fsz == 0)):
                             local_link_count += 1
                             warning = f"Lokaler Link vermutet (DAPPL=HTM, keine Datei im Content Repository)"
                             local_link_updates.append({'staging_id': sid, 'note': warning})

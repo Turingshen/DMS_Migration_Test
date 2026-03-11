@@ -127,18 +127,19 @@ def _get_mime_type(filename):
     return mime_type or 'application/octet-stream'
 
 
-def _sanitize_slug(filename):
+def _sanitize_slug(filename, percent_encode=True):
     """Sanitize a filename for use in the HTTP Slug header.
     
     The ``requests`` library encodes HTTP header values as latin-1.  Characters
-    outside that range (e.g. combining accents like \\u0300, Cyrillic, CJK, …)
-    cause ``UnicodeEncodeError: 'latin-1' codec can't encode character``.
+    outside ASCII (like é, ü, ö, ä as well as CJK/Cyrillic) would be sent as
+    raw latin-1 bytes, but the SAP target system expects UTF-8, causing garbled
+    filenames (e.g. ``ü`` → ``�``).
     
     Strategy:
         1. NFC-normalize (compose precomposed accents: à instead of a + \\u0300)
-        2. Percent-encode non-latin-1 chars (e.g. Korean 창 → %EC%B0%BD)
-           This preserves the original characters in a way SAP can decode them,
-           and stays within ASCII which is valid for HTTP headers.
+        2. If *percent_encode* is True, percent-encode ALL non-ASCII chars
+           (e.g. é → %C3%A9, ü → %C3%BC, Korean 창 → %EC%B0%BD).
+           Otherwise replace them with ``_``.
         3. Normalize the file extension for SAP compatibility
     """
     if not filename:
@@ -153,18 +154,25 @@ def _sanitize_slug(filename):
         # Step 1: Normalize composable sequences (e.g. a + \\u0300 → à)
         normalized = unicodedata.normalize('NFC', filename)
         
-        # Step 2: Percent-encode characters that can't be encoded as latin-1
-        # This keeps the original information intact (SAP can decode %XX sequences)
-        # while staying within the ASCII range for HTTP header safety.
-        from urllib.parse import quote
-        safe_chars = []
-        for ch in normalized:
-            try:
-                ch.encode('latin-1')
-                safe_chars.append(ch)
-            except UnicodeEncodeError:
-                # Percent-encode the UTF-8 bytes: 창 → %EC%B0%BD
-                safe_chars.append(quote(ch, safe=''))
+        # Step 2: Percent-encode ALL non-ASCII characters.
+        # Previously only non-latin-1 chars were encoded, but SAP interprets
+        # Slug as UTF-8, so latin-1 chars (é, ü, ö, ä) sent as raw bytes
+        # show up as replacement characters (�) in the target system.
+        if percent_encode:
+            from urllib.parse import quote
+            safe_chars = []
+            for ch in normalized:
+                if ord(ch) > 127:
+                    safe_chars.append(quote(ch, safe=''))
+                else:
+                    safe_chars.append(ch)
+        else:
+            safe_chars = []
+            for ch in normalized:
+                if ord(ch) > 127:
+                    safe_chars.append('_')
+                else:
+                    safe_chars.append(ch)
         return ''.join(safe_chars) or 'unnamed'
     except Exception:
         # Absolute fallback: ASCII-only
@@ -1094,7 +1102,7 @@ def execute_single_document(staging_record, session_snapshot):
             # that cannot be read from SAP Content Repository.
             staging_fn = staging_record.get('filename')
             staging_fsz = staging_record.get('file_size_bytes')
-            if (staging_fn is None or staging_fn == '') and (staging_fsz is None or staging_fsz == 0):
+            if (staging_fn is None or staging_fn == '') or (staging_fsz is None or staging_fsz == 0):
                 # Check DAPPL from DIL.DMS_DOC_FILES
                 _local_link_dappl = ''
                 try:
@@ -1152,6 +1160,43 @@ def execute_single_document(staging_record, session_snapshot):
             import json
             error_info = {'status_code': documents[0], 'reason': documents[1]}
             error_msg = f"READ_FAILED {documents[0]} {documents[1]}"
+            
+            # Fallback local-link detection: if READ fails AND DAPPL=HTM → skip as local link
+            _read_fail_dappl = ''
+            try:
+                if DIL_AVAILABLE and dil_engine:
+                    with dil_engine.begin() as _rfcon:
+                        _rf_row = _rfcon.execute(text("""
+                            SELECT DAPPL FROM DIL.DMS_DOC_FILES
+                            WHERE DOKNR = :doknr AND DOKAR = :dokar
+                              AND DOKVR = :dokvr AND DOKTL = :doktl
+                        """), {
+                            'doknr': staging_record['source_documentnumber'],
+                            'dokar': staging_record['source_documenttype'],
+                            'dokvr': str(staging_record['source_documentversion']).zfill(2),
+                            'doktl': str(staging_record['source_documentpart']).zfill(3)
+                        }).fetchone()
+                        if _rf_row:
+                            _read_fail_dappl = str(_rf_row[0] or '').strip().upper()
+            except Exception:
+                pass
+            
+            if _read_fail_dappl == 'HTM':
+                skip_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
+                            "READ fehlgeschlagen, Datei nicht im Content Repository. "
+                            "Lokale Pfad-Referenz kann nicht migriert werden.")
+                logger.info(skip_msg, category="READ")
+                update_execution_status(staging_id, 'success', skip_msg)
+                update_link_status(staging_id, 'link_skipped',
+                                   'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
+                return {
+                    'staging_id': staging_id,
+                    'status': 'success',
+                    'error': skip_msg,
+                    'error_category': 'LOCAL_LINK',
+                    'status_code': 200
+                }
+            
             error_json = json.dumps(error_info)
             logger.error(error_msg, category="READ", details=error_info)
             update_execution_status(staging_id, 'failed', error_json)
@@ -1194,14 +1239,29 @@ def execute_single_document(staging_record, session_snapshot):
         doc_authgroup = first_doc.get('Authoritygroup')  # BEGRU from API
         
         # Extract ObjectlinksSet from API response (replaces DIL.DRAD query)
+        # Collect ALL object links — each document can have multiple links
         object_links = first_doc.get('_ObjectlinksSet', [])
         api_dokob = None
         api_objky = None
+        api_all_links = []  # All (dokob, objky) pairs from API
         if object_links:
-            # Take first object link (a document can have multiple links)
-            first_link = object_links[0]
-            api_dokob = first_link.get('Objecttype')  # API uses CamelCase
-            api_objky = first_link.get('Objectkey')
+            for ol in object_links:
+                ol_dokob = ol.get('Objecttype', '').strip()
+                ol_objky = ol.get('Objectkey', '').strip()
+                if ol_dokob and ol_objky:
+                    pair = (ol_dokob, ol_objky)
+                    if pair not in api_all_links:
+                        api_all_links.append(pair)
+            if api_all_links:
+                api_dokob, api_objky = api_all_links[0]
+        
+        # Build updated source_object_links JSON from API (authoritative source)
+        import json as json_mod
+        api_links_json = None
+        if api_all_links:
+            api_links_json = json_mod.dumps([{'dokob': d, 'objky': o} for d, o in api_all_links])
+            if len(api_all_links) > 1:
+                logger.info(f"API returned {len(api_all_links)} object links", category="OBJLINK")
         
         # Apply object mapping on-the-fly to get target_dokob/target_objky
         # NOTE: Object mappings are loaded per batch and cached within this function scope
@@ -1222,17 +1282,20 @@ def execute_single_document(staging_record, session_snapshot):
             except Exception as e:
                 logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
         
-        # Update staging with API metadata (DOKOB, OBJKY, Authoritygroup) and resolved target values
+        # Update staging with API metadata (DOKOB, OBJKY, all links, Authoritygroup)
+        # and resolved target values.
+        # source_object_links is updated with ALL links from API (authoritative).
         # NOTE: authorization_group is ONLY updated from API if it was NULL in staging.
         # If a rule already set it (even to empty string ''), the rule takes precedence.
         # source_authorization_group always stores the original API value for reference.
-        if api_dokob or api_objky or doc_authgroup or target_dokob or target_objky:
+        if api_dokob or api_objky or api_links_json or doc_authgroup or target_dokob or target_objky:
             try:
                 with misc_engine.begin() as con:
                     con.execute(text("""
                         UPDATE dbo.migration_staging
                         SET source_dokob = COALESCE(:dokob, source_dokob),
                             source_objky = COALESCE(:objky, source_objky),
+                            source_object_links = COALESCE(:links_json, source_object_links),
                             source_authorization_group = COALESCE(:authgroup, source_authorization_group),
                             authorization_group = CASE 
                                 WHEN authorization_group IS NULL THEN :authgroup
@@ -1245,11 +1308,12 @@ def execute_single_document(staging_record, session_snapshot):
                         'staging_id': staging_id, 
                         'dokob': api_dokob, 
                         'objky': api_objky,
+                        'links_json': api_links_json,
                         'authgroup': doc_authgroup,
                         'target_dokob': target_dokob,
                         'target_objky': target_objky
                     })
-                logger.debug(f"Updated from API: DOKOB={api_dokob}, OBJKY={api_objky}, BEGRU={doc_authgroup}, target=({target_dokob},{target_objky})", category="EXECUTE")
+                logger.debug(f"Updated from API: DOKOB={api_dokob}, OBJKY={api_objky}, links={len(api_all_links)}, BEGRU={doc_authgroup}, target=({target_dokob},{target_objky})", category="EXECUTE")
             except Exception as e:
                 logger.debug(f"Failed to update API metadata: {e}", category="EXECUTE")
         
@@ -1746,7 +1810,8 @@ def execute_single_document(staging_record, session_snapshot):
                 # as latin-1, so non-latin-1 characters (e.g. Korean, CJK) are
                 # percent-encoded (e.g. 창 → %EC%B0%BD) to stay HTTP-header-safe.
                 # Extension is also normalized (e.g. .zipx → .zip) for SAP DAPPL.
-                slug_filename = _sanitize_slug(filename)
+                percent_encode = session_snapshot.get('percent_encode_slug', True) if session_snapshot else True
+                slug_filename = _sanitize_slug(filename, percent_encode=percent_encode)
                 server_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
                 
                 try:
@@ -3106,18 +3171,38 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
     doc_version = staging_record['target_documentversion'] or staging_record.get('source_documentversion', '01')
     doc_part = staging_record['target_documentpart'] or staging_record.get('source_documentpart', '000')
     
-    # Build list of source links to process
+    # Build list of source links to process.
+    # source_object_links JSON is authoritative after execute (updated from API).
+    # source_dokob/source_objky columns also enriched by API. Include both sources,
+    # deduplicated, for backward compat with records executed before JSON update.
     source_links = []
+    use_legacy_targets = False
+    
+    # Collect links from source_object_links JSON
     source_object_links_json = staging_record.get('source_object_links')
     if source_object_links_json:
         try:
             parsed = json.loads(source_object_links_json)
             if isinstance(parsed, list):
-                source_links = [(item.get('dokob'), item.get('objky')) for item in parsed if item.get('dokob') and item.get('objky')]
+                for item in parsed:
+                    dokob = item.get('dokob')
+                    objky = item.get('objky')
+                    if dokob and objky:
+                        pair = (str(dokob).strip(), str(objky).strip())
+                        if pair not in source_links:
+                            source_links.append(pair)
         except (json.JSONDecodeError, TypeError):
             logger.debug(f"Could not parse source_object_links JSON", category="OBJLINK")
     
-    # Fallback: if no source_object_links, use legacy single target_dokob/target_objky
+    # Also include source_dokob/source_objky columns (enriched by API during execute)
+    primary_dokob = staging_record.get('source_dokob')
+    primary_objky = staging_record.get('source_objky')
+    if primary_dokob and primary_objky:
+        pair = (str(primary_dokob).strip(), str(primary_objky).strip())
+        if pair not in source_links:
+            source_links.append(pair)
+    
+    # Fallback: if still no links, use legacy single target_dokob/target_objky
     if not source_links:
         legacy_dokob = staging_record.get('target_dokob')
         legacy_objky = staging_record.get('target_objky')
@@ -3136,8 +3221,6 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
                 'links_skipped': 0,
                 'note': 'no_object_links'
             }
-    else:
-        use_legacy_targets = False
     
     # Load object mappings for this batch (use cache if provided)
     mappings = {}
@@ -3211,10 +3294,9 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
                 if key in mappings:
                     target_dokob, target_objky = mappings[key]
                 else:
-                    # No mapping found -> skip this link
-                    logger.debug(f"No object mapping for {key}, skipping link #{link_idx}", category="OBJLINK")
-                    links_skipped += 1
-                    continue
+                    # No mapping found -> pass through source values as-is
+                    target_dokob, target_objky = src_dokob, src_objky
+                    logger.info(f"No object mapping for {key}, passing through source values for link #{link_idx}", category="OBJLINK")
             
             # ── Pre-check: skip if link already exists in SAP ──────
             if (target_dokob, target_objky) in existing_links:

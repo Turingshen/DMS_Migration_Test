@@ -145,6 +145,10 @@
                             <input type="checkbox" id="excludeLargeCheckbox" onchange="excludeLargeFiles(this.checked)" style="margin-right: 5px;">
                             <i class="fas fa-ban"></i> <span data-i18n="prev.btn.exclude_99mb">&gt;99MB ausschließen</span>
                         </label>
+                        <label class="btn btn-outline-info mb-0" id="percentEncodeLabel" title="Non-Latin Zeichen percent-kodieren statt ersetzen" data-i18n-title="prev.btn.percent_encode_title">
+                            <input type="checkbox" id="percentEncodeCheckbox" checked style="margin-right: 5px;">
+                            <i class="fas fa-globe"></i> <span data-i18n="prev.btn.percent_encode">Non-Latin %-Encoding</span>
+                        </label>
                         <button onclick="executeSelected()" class="btn btn-primary" id="executeSelectedBtn" disabled>
                             <i class="fas fa-play-circle"></i> <span data-i18n="prev.btn.execute_selected">Ausgewählte ausführen</span>
                         </button>

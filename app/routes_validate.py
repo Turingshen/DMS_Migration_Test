@@ -107,7 +107,7 @@ def validation_data(batch_id):
                     COUNT(*) AS cnt
                 FROM dbo.migration_staging
                 WHERE batch_id = :bid
-                  AND execution_status = 'failed'
+                  AND execution_status IN ('failed', 'partial')
                   AND execution_error IS NOT NULL
                   AND skip_migration = 0
                 GROUP BY execution_error

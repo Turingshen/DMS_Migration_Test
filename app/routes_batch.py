@@ -68,7 +68,7 @@ def get_batches():
                     COUNT(*) as total_count,
                     SUM(CASE WHEN execution_status IN ('success', 'failed', 'partial') THEN 1 ELSE 0 END) as executed_count,
                     SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                    SUM(CASE WHEN execution_status IN ('failed', 'partial') THEN 1 ELSE 0 END) as failed_count,
                     SUM(CASE WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
                     SUM(CASE WHEN link_status = 'linked' THEN 1 ELSE 0 END) as link_linked,
                     SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,

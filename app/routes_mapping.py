@@ -314,7 +314,7 @@ def download_batch_object_mapping(batch_id):
                     objky  AS source_objky,
                     COUNT(*) AS document_count,
                     SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) AS success_count,
-                    SUM(CASE WHEN execution_status = 'failed'  THEN 1 ELSE 0 END) AS failed_count
+                    SUM(CASE WHEN execution_status IN ('failed', 'partial')  THEN 1 ELSE 0 END) AS failed_count
                 FROM all_links
                 WHERE 1=1 {dokob_where}
                 GROUP BY dokob, objky
@@ -327,7 +327,7 @@ def download_batch_object_mapping(batch_id):
                 SELECT 
                     COUNT(*) as total,
                     SUM(CASE WHEN source_dokob IS NOT NULL THEN 1 ELSE 0 END) as with_dokob,
-                    SUM(CASE WHEN execution_status IN ('success', 'failed') THEN 1 ELSE 0 END) as executed
+                    SUM(CASE WHEN execution_status IN ('success', 'failed', 'partial') THEN 1 ELSE 0 END) as executed
                 FROM dbo.migration_staging
                 WHERE batch_id = :batch_id
             """

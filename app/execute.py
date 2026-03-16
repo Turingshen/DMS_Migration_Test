@@ -1164,6 +1164,160 @@ def is_auto_generated_id(doc_number):
         return False  # Failed to convert = manually assigned
 
 
+# ── Parallel file transfer helpers ──────────────────────────────────────────
+
+def _download_one_file(file_index, document, session_snapshot, source_system, staging_record, logger):
+    """Download a single file from source. Thread-safe (creates own session)."""
+    dl_session = requests.Session()
+    prepare_session_headers(dl_session, session_snapshot, source_system)
+    dl_session.headers.pop('Slug', None)
+
+    selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
+    document_args = {k: document[k] for k in selected_keys}
+    formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
+    base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+    request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
+
+    download_start = time.time()
+    fallback_name = _resolve_filename(document, staging_record, file_index)
+    try:
+        response = dl_session.get(request_url, timeout=300)
+    except Exception as ex:
+        elapsed = time.time() - download_start
+        logger.error(f"Download error file {file_index} after {elapsed:.1f}s: {ex}", category="READ")
+        return {
+            'file_index': file_index, 'success': False,
+            'error_msg': f'READ_TIMEOUT: {str(ex)}',
+            'error_detail': {'status_code': 0, 'detail': str(ex), 'elapsed_seconds': round(elapsed, 1)},
+            'error_category': 'TIMEOUT', 'filename': fallback_name, 'elapsed': elapsed,
+        }
+
+    elapsed = time.time() - download_start
+    if response.status_code != 200:
+        error_info = _extract_error_fields(response)
+        logger.error(f"Download failed file {file_index}: {response.status_code}", category="READ", details=error_info)
+        return {
+            'file_index': file_index, 'success': False,
+            'error_msg': f'READ_FAIL_{response.status_code}',
+            'error_detail': error_info,
+            'error_category': _classify_error(error_info),
+            'filename': fallback_name, 'elapsed': elapsed,
+        }
+
+    content = response.content
+    filename = _resolve_filename(document, staging_record, file_index)
+    filename, _ = _normalize_extension(filename)
+    mime_type = _get_mime_type(filename)
+    size = len(content) if content else 0
+    size_mb = size / 1024 / 1024
+    logger.info(f"Downloaded file {file_index}: {size:,} bytes ({size_mb:.2f} MB) in {elapsed:.1f}s", category="READ")
+    return {
+        'file_index': file_index, 'success': True,
+        'content': content, 'filename': filename,
+        'mime_type': mime_type, 'size': size, 'elapsed': elapsed,
+    }
+
+
+def _upload_one_file(file_index, content, filename, mime_type,
+                     doc_type, doc_number, doc_version, doc_part,
+                     session_snapshot, target_system, staging_id, batch_id,
+                     loio_id, start_time, logger):
+    """Upload a single file to target. Thread-safe (creates own session)."""
+    ul_session = requests.Session()
+    prepare_session_headers(ul_session, session_snapshot, target_system)
+
+    percent_encode = session_snapshot.get('percent_encode_slug', True) if session_snapshot else True
+    slug_filename = _sanitize_slug(filename, percent_encode=percent_encode)
+    ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
+
+    try:
+        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+    except Exception:
+        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+
+    attachment_url = (
+        f"{attachment_base_url}/A_DocumentInfoRecordAttch"
+        f"(DocumentInfoRecordDocType='{doc_type}',"
+        f"DocumentInfoRecordDocNumber='{doc_number}',"
+        f"DocumentInfoRecordDocVersion='{doc_version}',"
+        f"DocumentInfoRecordDocPart='{doc_part}'"
+        f")/DocumentInfoRecordToAttachmentNavigation"
+    )
+
+    upload_content = content or b' '
+    file_size = len(content) if content else 0
+    file_size_mb = file_size / 1024 / 1024
+    upload_timeout = max(60, 60 + int(file_size_mb * 10))
+
+    upload_start = time.time()
+    try:
+        upload_resp = ul_session.post(attachment_url, data=upload_content, timeout=upload_timeout)
+        if is_csrf_error(upload_resp):
+            logger.warning(f"CSRF expired during UPLOAD file {file_index} — refreshing", category="UPLOAD")
+            force_csrf_renewal(session_snapshot, target_system)
+            prepare_session_headers(ul_session, session_snapshot, target_system)
+            ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
+            upload_resp = ul_session.post(attachment_url, data=upload_content, timeout=upload_timeout)
+    except requests.exceptions.ConnectionError as ex:
+        upload_elapsed = time.time() - upload_start
+        return {
+            'file_index': file_index, 'success': False,
+            'file_result': {
+                'file': filename, 'status': f'UPLOAD_CONNECTION_ERROR after {upload_elapsed:.1f}s',
+                'error_detail': {'status_code': 0, 'detail': str(ex)[:500]},
+                'error_category': 'CONNECTION_ERROR',
+                'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
+                'mime_type': mime_type, 'actual_time_seconds': round(upload_elapsed, 2),
+            },
+        }
+    except requests.exceptions.Timeout as ex:
+        upload_elapsed = time.time() - upload_start
+        return {
+            'file_index': file_index, 'success': False,
+            'file_result': {
+                'file': filename, 'status': f'UPLOAD_TIMEOUT after {upload_elapsed:.1f}s',
+                'error_detail': {'status_code': 0, 'detail': str(ex)},
+                'error_category': 'TIMEOUT',
+                'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
+                'mime_type': mime_type, 'actual_time_seconds': round(upload_elapsed, 2),
+            },
+        }
+
+    upload_elapsed = time.time() - upload_start
+    upload_time_total = time.time() - start_time
+
+    if upload_resp.status_code in (200, 201):
+        logger.info(f"Uploaded file {file_index}: {filename} ({file_size_mb:.2f} MB) in {upload_elapsed:.1f}s", category="UPLOAD")
+        return {
+            'file_index': file_index, 'success': True,
+            'file_result': {
+                'file': filename, 'status': 'SUCCESS',
+                'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
+                'mime_type': mime_type, 'actual_time_seconds': round(upload_time_total, 2),
+            },
+        }
+    else:
+        error_info = _extract_error_fields(upload_resp)
+        error_msg = f'UPLOAD_FAIL_{upload_resp.status_code}'
+        is_size_error = False
+        if upload_resp.status_code in (413, 507) or any(
+            ind in str(error_info).lower() for ind in ['too large', 'size', 'payload', 'limit', 'exceeded']
+        ):
+            is_size_error = True
+            error_msg = f'SIZE_LIMIT_EXCEEDED_{upload_resp.status_code}'
+        logger.error(f"Upload failed file {file_index}: {error_msg}", category="UPLOAD", details=error_info)
+        return {
+            'file_index': file_index, 'success': False,
+            'file_result': {
+                'file': filename, 'status': error_msg,
+                'error_detail': error_info, 'error_category': _classify_error(error_info),
+                'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
+                'mime_type': mime_type, 'is_size_error': is_size_error,
+                'actual_time_seconds': round(upload_time_total, 2),
+            },
+        }
+
+
 def execute_single_document(staging_record, session_snapshot):
     """Execute migration for a single staging record.
     
@@ -1543,6 +1697,40 @@ def execute_single_document(staging_record, session_snapshot):
             except Exception as _cleanup_ex:
                 logger.debug(f"file_details cleanup failed (non-critical): {_cleanup_ex}", category="EXECUTE")
         
+        # ── PARALLEL DOWNLOAD: Pre-fetch all files from source ──────────────
+        # For multi-file containers, download all files in parallel before the
+        # sequential CREATE + upload loop. This overlaps download latency (~3-5s
+        # per file) so total download time ≈ max(single) instead of sum(all).
+        # Single-file containers skip this (no benefit from parallelism).
+        _prefetched = {}  # file_index -> download result dict
+        _has_web_files = any(
+            (doc.get('Wsapplication', '') or '').strip().upper() == 'WEB'
+            for doc in documents[2]
+        )
+        _files_to_download = [
+            (fi, doc) for fi, doc in enumerate(documents[2])
+            if fi not in already_uploaded
+            and (doc.get('Wsapplication', '') or '').strip().upper() != 'WEB'
+        ]
+        
+        if len(_files_to_download) > 1 and not container_already_created:
+            logger.info(f"Parallel download: {len(_files_to_download)} files from source", category="READ")
+            _dl_workers = min(len(_files_to_download), 5)
+            with ThreadPoolExecutor(max_workers=_dl_workers) as _dl_pool:
+                _dl_futures = {
+                    _dl_pool.submit(
+                        _download_one_file, fi, doc,
+                        session_snapshot, source_system, staging_record, logger
+                    ): fi
+                    for fi, doc in _files_to_download
+                }
+                from concurrent.futures import as_completed as _as_completed
+                for fut in _as_completed(_dl_futures):
+                    res = fut.result()
+                    _prefetched[res['file_index']] = res
+            _dl_ok = sum(1 for r in _prefetched.values() if r['success'])
+            logger.info(f"Parallel download complete: {_dl_ok}/{len(_prefetched)} OK", category="READ")
+        
         for file_index, document in enumerate(documents[2]):
             # Skip files that were already successfully uploaded (retry optimization)
             if file_index in already_uploaded:
@@ -1745,111 +1933,83 @@ def execute_single_document(staging_record, session_snapshot):
                     save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue  # Skip normal download/upload flow for WEB
             
-            # Fetch document content
-            # IMPORTANT: Re-prepare session for source system before EACH file download.
-            # After the first iteration, the session is configured for the TARGET system
-            # (from the upload step). Without this, subsequent downloads get 401 because
-            # target-system auth/cookies/CSRF are sent to the source system.
-            prepare_session_headers(server_session, session_snapshot, source_system)
-            server_session.headers.pop('Slug', None)
-            
-            selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
-            document_args = {k: document[k] for k in selected_keys}
-            formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
-            base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
-            request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
-            
-            download_start = time.time()
-            logger.info(f"Downloading file {file_index} from source: LOIOID={document.get('LOIOID')}", category="READ")
-            logger.debug(f"Download URL: {request_url}", category="READ")
-            # Derive a meaningful filename for error reporting (before download attempt)
-            _fallback_name = _resolve_filename(document, staging_record, file_index)
-            
-            try:
-                response = server_session.get(request_url, timeout=300)  # 5 min timeout for large files
-            except Exception as read_ex:
+            # ── DOWNLOAD: Use prefetched content or download inline ─────────
+            if file_index in _prefetched:
+                # Already downloaded in parallel phase (pop to mark handled)
+                _pf = _prefetched.pop(file_index)
+                if not _pf['success']:
+                    # Prefetch failed — record the error and continue
+                    file_result = {
+                        'file': _pf.get('filename', f'file_{file_index}'),
+                        'status': _pf.get('error_msg', 'READ_FAIL'),
+                        'error_detail': _pf.get('error_detail'),
+                        'error_category': _pf.get('error_category', 'OTHER'),
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                    continue
+                response_content = _pf['content']
+                filename = _pf['filename']
+            else:
+                # Serial download (single-file containers, retries, fallback)
+                prepare_session_headers(server_session, session_snapshot, source_system)
+                server_session.headers.pop('Slug', None)
+                
+                selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
+                document_args = {k: document[k] for k in selected_keys}
+                formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
+                base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+                request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
+                
+                download_start = time.time()
+                logger.info(f"Downloading file {file_index} from source: LOIOID={document.get('LOIOID')}", category="READ")
+                _fallback_name = _resolve_filename(document, staging_record, file_index)
+                
+                try:
+                    response = server_session.get(request_url, timeout=300)
+                except Exception as read_ex:
+                    download_elapsed = time.time() - download_start
+                    error_msg = f'READ_TIMEOUT: {str(read_ex)}'
+                    logger.error(f"File read timeout/error after {download_elapsed:.1f}s: {error_msg}", category="READ")
+                    file_result = {
+                        'file': _fallback_name, 
+                        'status': error_msg,
+                        'error_detail': {'status_code': 0, 'detail': str(read_ex), 'elapsed_seconds': round(download_elapsed, 1)},
+                        'error_category': 'TIMEOUT'
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                    continue
+                
                 download_elapsed = time.time() - download_start
-                error_msg = f'READ_TIMEOUT: {str(read_ex)}'
-                logger.error(f"File read timeout/error after {download_elapsed:.1f}s: {error_msg}", category="READ")
-                file_result = {
-                    'file': _fallback_name, 
-                    'status': error_msg,
-                    'error_detail': {'status_code': 0, 'detail': str(read_ex), 'elapsed_seconds': round(download_elapsed, 1)},
-                    'error_category': 'TIMEOUT'
-                }
-                results.append(file_result)
-                save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
-                continue
-            
-            download_elapsed = time.time() - download_start
-            download_size = len(response.content) if response.content else 0
-            download_size_mb = download_size / 1024 / 1024
-            throughput_info = f" [{download_size_mb/download_elapsed:.1f} MB/s]" if download_elapsed > 0.1 else ""
-            logger.info(f"Download complete: {download_size:,} bytes ({download_size_mb:.2f} MB) in {download_elapsed:.1f}s{throughput_info}", category="READ")
-            
-            if response.status_code != 200:
-                error_info = _extract_error_fields(response)
-                error_msg = f'READ_FAIL_{response.status_code}'
+                download_size = len(response.content) if response.content else 0
+                download_size_mb = download_size / 1024 / 1024
+                logger.info(f"Download complete: {download_size:,} bytes ({download_size_mb:.2f} MB) in {download_elapsed:.1f}s", category="READ")
                 
-                # For 401/403 errors, add extra context about the authentication issue
-                if response.status_code in (401, 403):
-                    # Check for WWW-Authenticate header which often contains useful info
-                    www_auth = response.headers.get('WWW-Authenticate', '')
-                    if www_auth:
-                        error_info['www_authenticate'] = www_auth[:200]
-                    
-                    # Check response body (often empty for 401, but sometimes has info)
-                    body_preview = (response.text or '')[:500]
-                    if body_preview:
-                        error_info['body_preview'] = body_preview
-                    
-                    # Add hint about likely cause
-                    error_info['hint'] = 'Token may have expired or API requires re-authentication. Try refreshing login.'
+                if response.status_code != 200:
+                    error_info = _extract_error_fields(response)
+                    error_msg = f'READ_FAIL_{response.status_code}'
+                    if response.status_code in (401, 403):
+                        error_info['hint'] = 'Token may have expired. Try refreshing login.'
+                    logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
+                    file_result = {
+                        'file': _fallback_name, 
+                        'status': error_msg,
+                        'error_detail': error_info,
+                        'error_category': _classify_error(error_info)
+                    }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                    continue
                 
-                # Log extra detail for 502/503/504 gateway errors on READ
-                if response.status_code in (502, 503, 504):
-                    body_preview = (response.text or '')[:500]
-                    resp_headers = dict(response.headers) if response.headers else {}
-                    logger.error(f"Gateway error on READ: {response.status_code} after {download_elapsed:.1f}s "
-                                 f"URL={request_url} body={body_preview}", category="READ")
-                    error_info['response_body_preview'] = body_preview
-                    error_info['response_headers'] = {k: v for k, v in resp_headers.items() if k.lower() in ('content-type', 'server', 'x-sap-srt-id', 'sap-message', 'retry-after')}
-                    error_info['download_elapsed_seconds'] = round(download_elapsed, 1)
-                
-                logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
-                file_result = {
-                    'file': _fallback_name, 
-                    'status': error_msg,
-                    'error_detail': error_info,
-                    'error_category': _classify_error(error_info)
-                }
-                results.append(file_result)
-                save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
-                continue
-            
-            # Get filename from API Docpath (full path with extension)
-            # Example: C:\Users\HoltzTh\Desktop\BMS Fertig\330236529 Prüfung 2015-2019.pdf
-            # Use the same fallback chain as error paths to guarantee a valid extension.
-            filename = _resolve_filename(document, staging_record, file_index)
-            
-            # CRITICAL: Check if filename has a valid extension
-            # If not, try fallbacks:
-            #   0) Wsapplication from API (DAPPL / file-type code, e.g. "PDF", "XLS")
-            #   1) DRAW.filep
-            #   2) DMS_DOC_FILES (FILENAME + DAPPL)
-            # This happens when API returns GUIDs (KPRO) or timestamps as filenames
-            if not has_valid_extension(filename):
-                logger.warning(f"No valid extension found for: {filename} (all fallbacks exhausted)", category="READ")
-            
-            # Normalize extension BEFORE metadata/upload (e.g. .zipx → .zip)
-            filename, ext_normalized = _normalize_extension(filename)
-            if ext_normalized:
-                logger.info(f"Extension normalized: {filename} (original had non-standard extension)", category="READ")
+                response_content = response.content
+                filename = _resolve_filename(document, staging_record, file_index)
+                filename, _ = _normalize_extension(filename)
             
             # Update metadata fields in staging table (once, on first successful file read)
             if not metadata_updated:
                 mime_type = _get_mime_type(filename)
-                file_size = len(response.content) if response.content else 0
+                file_size = len(response_content) if response_content else 0
                 
                 update_metadata_fields(
                     staging_id,
@@ -2137,7 +2297,7 @@ def execute_single_document(staging_record, session_snapshot):
                     f")/DocumentInfoRecordToAttachmentNavigation"
                 )
                 
-                content = response.content or b' '  # Pad empty files
+                content = response_content or b' '  # Pad empty files
                 file_size = len(content)
                 file_size_mb = file_size / 1024 / 1024
                 
@@ -2251,6 +2411,68 @@ def execute_single_document(staging_record, session_snapshot):
                     }
                     results.append(file_result)
                     save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                
+                # ── Break to parallel-upload remaining prefetched files ──
+                if _prefetched:
+                    if any(pf['success'] for pf in _prefetched.values()):
+                        break  # → parallel upload block below
+        
+        # ── PARALLEL UPLOAD: remaining prefetched files ─────────────────
+        # After the serial loop handles the first file (CREATE + UPLOAD),
+        # remaining successfully pre-downloaded files are uploaded here
+        # in parallel to reduce total wall-clock time.
+        if _prefetched and doc_created and doc_number:
+            # Record failed prefetched downloads
+            for _pfi in sorted(_prefetched):
+                _pf = _prefetched[_pfi]
+                if not _pf['success']:
+                    _fail_result = {
+                        'file': _pf.get('filename', f'file_{_pfi}'),
+                        'status': _pf.get('error_msg', 'READ_FAIL'),
+                        'error_detail': _pf.get('error_detail'),
+                        'error_category': _pf.get('error_category', 'OTHER'),
+                    }
+                    results.append(_fail_result)
+                    save_file_details(staging_id, batch_id, _pfi, _fail_result,
+                                      loio_id=documents[2][_pfi].get('LOIOID'))
+            
+            # Upload successful downloads in parallel
+            _ok_uploads = [
+                (fi, pf) for fi, pf in sorted(_prefetched.items())
+                if pf['success']
+            ]
+            if _ok_uploads:
+                logger.info(
+                    f"Parallel upload: {len(_ok_uploads)} remaining files to {doc_number}",
+                    category="UPLOAD"
+                )
+                _ul_workers = min(len(_ok_uploads), 5)
+                with ThreadPoolExecutor(max_workers=_ul_workers) as _ul_pool:
+                    _ul_futures = {
+                        _ul_pool.submit(
+                            _upload_one_file, fi, pf['content'], pf['filename'],
+                            pf['mime_type'], doc_type, doc_number, doc_version, doc_part,
+                            session_snapshot, target_system, staging_id, batch_id,
+                            documents[2][fi].get('LOIOID'), start_time, logger
+                        ): fi
+                        for fi, pf in _ok_uploads
+                    }
+                    from concurrent.futures import as_completed as _as_completed_ul
+                    _par_results = []
+                    for _fut in _as_completed_ul(_ul_futures):
+                        _ures = _fut.result()
+                        _par_results.append(_ures)
+                        results.append(_ures['file_result'])
+                        save_file_details(
+                            staging_id, batch_id, _ures['file_index'],
+                            _ures['file_result'],
+                            loio_id=documents[2][_ures['file_index']].get('LOIOID')
+                        )
+                _par_ok = sum(1 for r in _par_results if r['success'])
+                logger.info(
+                    f"Parallel upload complete: {_par_ok}/{len(_ok_uploads)} OK",
+                    category="UPLOAD"
+                )
         
         # Calculate timing and size statistics
         execution_time = time.time() - start_time

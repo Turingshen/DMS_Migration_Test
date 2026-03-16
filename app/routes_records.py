@@ -70,7 +70,7 @@ def get_error_overview():
                 FROM dbo.migration_file_details fd
                 INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
                 WHERE fd.upload_status NOT LIKE 'SUCCESS%'
-                    AND ms.execution_status = 'failed'
+                    AND ms.execution_status IN ('failed', 'partial')
                     AND ms.skip_migration = 0
                     AND fd.error_category IS NOT NULL
                 GROUP BY fd.error_category
@@ -115,7 +115,7 @@ def retry_by_category():
                 FROM dbo.migration_file_details fd
                 INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
                 WHERE fd.error_category = :category
-                    AND ms.execution_status = 'failed'
+                    AND ms.execution_status IN ('failed', 'partial')
                     AND ms.skip_migration = 0
             """), {'category': category}).fetchall()
             

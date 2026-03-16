@@ -189,25 +189,38 @@ def reset_failed():
         if not batch_id:
             return jsonify({'success': False, 'error': 'Batch ID required'}), 400
         
-        # Reset all failed AND partial records to pending
+        # First collect IDs of failed/partial records, then reset them
         # Note: container_created and target_documentnumber are NOT cleared,
         # so partial records will only retry the missing files.
         with misc_engine.begin() as con:
-            result = con.execute(text(f"""
-                UPDATE dbo.migration_staging
-                SET execution_status = 'pending',
-                    execution_error = NULL,
-                    execution_started_at = NULL,
-                    execution_completed_at = NULL
+            # Get IDs before resetting
+            id_rows = con.execute(text(f"""
+                SELECT id FROM dbo.migration_staging
                 WHERE batch_id = '{batch_id}'
                     AND execution_status IN ('failed', 'partial')
                     AND skip_migration = 0
-            """))
-            reset_count = result.rowcount
+            """)).fetchall()
+            reset_ids = [row[0] for row in id_rows]
+            
+            if reset_ids:
+                result = con.execute(text(f"""
+                    UPDATE dbo.migration_staging
+                    SET execution_status = 'pending',
+                        execution_error = NULL,
+                        execution_started_at = NULL,
+                        execution_completed_at = NULL
+                    WHERE batch_id = '{batch_id}'
+                        AND execution_status IN ('failed', 'partial')
+                        AND skip_migration = 0
+                """))
+                reset_count = result.rowcount
+            else:
+                reset_count = 0
         
         return jsonify({
             'success': True,
             'reset_count': reset_count,
+            'reset_ids': reset_ids,
             'message': f'{reset_count} failed/partial records reset to pending'
         })
         

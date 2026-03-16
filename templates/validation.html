@@ -4,59 +4,34 @@
 
 {% block head %}
 <style>
-    /* ── KPI Cards ──────────────────────────────────── */
-    .kpi-card {
-        border-radius: 10px;
-        transition: transform .15s;
-        border: none;
-        box-shadow: 0 2px 6px rgba(0,0,0,.08);
-    }
-    .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
-    .kpi-card .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
-    .kpi-card .kpi-label { font-size: .8rem; color: #6c757d; }
-
-    /* ── Coverage donut ─────────────────────────────── */
-    .coverage-ring { position:relative; width:110px; height:110px; margin:0 auto; }
-    .coverage-ring canvas { position:absolute; top:0; left:0; }
-    .coverage-ring .pct { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-        font-size:1.4rem; font-weight:700; }
-
-    /* ── Section card ───────────────────────────────── */
+    .kpi-card { border-radius:10px; transition:transform .15s; border:none; box-shadow:0 2px 6px rgba(0,0,0,.08); }
+    .kpi-card:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(0,0,0,.12); }
+    .kpi-card .kpi-value { font-size:2rem; font-weight:700; line-height:1.1; }
+    .kpi-card .kpi-label { font-size:.8rem; color:#6c757d; }
     .section-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin-bottom:20px; }
     .section-card .card-header { background:transparent; border-bottom:1px solid #eee; font-weight:600; font-size:1rem; }
-
-    /* ── Tables ──────────────────────────────────────── */
-    .val-table { font-size: .85rem; }
-    .val-table th { white-space: nowrap; background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
-    .val-table td { vertical-align: middle; }
-    .val-table .text-truncate { max-width: 220px; display: inline-block; vertical-align: middle; }
-    .scroll-table { max-height: 520px; overflow-y: auto; }
-
-    /* ── Status badges ──────────────────────────────── */
-    .badge-linked      { background:#28a745; color:#fff; }
-    .badge-link_failed { background:#dc3545; color:#fff; }
-    .badge-pending     { background:#ffc107; color:#333; }
-    .badge-linking     { background:#17a2b8; color:#fff; }
-    .badge-link_skipped{ background:#6c757d; color:#fff; }
-    .badge-success     { background:#28a745; color:#fff; }
-    .badge-failed      { background:#dc3545; color:#fff; }
-    .badge-partial     { background:#fd7e14; color:#fff; }
-
-    /* ── Error card ─────────────────────────────────── */
-    .err-pattern { font-family: 'Consolas', monospace; font-size: .8rem; word-break: break-all; }
-
-    /* ── Filter tabs ────────────────────────────────── */
-    .filter-pills .btn { font-size: .8rem; padding: .25rem .65rem; border-radius: 20px; }
-    .filter-pills .btn.active { font-weight: 600; }
-
-    /* ── Progress bars ──────────────────────────────── */
-    .mini-progress { height: 6px; border-radius: 3px; background: #e9ecef; overflow: hidden; }
-    .mini-progress .bar { height: 100%; border-radius: 3px; transition: width .4s ease; }
-
-    /* ── Responsive ─────────────────────────────────── */
-    @media (max-width: 768px) {
-        .kpi-card .kpi-value { font-size: 1.4rem; }
-    }
+    .val-table { font-size:.85rem; }
+    .val-table th { white-space:nowrap; background:#f8f9fa; position:sticky; top:0; z-index:1; }
+    .val-table td { vertical-align:middle; }
+    .val-table .text-truncate { max-width:220px; display:inline-block; vertical-align:middle; }
+    .scroll-table { max-height:600px; overflow-y:auto; }
+    .err-pattern { font-family:'Consolas',monospace; font-size:.8rem; word-break:break-all; }
+    .filter-pills .btn { font-size:.8rem; padding:.25rem .65rem; border-radius:20px; }
+    .filter-pills .btn.active { font-weight:600; }
+    .mini-progress { height:6px; border-radius:3px; background:#e9ecef; overflow:hidden; }
+    .mini-progress .bar { height:100%; border-radius:3px; transition:width .4s ease; }
+    /* Diff coloring */
+    .diff-match   { background-color:#d4edda !important; }
+    .diff-changed { background-color:#fff3cd !important; }
+    .diff-empty   { background-color:#f5f5f5 !important; color:#999; }
+    /* Tab styling */
+    #valTabs { border-bottom:2px solid #dee2e6; margin-top:8px; }
+    #valTabs .nav-link { font-weight:600; font-size:.9rem; color:#6c757d; border:none; padding:.6rem 1rem; }
+    #valTabs .nav-link.active { color:#007bff; border-bottom:3px solid #007bff; background:transparent; }
+    #valTabs .nav-link:hover { color:#0056b3; }
+    #valTabs .badge { font-size:.7rem; margin-left:4px; }
+    .tab-content>.tab-pane { padding:0; }
+    @media (max-width:768px) { .kpi-card .kpi-value { font-size:1.4rem; } }
 </style>
 {% endblock %}
 
@@ -74,14 +49,20 @@
                 </p>
             </div>
             <div class="d-flex align-items-center">
+                <div class="input-group input-group-sm mr-2" style="width:200px">
+                    <div class="input-group-prepend">
+                        <span class="input-group-text" data-i18n="val.display_limit">Anzeige</span>
+                    </div>
+                    <input type="number" class="form-control" id="displayLimitInput" value="500" min="10" step="50">
+                </div>
                 <a href="/preview?batch_id={{ batch_id }}" class="btn btn-outline-secondary btn-sm mr-2">
                     <i class="fas fa-arrow-left"></i> <span data-i18n="val.back_to_batch">Zurück zum Batch</span>
                 </a>
                 <button class="btn btn-outline-primary btn-sm mr-2" onclick="loadValidationData()">
                     <i class="fas fa-sync-alt"></i> <span data-i18n="val.refresh">Aktualisieren</span>
                 </button>
-                <button class="btn btn-outline-success btn-sm" onclick="exportCSV()">
-                    <i class="fas fa-file-csv"></i> <span data-i18n="val.export_csv">CSV Export</span>
+                <button class="btn btn-outline-success btn-sm" onclick="exportCSV()" title="Exportiert alle Datensätze des Batches">
+                    <i class="fas fa-file-excel"></i> <span data-i18n="val.export_csv">Excel Export</span>
                 </button>
             </div>
         </div>
@@ -107,7 +88,7 @@
                 </div>
             </div>
             <div class="col-lg-2 col-md-4 col-6 mb-2">
-                <div class="card kpi-card text-center border-left-success" style="border-left:4px solid #28a745">
+                <div class="card kpi-card text-center" style="border-left:4px solid #28a745">
                     <div class="card-body py-3">
                         <div class="kpi-value text-success" id="kpiLinked">-</div>
                         <div class="kpi-label" data-i18n="val.kpi.linked">Verlinkt</div>
@@ -133,7 +114,7 @@
             <div class="col-lg-2 col-md-4 col-6 mb-2">
                 <div class="card kpi-card text-center" style="border-left:4px solid #6c757d">
                     <div class="card-body py-3">
-                        <div class="kpi-value" id="kpiSkipped" style="color:#6c757d">-</div>
+                        <div class="kpi-value text-muted" id="kpiSkipped">-</div>
                         <div class="kpi-label" data-i18n="val.kpi.skipped">Übersprungen</div>
                     </div>
                 </div>
@@ -172,12 +153,110 @@
             </div>
         </div>
 
-        <!-- ═══ Mapping Coverage by DOKOB ═══ -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card section-card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-project-diagram"></i> <span data-i18n="val.dokob.title">Mapping-Abdeckung nach DOKOB</span></span>
+        <!-- ═══ Tab Navigation ═══ -->
+        <ul class="nav nav-tabs" id="valTabs" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" id="tab-files-link" data-toggle="tab" href="#tabFiles" role="tab">
+                    <i class="fas fa-file-alt"></i> <span data-i18n="val.tab.files">Dateien</span>
+                    <span class="badge badge-secondary" id="tabFilesCount">0</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="tab-links-link" data-toggle="tab" href="#tabLinks" role="tab">
+                    <i class="fas fa-link"></i> <span data-i18n="val.tab.links">Objektlinks</span>
+                    <span class="badge badge-secondary" id="tabLinksCount">0</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="tab-errors-link" data-toggle="tab" href="#tabErrors" role="tab">
+                    <i class="fas fa-exclamation-triangle"></i> <span data-i18n="val.tab.errors">Fehleranalyse</span>
+                    <span class="badge badge-danger" id="tabErrorsCount">0</span>
+                </a>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="valTabContent">
+            <!-- ═══ Tab 1: Dateien ═══ -->
+            <div class="tab-pane fade show active" id="tabFiles" role="tabpanel">
+                <div class="card section-card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;">
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+                        <div class="filter-pills" id="filesFilterPills">
+                            <button class="btn btn-sm btn-outline-secondary active" data-filter="all" data-i18n="val.comp.all">Alle</button>
+                            <button class="btn btn-sm btn-outline-success" data-filter="SUCCESS" data-i18n="val.filter.success">Erfolgreich</button>
+                            <button class="btn btn-sm btn-outline-danger" data-filter="ERROR" data-i18n="val.filter.error">Fehler</button>
+                        </div>
+                        <input type="text" class="form-control form-control-sm" id="filesSearch"
+                               placeholder="Suchen..." style="width:180px;" data-i18n-placeholder="val.comp.search">
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="scroll-table" style="max-height:600px">
+                            <table class="table table-sm table-hover val-table mb-0" id="filesTable">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="val.files.source_doc">Quell-Dok</th>
+                                        <th data-i18n="val.files.src_tvt">Quell-Typ/Ver./Teil</th>
+                                        <th data-i18n="val.files.target_doc">Ziel-Dok</th>
+                                        <th data-i18n="val.files.tgt_tvt">Ziel-Typ/Ver./Teil</th>
+                                        <th data-i18n="val.files.filename">Dateiname</th>
+                                        <th data-i18n="val.files.type">Typ</th>
+                                        <th data-i18n="val.files.size">Größe</th>
+                                        <th data-i18n="val.files.status">Status</th>
+                                        <th data-i18n="val.files.error">Fehler</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="filesBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="card-footer text-muted text-center py-2" id="filesFooter"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ Tab 2: Objektlinks ═══ -->
+            <div class="tab-pane fade" id="tabLinks" role="tabpanel">
+                <div class="card section-card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;">
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+                        <div class="filter-pills" id="linksFilterPills">
+                            <button class="btn btn-sm btn-outline-secondary active" data-filter="all" data-i18n="val.comp.all">Alle</button>
+                            <button class="btn btn-sm btn-outline-success" data-filter="linked" data-i18n="val.comp.linked">Verlinkt</button>
+                            <button class="btn btn-sm btn-outline-danger" data-filter="link_failed" data-i18n="val.comp.failed">Fehler</button>
+                            <button class="btn btn-sm btn-outline-warning" data-filter="pending" data-i18n="val.comp.pending">Ausstehend</button>
+                            <button class="btn btn-sm btn-outline-secondary" data-filter="link_skipped" data-i18n="val.comp.skipped">Übersprungen</button>
+                        </div>
+                        <input type="text" class="form-control form-control-sm" id="linksSearch"
+                               placeholder="Suchen..." style="width:180px;" data-i18n-placeholder="val.comp.search">
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="scroll-table" style="max-height:600px">
+                            <table class="table table-sm table-hover val-table mb-0" id="linksTable">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="val.links.source_doc">Quell-Dok</th>
+                                        <th data-i18n="val.links.src_tvt">Quell-Typ/Ver./Teil</th>
+                                        <th data-i18n="val.links.target_doc">Ziel-Dok</th>
+                                        <th data-i18n="val.links.tgt_tvt">Ziel-Typ/Ver./Teil</th>
+                                        <th data-i18n="val.links.src_dokob">Quell-DOKOB</th>
+                                        <th data-i18n="val.links.src_objky">Quell-OBJKY</th>
+                                        <th data-i18n="val.links.tgt_dokob">Ziel-DOKOB</th>
+                                        <th data-i18n="val.links.tgt_objky">Ziel-OBJKY</th>
+                                        <th data-i18n="val.links.status">Link-Status</th>
+                                        <th data-i18n="val.links.error">Fehler</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="linksBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="card-footer text-muted text-center py-2" id="linksFooter"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ Tab 3: Fehleranalyse ═══ -->
+            <div class="tab-pane fade" id="tabErrors" role="tabpanel">
+                <!-- DOKOB Mapping Coverage -->
+                <div class="card section-card mt-3">
+                    <div class="card-header">
+                        <i class="fas fa-project-diagram"></i> <span data-i18n="val.dokob.title">Mapping-Abdeckung nach DOKOB</span>
                     </div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
@@ -198,94 +277,49 @@
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- ═══ Error Analysis ═══ -->
-        <div class="row mb-4">
-            <div class="col-lg-6 mb-3">
-                <div class="card section-card h-100">
-                    <div class="card-header">
-                        <i class="fas fa-unlink"></i> <span data-i18n="val.errors.link_title">Link-Fehler Analyse</span>
-                        <span class="badge badge-danger ml-1" id="linkErrorCount">0</span>
-                    </div>
-                    <div class="card-body p-0">
-                        <div class="scroll-table" id="linkErrorContainer">
-                            <table class="table table-sm val-table mb-0">
-                                <thead>
-                                    <tr>
-                                        <th data-i18n="val.errors.pattern">Fehlermuster</th>
-                                        <th data-i18n="val.errors.count">Anzahl</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="linkErrorBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-lg-6 mb-3">
-                <div class="card section-card h-100">
-                    <div class="card-header">
-                        <i class="fas fa-upload"></i> <span data-i18n="val.errors.upload_title">Upload-Fehler Analyse</span>
-                        <span class="badge badge-danger ml-1" id="uploadErrorCount">0</span>
-                    </div>
-                    <div class="card-body p-0">
-                        <div class="scroll-table" id="uploadErrorContainer">
-                            <table class="table table-sm val-table mb-0">
-                                <thead>
-                                    <tr>
-                                        <th data-i18n="val.errors.pattern">Fehlermuster</th>
-                                        <th data-i18n="val.errors.count">Anzahl</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="uploadErrorBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ═══ Source → Target Comparison ═══ -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card section-card">
-                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
-                        <span><i class="fas fa-exchange-alt"></i> <span data-i18n="val.comp.title">Quell- / Ziel-Vergleich</span></span>
-                        <div class="d-flex align-items-center">
-                            <div class="filter-pills mr-2" id="compFilterPills">
-                                <button class="btn btn-sm btn-outline-secondary active" data-filter="all" data-i18n="val.comp.all">Alle</button>
-                                <button class="btn btn-sm btn-outline-danger" data-filter="link_failed" data-i18n="val.comp.failed">Fehler</button>
-                                <button class="btn btn-sm btn-outline-warning" data-filter="pending" data-i18n="val.comp.pending">Ausstehend</button>
-                                <button class="btn btn-sm btn-outline-success" data-filter="linked" data-i18n="val.comp.linked">Verlinkt</button>
-                                <button class="btn btn-sm btn-outline-secondary" data-filter="link_skipped" data-i18n="val.comp.skipped">Übersprungen</button>
+                <!-- Error Analysis -->
+                <div class="row">
+                    <div class="col-lg-6 mb-3">
+                        <div class="card section-card h-100">
+                            <div class="card-header">
+                                <i class="fas fa-unlink"></i> <span data-i18n="val.errors.link_title">Link-Fehler Analyse</span>
+                                <span class="badge badge-danger ml-1" id="linkErrorCount">0</span>
                             </div>
-                            <input type="text" class="form-control form-control-sm" id="compSearch"
-                                   placeholder="Suchen..." style="width:180px;" data-i18n-placeholder="val.comp.search">
+                            <div class="card-body p-0">
+                                <div class="scroll-table" id="linkErrorContainer">
+                                    <table class="table table-sm val-table mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="val.errors.pattern">Fehlermuster</th>
+                                                <th data-i18n="val.errors.count">Anzahl</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="linkErrorBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="card-body p-0">
-                        <div class="scroll-table" style="max-height:600px">
-                            <table class="table table-sm table-hover val-table mb-0" id="compTable">
-                                <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th data-i18n="val.comp.source_doc">Quell-Dok</th>
-                                        <th data-i18n="val.comp.target_doc">Ziel-Dok</th>
-                                        <th>DOKOB</th>
-                                        <th>OBJKY</th>
-                                        <th data-i18n="val.comp.target_dokob">Ziel-DOKOB</th>
-                                        <th data-i18n="val.comp.target_objky">Ziel-OBJKY</th>
-                                        <th data-i18n="val.comp.upload">Upload</th>
-                                        <th data-i18n="val.comp.link">Link</th>
-                                        <th data-i18n="val.comp.error">Fehler</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="compBody"></tbody>
-                            </table>
-                        </div>
-                        <div class="card-footer text-muted text-center py-2" id="compFooter">
+                    <div class="col-lg-6 mb-3">
+                        <div class="card section-card h-100">
+                            <div class="card-header">
+                                <i class="fas fa-upload"></i> <span data-i18n="val.errors.upload_title">Upload-Fehler Analyse</span>
+                                <span class="badge badge-danger ml-1" id="uploadErrorCount">0</span>
+                            </div>
+                            <div class="card-body p-0">
+                                <div class="scroll-table" id="uploadErrorContainer">
+                                    <table class="table table-sm val-table mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th data-i18n="val.errors.pattern">Fehlermuster</th>
+                                                <th data-i18n="val.errors.count">Anzahl</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="uploadErrorBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

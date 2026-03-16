@@ -47,6 +47,8 @@ from app.process import (
     _classify_error,
     get_error_description,
     sanitize_doknr,
+    is_csrf_error,
+    force_csrf_renewal,
     MAX_API_WORKERS,
     MAX_DESC_LEN,
     read_sap_system,
@@ -58,6 +60,20 @@ from app.logger import get_logger
 from app.prepare import load_object_mappings, apply_object_mappings_for_batch
 
 cfg = Config.load()
+
+
+def load_batch_dokob_filter(batch_id):
+    """Load the DOKOB filter for a batch from DB. Returns a set of uppercase DOKOB strings, or None if no filter."""
+    try:
+        with misc_engine.begin() as con:
+            row = con.execute(text(
+                "SELECT dokob_filter FROM dbo.migration_batch WHERE batch_id = :bid"
+            ), {'bid': batch_id}).fetchone()
+        if row and row[0]:
+            return set(d.strip().upper() for d in row[0].split(',') if d.strip())
+    except Exception:
+        pass
+    return None
 misc_db = MiscEngine.load()
 misc_engine = misc_db.engine
 
@@ -288,6 +304,102 @@ def has_valid_extension(filename: str) -> bool:
     ext = filename.rsplit('.', 1)[-1].lower()
     # Extension should be 2-5 chars and not all numbers
     return 2 <= len(ext) <= 5 and not ext.isdigit()
+
+
+def _is_loid(name):
+    """Check if name looks like a LOID (hex GUID without extension)."""
+    import re
+    return bool(re.fullmatch(r'[0-9A-Fa-f]{24,40}', name.strip())) if name else False
+
+
+def _get_any_dappl(doknr, dokar, dokvr, doktl):
+    """Get any DAPPL from DMS_DOC_FILES for this document (general extension)."""
+    if not DIL_AVAILABLE or not dil_engine:
+        return ''
+    try:
+        query = text("""
+            SELECT DAPPL FROM DIL.DMS_DOC_FILES
+            WHERE DOKNR = :nr AND DOKAR = :typ AND DOKVR = :ver AND DOKTL = :teil
+              AND DAPPL IS NOT NULL AND DAPPL != ''
+            ORDER BY FILE_IDX
+        """)
+        with dil_engine.begin() as con:
+            result = con.execute(query, {
+                'nr': doknr, 'typ': dokar,
+                'ver': str(dokvr).zfill(2), 'teil': str(doktl).zfill(3)
+            }).fetchone()
+        return str(result[0]).strip() if result and result[0] else ''
+    except Exception:
+        return ''
+
+
+def _resolve_filename(document, staging_record, file_index):
+    """Resolve the best available filename from all sources.
+
+    Priority:
+      1) API Docpath (full path → extract basename)
+      2) staging.filename (from Prepare phase)
+      3) If no valid extension yet:
+         a) Wsapplication code as extension
+         b) DIL.DRAW.filep
+         c) DIL.DMS_DOC_FILES (FILENAME + DAPPL per file)
+         d) DIL.DMS_DOC_FILES (any DAPPL for this document)
+      4) 'file_{index}' as absolute last resort
+
+    LOID (hex GUID) is never returned as filename.
+    """
+    from app.process import _sanitize_filename
+
+    # Source 1: API Docpath
+    docpath = (document.get('Docpath', '') or '').replace('\\', '/')
+    api_filename = _sanitize_filename(docpath.split('/')[-1] or '') if docpath else ''
+
+    # Source 2: staging filename
+    staging_filename = (staging_record.get('filename', '') or '').strip()
+
+    # Pick the first non-empty candidate (but skip LOIDs)
+    if api_filename and api_filename != 'unnamed' and not _is_loid(api_filename):
+        filename = api_filename
+    elif staging_filename and not _is_loid(staging_filename):
+        filename = staging_filename
+    else:
+        filename = ''
+
+    # If already valid → done
+    if filename and has_valid_extension(filename):
+        return filename
+
+    # Source 3a: Wsapplication extension code
+    ws_appl = (document.get('Wsapplication', '') or '').strip()
+    if ws_appl and ws_appl.upper() not in ('WEB', 'HTM'):
+        ext = ws_appl.lower()
+        base = filename if filename else f'file_{file_index}'
+        return f"{base}.{ext}"
+
+    src_nr = staging_record.get('source_documentnumber', '')
+    src_typ = staging_record.get('source_documenttype', '')
+    src_ver = staging_record.get('source_documentversion', '')
+    src_teil = staging_record.get('source_documentpart', '')
+
+    # Source 3b: DIL.DRAW.filep
+    draw_filename = get_filename_from_draw(src_nr, src_typ, src_ver, src_teil)
+    if draw_filename and has_valid_extension(draw_filename):
+        return draw_filename
+
+    # Source 3c: DIL.DMS_DOC_FILES (specific file by FILE_IDX)
+    dms_filename = get_filename_from_dms_doc_files(src_nr, src_typ, src_ver, src_teil, file_index)
+    if dms_filename and has_valid_extension(dms_filename):
+        return dms_filename
+
+    # Source 3d: DIL.DMS_DOC_FILES (any DAPPL for this document)
+    # Catches out-of-range file indices where specific FILE_IDX has no match
+    any_dappl = _get_any_dappl(src_nr, src_typ, src_ver, src_teil)
+    if any_dappl:
+        base = filename if filename else f'file_{file_index}'
+        return f"{base}.{any_dappl.lower()}"
+
+    # Last resort — never return a LOID
+    return filename or f'file_{file_index}'
 
 
 # Pacing mode: 'response' = wait for API response, 'time' = time-based delays
@@ -1255,13 +1367,36 @@ def execute_single_document(staging_record, session_snapshot):
             if api_all_links:
                 api_dokob, api_objky = api_all_links[0]
         
+        # Apply DOKOB filter: split links into kept vs excluded
+        dokob_filter_set = load_batch_dokob_filter(batch_id)
+        excluded_links = []
+        if dokob_filter_set and api_all_links:
+            kept = []
+            for pair in api_all_links:
+                if pair[0].upper() in dokob_filter_set:
+                    kept.append(pair)
+                else:
+                    excluded_links.append(pair)
+            if excluded_links:
+                logger.info(f"DOKOB filter excluded {len(excluded_links)} of {len(api_all_links)} links", category="OBJLINK")
+            api_all_links = kept
+            # Update primary dokob/objky to first kept link (if any)
+            if api_all_links:
+                api_dokob, api_objky = api_all_links[0]
+            else:
+                api_dokob, api_objky = None, None
+        
         # Build updated source_object_links JSON from API (authoritative source)
+        # Only contains links matching the batch's DOKOB filter (excluded links stored separately)
         import json as json_mod
         api_links_json = None
+        excluded_links_json = None
         if api_all_links:
             api_links_json = json_mod.dumps([{'dokob': d, 'objky': o} for d, o in api_all_links])
             if len(api_all_links) > 1:
-                logger.info(f"API returned {len(api_all_links)} object links", category="OBJLINK")
+                logger.info(f"API returned {len(api_all_links)} object links (after filter)", category="OBJLINK")
+        if excluded_links:
+            excluded_links_json = json_mod.dumps([{'dokob': d, 'objky': o} for d, o in excluded_links])
         
         # Apply object mapping on-the-fly to get target_dokob/target_objky
         # NOTE: Object mappings are loaded per batch and cached within this function scope
@@ -1282,13 +1417,14 @@ def execute_single_document(staging_record, session_snapshot):
             except Exception as e:
                 logger.debug(f"Failed to load object mappings: {e}", category="OBJLINK")
         
-        # Update staging with API metadata (DOKOB, OBJKY, all links, Authoritygroup)
+        # Update staging with API metadata (DOKOB, OBJKY, filtered links, Authoritygroup)
         # and resolved target values.
-        # source_object_links is updated with ALL links from API (authoritative).
+        # source_object_links contains only links matching batch DOKOB filter.
+        # excluded_object_links contains links filtered out by DOKOB filter.
         # NOTE: authorization_group is ONLY updated from API if it was NULL in staging.
         # If a rule already set it (even to empty string ''), the rule takes precedence.
         # source_authorization_group always stores the original API value for reference.
-        if api_dokob or api_objky or api_links_json or doc_authgroup or target_dokob or target_objky:
+        if api_dokob or api_objky or api_links_json or excluded_links_json or doc_authgroup or target_dokob or target_objky:
             try:
                 with misc_engine.begin() as con:
                     con.execute(text("""
@@ -1297,6 +1433,8 @@ def execute_single_document(staging_record, session_snapshot):
                             source_objky = COALESCE(:objky, source_objky),
                             source_object_links = COALESCE(:links_json, source_object_links),
                             source_link_count = CASE WHEN :link_count IS NOT NULL THEN :link_count ELSE source_link_count END,
+                            excluded_object_links = COALESCE(:excluded_json, excluded_object_links),
+                            excluded_link_count = CASE WHEN :excluded_count IS NOT NULL THEN :excluded_count ELSE excluded_link_count END,
                             source_authorization_group = COALESCE(:authgroup, source_authorization_group),
                             authorization_group = CASE 
                                 WHEN authorization_group IS NULL THEN :authgroup
@@ -1311,11 +1449,13 @@ def execute_single_document(staging_record, session_snapshot):
                         'objky': api_objky,
                         'links_json': api_links_json,
                         'link_count': len(api_all_links) if api_all_links else None,
+                        'excluded_json': excluded_links_json,
+                        'excluded_count': len(excluded_links) if excluded_links else None,
                         'authgroup': doc_authgroup,
                         'target_dokob': target_dokob,
                         'target_objky': target_objky
                     })
-                logger.debug(f"Updated from API: DOKOB={api_dokob}, OBJKY={api_objky}, links={len(api_all_links)}, BEGRU={doc_authgroup}, target=({target_dokob},{target_objky})", category="EXECUTE")
+                logger.debug(f"Updated from API: DOKOB={api_dokob}, OBJKY={api_objky}, links={len(api_all_links)}, excluded={len(excluded_links)}, BEGRU={doc_authgroup}, target=({target_dokob},{target_objky})", category="EXECUTE")
             except Exception as e:
                 logger.debug(f"Failed to update API metadata: {e}", category="EXECUTE")
         
@@ -1391,6 +1531,17 @@ def execute_single_document(staging_record, session_snapshot):
                 logger.info(f"Retry mode: {len(already_uploaded)} files already uploaded successfully, will skip them", category="EXECUTE")
         else:
             already_uploaded = set()  # Fresh container → upload everything
+            # Clean up stale file_details from previous failed attempts to avoid
+            # duplicate rows in the validation dashboard.
+            try:
+                with misc_engine.begin() as con:
+                    del_count = con.execute(text(
+                        "DELETE FROM dbo.migration_file_details WHERE staging_id = :sid"
+                    ), {'sid': staging_id}).rowcount
+                    if del_count:
+                        logger.info(f"Cleaned up {del_count} stale file_details from previous attempt", category="EXECUTE")
+            except Exception as _cleanup_ex:
+                logger.debug(f"file_details cleanup failed (non-critical): {_cleanup_ex}", category="EXECUTE")
         
         for file_index, document in enumerate(documents[2]):
             # Skip files that were already successfully uploaded (retry optimization)
@@ -1409,6 +1560,191 @@ def execute_single_document(staging_record, session_snapshot):
                 })
                 continue
             
+            # ── WEB application: copy URL reference instead of downloading ──
+            ws_appl = (document.get('Wsapplication', '') or '').strip().upper()
+            docpath_url = (document.get('Docpath', '') or '').strip()
+            
+            if ws_appl == 'WEB' and docpath_url:
+                logger.info(f"WEB application detected — copying URL reference instead of downloading", category="READ")
+                logger.info(f"Docpath URL: {docpath_url}", category="READ")
+                
+                # Build a .url shortcut file content (Windows Internet Shortcut format)
+                url_content = f"[InternetShortcut]\nURL={docpath_url}\n".encode('utf-8')
+                filename = 'link.url'
+                
+                # Update metadata
+                if not metadata_updated:
+                    update_metadata_fields(
+                        staging_id,
+                        loioid=document.get('LOIOID'),
+                        description=doc_description,
+                        filename=filename,
+                        file_size=len(url_content),
+                        mime_type='application/x-url'
+                    )
+                    metadata_updated = True
+                
+                # Switch to target system and create container if needed
+                prepare_session_headers(server_session, session_snapshot, target_system)
+                
+                if not doc_created:
+                    # -- Container creation (same logic as normal flow) --
+                    source_doc_number = staging_record['source_documentnumber']
+                    is_auto_id = is_auto_generated_id(source_doc_number)
+                    effective_description = doc_description or staging_record.get('source_description') or filename
+                    if isinstance(effective_description, str):
+                        effective_description = effective_description.strip()
+                    if not effective_description:
+                        effective_description = filename
+                    if len(effective_description) > MAX_DESC_LEN:
+                        effective_description = effective_description[:MAX_DESC_LEN]
+                    
+                    doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    create_url = f"{doc_base_url}/A_DocumentInfoRecord"
+                    server_session.headers.update({'Content-Type': 'application/json'})
+                    
+                    dms_payload = {
+                        'DocumentInfoRecordDocType': doc_type,
+                        'DocumentInfoRecordDocVersion': doc_version,
+                        'DocumentInfoRecordDocPart': doc_part,
+                        'to_DocDesc': [
+                            {'Language': 'DE', 'DocumentDescription': effective_description},
+                            {'Language': 'EN', 'DocumentDescription': effective_description}
+                        ]
+                    }
+                    
+                    effective_doc_number = staging_record.get('target_documentnumber') or doc_number
+                    doc_number_sent_to_s4 = False
+                    rule_set_doc_number = staging_record.get('target_documentnumber')
+                    if rule_set_doc_number:
+                        dms_payload['DocumentInfoRecordDocNumber'] = rule_set_doc_number
+                        doc_number_sent_to_s4 = True
+                    elif effective_doc_number and not _is_purely_numeric(effective_doc_number):
+                        dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
+                        doc_number_sent_to_s4 = True
+                    
+                    staging_authgroup = staging_record.get('authorization_group')
+                    if staging_authgroup is not None:
+                        effective_authgroup = staging_authgroup.strip() if staging_authgroup else ''
+                    else:
+                        effective_authgroup = doc_authgroup or ''
+                    if effective_authgroup:
+                        dms_payload['AuthorizationGroup'] = effective_authgroup
+                    
+                    logger.info(f"Creating document info record (WEB)", category="CREATE")
+                    create_resp = server_session.post(create_url, json=dms_payload)
+                    
+                    # CSRF retry
+                    if is_csrf_error(create_resp):
+                        logger.warning("CSRF token expired during WEB CREATE — refreshing and retrying", category="CREATE")
+                        force_csrf_renewal(session_snapshot, target_system)
+                        prepare_session_headers(server_session, session_snapshot, target_system)
+                        server_session.headers.update({'Content-Type': 'application/json'})
+                        create_resp = server_session.post(create_url, json=dms_payload)
+                    
+                    if create_resp.status_code in (200, 201):
+                        try:
+                            resp_d = create_resp.json().get('d', {})
+                            created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
+                            if created_doc_number:
+                                doc_number = created_doc_number
+                                with misc_engine.begin() as con:
+                                    con.execute(text("""
+                                        UPDATE dbo.migration_staging
+                                        SET target_documentnumber = :num WHERE id = :sid
+                                    """), {'num': created_doc_number, 'sid': staging_id})
+                            created_doc_version = resp_d.get('DocumentInfoRecordDocVersion')
+                            if created_doc_version and created_doc_version != doc_version:
+                                doc_version = created_doc_version
+                                with misc_engine.begin() as con:
+                                    con.execute(text("UPDATE dbo.migration_staging SET target_documentversion = :v WHERE id = :sid"), {'v': doc_version, 'sid': staging_id})
+                            created_doc_part = resp_d.get('DocumentInfoRecordDocPart')
+                            if created_doc_part and created_doc_part != doc_part:
+                                doc_part = created_doc_part
+                                with misc_engine.begin() as con:
+                                    con.execute(text("UPDATE dbo.migration_staging SET target_documentpart = :p WHERE id = :sid"), {'p': doc_part, 'sid': staging_id})
+                        except Exception as e:
+                            logger.warning(f"Failed to extract doc number from WEB CREATE response: {e}", category="CREATE")
+                        
+                        if not doc_number_sent_to_s4 and not doc_number:
+                            error_msg = "CREATE_DOC_NUMBER_LOST: WEB doc created but number not captured"
+                            logger.error(error_msg, category="CREATE")
+                            update_execution_status(staging_id, 'failed', error_msg)
+                            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+                        
+                        doc_created = True
+                        with misc_engine.begin() as con:
+                            con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
+                        logger.info(f"WEB document container created: {doc_number}", category="CREATE")
+                    else:
+                        error_info = _extract_error_fields(create_resp)
+                        error_msg = f"CREATE_FAIL_{create_resp.status_code}"
+                        logger.error(error_msg, category="CREATE", details=error_info)
+                        import json as _json
+                        update_execution_status(staging_id, 'failed', _json.dumps(error_info))
+                        return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+                
+                # Upload the .url file as attachment
+                if doc_created and doc_number:
+                    slug_filename = _sanitize_slug(filename)
+                    server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
+                    
+                    try:
+                        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+                    except Exception:
+                        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    
+                    attachment_url = (
+                        f"{attachment_base_url}/A_DocumentInfoRecordAttch"
+                        f"(DocumentInfoRecordDocType='{doc_type}',"
+                        f"DocumentInfoRecordDocNumber='{doc_number}',"
+                        f"DocumentInfoRecordDocVersion='{doc_version}',"
+                        f"DocumentInfoRecordDocPart='{doc_part}'"
+                        f")/DocumentInfoRecordToAttachmentNavigation"
+                    )
+                    
+                    logger.info(f"Uploading URL reference: {filename} ({len(url_content)} bytes)", category="UPLOAD")
+                    try:
+                        upload_resp = server_session.post(attachment_url, data=url_content, timeout=60)
+                        # CSRF retry
+                        if is_csrf_error(upload_resp):
+                            logger.warning("CSRF token expired during WEB UPLOAD — refreshing and retrying", category="UPLOAD")
+                            force_csrf_renewal(session_snapshot, target_system)
+                            prepare_session_headers(server_session, session_snapshot, target_system)
+                            server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
+                            upload_resp = server_session.post(attachment_url, data=url_content, timeout=60)
+                    except Exception as ex:
+                        error_msg = f'UPLOAD_WEB_ERROR: {str(ex)[:300]}'
+                        logger.error(error_msg, category="UPLOAD")
+                        file_result = {'file': filename, 'status': error_msg, 'error_category': 'CONNECTION_ERROR'}
+                        results.append(file_result)
+                        save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                        continue
+                    
+                    if upload_resp.status_code in (200, 201):
+                        logger.info(f"WEB URL reference uploaded successfully", category="UPLOAD")
+                        file_result = {
+                            'file': filename,
+                            'status': 'SUCCESS',
+                            'file_size': len(url_content),
+                            'file_size_mb': 0,
+                            'mime_type': 'application/x-url',
+                            'actual_time_seconds': 0
+                        }
+                    else:
+                        error_info = _extract_error_fields(upload_resp)
+                        error_msg = f"UPLOAD_WEB_FAIL_{upload_resp.status_code}"
+                        logger.error(f"WEB URL upload failed: {error_msg}", category="UPLOAD", details=error_info)
+                        file_result = {
+                            'file': filename,
+                            'status': error_msg,
+                            'error_detail': error_info,
+                            'error_category': _classify_error(error_info)
+                        }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                continue  # Skip normal download/upload flow for WEB
+            
             # Fetch document content
             # IMPORTANT: Re-prepare session for source system before EACH file download.
             # After the first iteration, the session is configured for the TARGET system
@@ -1426,6 +1762,9 @@ def execute_single_document(staging_record, session_snapshot):
             download_start = time.time()
             logger.info(f"Downloading file {file_index} from source: LOIOID={document.get('LOIOID')}", category="READ")
             logger.debug(f"Download URL: {request_url}", category="READ")
+            # Derive a meaningful filename for error reporting (before download attempt)
+            _fallback_name = _resolve_filename(document, staging_record, file_index)
+            
             try:
                 response = server_session.get(request_url, timeout=300)  # 5 min timeout for large files
             except Exception as read_ex:
@@ -1433,7 +1772,7 @@ def execute_single_document(staging_record, session_snapshot):
                 error_msg = f'READ_TIMEOUT: {str(read_ex)}'
                 logger.error(f"File read timeout/error after {download_elapsed:.1f}s: {error_msg}", category="READ")
                 file_result = {
-                    'file': document.get('LOIOID'), 
+                    'file': _fallback_name, 
                     'status': error_msg,
                     'error_detail': {'status_code': 0, 'detail': str(read_ex), 'elapsed_seconds': round(download_elapsed, 1)},
                     'error_category': 'TIMEOUT'
@@ -1479,7 +1818,7 @@ def execute_single_document(staging_record, session_snapshot):
                 
                 logger.error(f"File read failed: {error_msg}", category="READ", details=error_info)
                 file_result = {
-                    'file': document.get('LOIOID'), 
+                    'file': _fallback_name, 
                     'status': error_msg,
                     'error_detail': error_info,
                     'error_category': _classify_error(error_info)
@@ -1490,19 +1829,8 @@ def execute_single_document(staging_record, session_snapshot):
             
             # Get filename from API Docpath (full path with extension)
             # Example: C:\Users\HoltzTh\Desktop\BMS Fertig\330236529 Prüfung 2015-2019.pdf
-            docpath = document.get('Docpath', '') or ''
-            # Handle both Windows (\\) and Unix (/) path separators
-            api_filename = _sanitize_filename(docpath.replace('\\', '/').split('/')[-1] or '')
-            
-            # Fallback to staging filename if API doesn't provide one
-            staging_filename = staging_record.get('filename', '') or ''
-            
-            if api_filename:
-                filename = api_filename
-            elif staging_filename:
-                filename = staging_filename
-            else:
-                filename = 'unnamed'
+            # Use the same fallback chain as error paths to guarantee a valid extension.
+            filename = _resolve_filename(document, staging_record, file_index)
             
             # CRITICAL: Check if filename has a valid extension
             # If not, try fallbacks:
@@ -1511,39 +1839,7 @@ def execute_single_document(staging_record, session_snapshot):
             #   2) DMS_DOC_FILES (FILENAME + DAPPL)
             # This happens when API returns GUIDs (KPRO) or timestamps as filenames
             if not has_valid_extension(filename):
-                # Fallback 0: Wsapplication from API response (available since 2026 metadata update)
-                ws_appl = (document.get('Wsapplication', '') or '').strip()
-                if ws_appl:
-                    # Wsapplication is a short code like "PDF", "XLS", "DOC" – use as extension
-                    ext = ws_appl.lower()
-                    new_filename = f"{filename}.{ext}" if filename and filename != 'unnamed' else f"document.{ext}"
-                    logger.info(f"Using Wsapplication fallback: {new_filename} (API Wsapplication={ws_appl}, original: {filename})", category="READ")
-                    filename = new_filename
-                else:
-                    # Fallback 1: DRAW.filep (works for non-KPRO files)
-                    draw_filename = get_filename_from_draw(
-                        staging_record.get('source_documentnumber', ''),
-                        staging_record.get('source_documenttype', ''),
-                        staging_record.get('source_documentversion', ''),
-                        staging_record.get('source_documentpart', '')
-                    )
-                    if draw_filename and has_valid_extension(draw_filename):
-                        logger.info(f"Using DRAW fallback filename: {draw_filename} (API had: {filename})", category="READ")
-                        filename = draw_filename
-                    else:
-                        # Fallback 2: DMS_DOC_FILES (has real filename + DAPPL per file)
-                        dms_filename = get_filename_from_dms_doc_files(
-                            staging_record.get('source_documentnumber', ''),
-                            staging_record.get('source_documenttype', ''),
-                            staging_record.get('source_documentversion', ''),
-                            staging_record.get('source_documentpart', ''),
-                            file_index
-                        )
-                        if dms_filename and has_valid_extension(dms_filename):
-                            logger.info(f"Using DMS_DOC_FILES fallback filename: {dms_filename} (API had: {filename})", category="READ")
-                            filename = dms_filename
-                        else:
-                            logger.warning(f"No valid extension found for: {filename} (Wsapplication, DRAW and DMS_DOC_FILES fallbacks exhausted)", category="READ")
+                logger.warning(f"No valid extension found for: {filename} (all fallbacks exhausted)", category="READ")
             
             # Normalize extension BEFORE metadata/upload (e.g. .zipx → .zip)
             filename, ext_normalized = _normalize_extension(filename)
@@ -1693,6 +1989,14 @@ def execute_single_document(staging_record, session_snapshot):
                 
                 logger.info(f"Creating document info record", category="CREATE")
                 create_resp = server_session.post(create_url, json=dms_payload)
+                
+                # CSRF retry: if token expired mid-batch, refresh and retry once
+                if is_csrf_error(create_resp):
+                    logger.warning("CSRF token expired during CREATE — refreshing and retrying", category="CREATE")
+                    force_csrf_renewal(session_snapshot, target_system)
+                    prepare_session_headers(server_session, session_snapshot, target_system)
+                    server_session.headers.update({'Content-Type': 'application/json'})
+                    create_resp = server_session.post(create_url, json=dms_payload)
                 
                 body_txt_lower = create_resp.text.lower() if create_resp.text else ''
                 
@@ -1850,6 +2154,13 @@ def execute_single_document(staging_record, session_snapshot):
                 upload_start = time.time()
                 try:
                     upload_resp = server_session.post(attachment_url, data=content, timeout=upload_timeout)
+                    # CSRF retry
+                    if is_csrf_error(upload_resp):
+                        logger.warning("CSRF token expired during UPLOAD — refreshing and retrying", category="UPLOAD")
+                        force_csrf_renewal(session_snapshot, target_system)
+                        prepare_session_headers(server_session, session_snapshot, target_system)
+                        server_session.headers.update({'Content-Type': mime_type, 'Slug': filename})
+                        upload_resp = server_session.post(attachment_url, data=content, timeout=upload_timeout)
                 except requests.exceptions.ConnectionError as conn_ex:
                     upload_elapsed = time.time() - upload_start
                     error_msg = f'UPLOAD_CONNECTION_ERROR after {upload_elapsed:.1f}s'
@@ -3152,7 +3463,7 @@ def load_linkable_records(batch_id, record_ids=None):
     return df
 
 
-def link_single_record(staging_record, session_snapshot, mappings_cache=None, skip_status_updates=False):
+def link_single_record(staging_record, session_snapshot, mappings_cache=None, skip_status_updates=False, dokob_filter_set=None):
     """Create Object Links for a single staging record (Phase 2).
     
     Makes lightweight POST(s) to A_DocumentInfoRecordObjLink.
@@ -3167,6 +3478,7 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
         mappings_cache: Pre-loaded mappings dict (source_dokob, source_objky) -> (target_dokob, target_objky).
                         If None, loads from DB (legacy, slower).
         skip_status_updates: If True, skip individual DB status updates (caller handles batch updates).
+        dokob_filter_set: Set of uppercase DOKOB strings to include, or None for all.
     
     Returns:
         dict with 'staging_id', 'status', 'error' (optional), 'status_code' (optional),
@@ -3211,6 +3523,13 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
         pair = (str(primary_dokob).strip(), str(primary_objky).strip())
         if pair not in source_links:
             source_links.append(pair)
+    
+    # Apply DOKOB filter: only keep links whose DOKOB is in the batch's selection
+    if dokob_filter_set and source_links:
+        before = len(source_links)
+        source_links = [p for p in source_links if p[0].upper() in dokob_filter_set]
+        if len(source_links) < before:
+            logger.info(f"DOKOB filter: {before} -> {len(source_links)} links (excluded {before - len(source_links)})", category="OBJLINK")
     
     # Fallback: if still no links, use legacy single target_dokob/target_objky
     if not source_links:
@@ -3325,6 +3644,13 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
             
             try:
                 link_resp = server_session.post(post_url, json=object_link_payload)
+                # CSRF retry
+                if is_csrf_error(link_resp):
+                    logger.warning("CSRF token expired during OBJLINK — refreshing and retrying", category="OBJLINK")
+                    force_csrf_renewal(session_snapshot, target_system)
+                    prepare_session_headers(server_session, session_snapshot, target_system)
+                    server_session.headers.update({'Content-Type': 'application/json'})
+                    link_resp = server_session.post(post_url, json=object_link_payload)
                 body_txt_lower = link_resp.text.lower() if link_resp.text else ''
                 
                 if link_resp.status_code not in (200, 201, 204):
@@ -3511,6 +3837,11 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         if mappings_cache:
             print(f"[LINK] Pre-loaded {len(mappings_cache)} object mappings (cached for all threads)")
         
+        # Pre-load DOKOB filter for this batch (only link selected object types)
+        dokob_filter_set = load_batch_dokob_filter(batch_id)
+        if dokob_filter_set:
+            print(f"[LINK] DOKOB filter active: {', '.join(sorted(dokob_filter_set))}")
+        
         total_records = len(records_df)
         print(f"[LINK_START] Batch {batch_id}: {total_records} records for linking, {max_workers} workers")
         
@@ -3591,7 +3922,8 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 for _, row in package_records:
                     record_dict = row.to_dict()
                     future = executor.submit(link_single_record, record_dict, session_snapshot, 
-                                             mappings_cache=mappings_cache, skip_status_updates=True)
+                                             mappings_cache=mappings_cache, skip_status_updates=True,
+                                             dokob_filter_set=dokob_filter_set)
                     futures[future] = record_dict['id']
                 
                 for future in futures:

@@ -89,6 +89,7 @@ CREATE TABLE dbo.migration_batch (
     description NVARCHAR(40),
     notes NVARCHAR(MAX),
     wave VARCHAR(10),
+    dokob_filter VARCHAR(200),
     
     INDEX idx_status (status),
     INDEX idx_migration_phase (migration_phase),
@@ -718,6 +719,16 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_batch has per-task start/duration columns")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add per-task start/duration columns: {e}")
+
+        # Add dokob_filter column to migration_batch
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_batch', 'dokob_filter') IS NULL
+                    ALTER TABLE dbo.migration_batch ADD dokob_filter VARCHAR(200) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_batch has dokob_filter column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add dokob_filter column: {e}")
 
         # Check and create wave_plan table
         check_wave_plan = text("""

@@ -1,7 +1,6 @@
 /**
- * validation.js — Validation dashboard logic
- * Fetches data from /batch/<bid>/validation/data and renders KPIs,
- * DOKOB mapping coverage, error analysis, and source→target comparison.
+ * validation.js — Consolidated validation dashboard
+ * Tabs: Dateien, Objektlinks, Fehleranalyse
  */
 (function () {
     'use strict';
@@ -9,14 +8,34 @@
     const app = document.getElementById('validationApp');
     if (!app) return;
     const BATCH_ID = app.dataset.batchId;
-    let allRows = [];    // comparison data
-    let activeFilter = 'all';
+
+    // Data stores
+    let allFiles = [];
+    let allLinks = [];          // expanded object links
+    let allComparison = [];     // raw comparison rows
+
+    // Active filters per tab
+    let filesFilter = 'all';
+    let linksFilter = 'all';
+    let displayLimit = 500;
 
     // ── Bootstrap ─────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
         loadValidationData();
-        initFilterPills();
-        initSearch();
+        initFilterPills('filesFilterPills', f => { filesFilter = f; renderFiles(); });
+        initFilterPills('linksFilterPills', f => { linksFilter = f; renderLinks(); });
+        initSearch('filesSearch', renderFiles);
+        initSearch('linksSearch', renderLinks);
+        // Display limit input
+        const limitInput = el('displayLimitInput');
+        if (limitInput) {
+            displayLimit = parseInt(limitInput.value, 10) || 500;
+            limitInput.addEventListener('change', () => {
+                displayLimit = Math.max(10, parseInt(limitInput.value, 10) || 500);
+                renderFiles();
+                renderLinks();
+            });
+        }
     });
 
     // ── Data loading ──────────────────────────────────────────────
@@ -28,10 +47,10 @@
             if (!data.success) throw new Error(data.error || 'Unknown');
             renderAll(data);
             hide('loadingSpinner'); show('validationContent');
-            I18n.applyAll();
+            if (window.I18n) I18n.applyAll();
         } catch (e) {
             hide('loadingSpinner'); show('validationContent');
-            document.getElementById('validationContent').innerHTML =
+            el('validationContent').innerHTML =
                 `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> ${e.message}</div>`;
         }
     };
@@ -39,13 +58,34 @@
     // ── Render orchestrator ───────────────────────────────────────
     function renderAll(data) {
         renderBatchInfo(data.batch);
-        renderKPIs(data.kpis);
+        renderKPIs(data.kpis, data.file_details);
         renderProgress(data.kpis);
+
+        // Build object-mapping lookup: "DOKOB|objky" -> {target_dokob, target_objky}
+        const objMap = {};
+        for (const m of (data.obj_mappings || [])) {
+            objMap[(m.source_dokob || '').toUpperCase() + '|' + (m.source_objky || '')] =
+                { dokob: m.target_dokob || '', objky: m.target_objky || '' };
+        }
+
+        // Store data
+        allFiles = data.file_details || [];
+        allComparison = data.comparison || [];
+        allLinks = expandObjectLinks(allComparison, objMap);
+
+        // Render tabs
+        renderFiles();
+        renderLinks();
         renderDokob(data.dokob_mapping);
         renderLinkErrors(data.link_errors);
         renderUploadErrors(data.upload_errors);
-        allRows = data.comparison || [];
-        renderComparison();
+
+        // Tab badge counts
+        setText('tabFilesCount', allFiles.length);
+        setText('tabLinksCount', allLinks.length);
+        const errCount = (data.link_errors || []).reduce((s, e) => s + (e.cnt || 0), 0)
+                       + (data.upload_errors || []).reduce((s, e) => s + (e.cnt || 0), 0);
+        setText('tabErrorsCount', errCount || '0');
     }
 
     // ── Batch info ────────────────────────────────────────────────
@@ -57,32 +97,225 @@
     }
 
     // ── KPI cards ─────────────────────────────────────────────────
-    function renderKPIs(k) {
+    function renderKPIs(k, files) {
         setText('kpiTotal',    fmt(k.total));
         setText('kpiLinked',   fmt(k.linked));
         setText('kpiFailed',   fmt(k.link_failed));
         setText('kpiPending',  fmt((k.pending || 0) + (k.linking || 0)));
-        setText('kpiSkipped',  fmt(k.link_skipped));
+        setText('kpiSkipped',  fmt(k.link_skipped || 0));
         setText('kpiCoverage', k.coverage_pct + '%');
     }
 
     // ── Progress bars ─────────────────────────────────────────────
     function renderProgress(k) {
         const total = k.total || 1;
-        // Upload progress
-        const uploaded = k.upload_success || 0;
+        const skipped = k.link_skipped || 0;
+        // Upload: skipped records count as done (no files to upload)
+        const uploaded = (k.upload_success || 0);
         const upPct = Math.round(uploaded / total * 100);
         el('uploadProgressBar').style.width = upPct + '%';
         setText('uploadProgressLabel', `${fmt(uploaded)} / ${fmt(total)}  (${upPct}%)`);
 
-        // Link progress
+        // Linking: exclude skipped from denominator (not applicable)
+        const applicable = total - skipped;
         const linked = k.linked || 0;
-        const lnPct = Math.round(linked / total * 100);
+        const lnPct = applicable > 0 ? Math.round(linked / applicable * 100) : 0;
         el('linkProgressBar').style.width = lnPct + '%';
-        setText('linkProgressLabel', `${fmt(linked)} / ${fmt(total)}  (${lnPct}%)`);
+        setText('linkProgressLabel', `${fmt(linked)} / ${fmt(applicable)}  (${lnPct}%)${skipped ? '  +' + fmt(skipped) + ' ' + t('val.kpi.skipped') : ''}`);
     }
 
-    // ── DOKOB mapping table ───────────────────────────────────────
+    // ═══ TAB 1: Dateien ═══════════════════════════════════════════
+    function renderFiles() {
+        const tbody = el('filesBody');
+        const searchTerm = (el('filesSearch').value || '').toLowerCase();
+
+        let filtered = allFiles;
+        if (filesFilter !== 'all') {
+            filtered = filtered.filter(f => {
+                if (filesFilter === 'SUCCESS') return f.upload_status === 'SUCCESS';
+                if (filesFilter === 'ERROR') return f.upload_status !== 'SUCCESS';
+                return true;
+            });
+        }
+        if (searchTerm) {
+            filtered = filtered.filter(f =>
+                (f.filename || '').toLowerCase().includes(searchTerm) ||
+                (f.source_documentnumber || '').toLowerCase().includes(searchTerm) ||
+                (f.target_documentnumber || '').toLowerCase().includes(searchTerm) ||
+                (f.mime_type || '').toLowerCase().includes(searchTerm) ||
+                (f.error_detail || '').toLowerCase().includes(searchTerm)
+            );
+        }
+
+        const totalFiltered = filtered.length;
+        const displayed = filtered.slice(0, displayLimit);
+
+        if (!displayed.length) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
+        } else {
+            tbody.innerHTML = displayed.map(f => {
+                const statusCls = f.upload_status === 'SUCCESS' ? 'diff-match' : 'diff-changed';
+                const srcTvt = [f.source_documenttype, f.source_documentversion, f.source_documentpart].filter(Boolean).join('/');
+                const tgtTvt = f.container_created
+                    ? [f.target_documenttype, f.target_documentversion, f.target_documentpart].filter(Boolean).join('/')
+                    : '';
+                return `<tr>
+                    <td title="${esc(f.source_documentnumber || '')}">${esc(truncate(f.source_documentnumber || '\u2014', 25))}</td>
+                    <td>${esc(srcTvt || '\u2014')}</td>
+                    <td title="${esc(f.target_documentnumber || '')}">${esc(truncate(f.target_documentnumber || '\u2014', 25))}</td>
+                    <td>${esc(tgtTvt || '\u2014')}</td>
+                    <td title="${esc(f.filename || '')}">${esc(truncate(f.filename || '\u2014', 35))}</td>
+                    <td>${esc(f.mime_type || '\u2014')}</td>
+                    <td>${formatSize(f.file_size_bytes)}</td>
+                    <td class="${statusCls}">${statusBadge(f.upload_status)}</td>
+                    <td title="${esc(f.error_detail || '')}"><span class="err-pattern">${esc(truncate(f.error_detail || f.error_category || '', 50))}</span></td>
+                </tr>`;
+            }).join('');
+        }
+        el('filesFooter').textContent = t('val.comp.showing_limit', { shown: displayed.length, filtered: totalFiltered, total: allFiles.length });
+    }
+
+    // ═══ TAB 2: Objektlinks ═══════════════════════════════════════
+
+    /** Expand source_object_links JSON into flat link rows */
+    function expandObjectLinks(rows, objMap) {
+        const expanded = [];
+        for (const r of rows) {
+            let links = [];
+            try {
+                if (r.source_object_links && r.source_object_links.length > 2) {
+                    links = JSON.parse(r.source_object_links);
+                }
+            } catch (e) { /* ignore parse errors */ }
+
+            // Only show target info if container was actually created
+            const tgtDoc = r.container_created ? r.target_documentnumber : '';
+
+            // Combine Typ/Ver./Teil
+            const srcTvt = [r.source_documenttype, r.source_documentversion, r.source_documentpart].filter(Boolean).join('/');
+            const tgtTvt = r.container_created
+                ? [r.target_documenttype, r.target_documentversion, r.target_documentpart].filter(Boolean).join('/')
+                : '';
+
+            if (links.length === 0) {
+                // Record has no object links — use single target_dokob/target_objky
+                const tgtDokob = r.container_created ? (r.target_dokob || '') : '';
+                const tgtObjky = r.container_created ? (r.target_objky || '') : '';
+                expanded.push({
+                    id: r.id,
+                    source_documentnumber: r.source_documentnumber,
+                    src_tvt: srcTvt,
+                    target_documentnumber: tgtDoc,
+                    tgt_tvt: tgtTvt,
+                    src_dokob: r.source_dokob || '\u2014',
+                    src_objky: r.source_objky || '\u2014',
+                    tgt_dokob: tgtDokob,
+                    tgt_objky: tgtObjky,
+                    link_status: r.link_status || 'pending',
+                    link_error: r.link_error || '',
+                    is_no_link: true
+                });
+            } else {
+                for (const lnk of links) {
+                    // Resolve per-link target via object mapping
+                    let tgtDokob = '';
+                    let tgtObjky = '';
+                    if (r.container_created && objMap) {
+                        const key = (lnk.dokob || '').toUpperCase() + '|' + (lnk.objky || '');
+                        const mapped = objMap[key];
+                        if (mapped) {
+                            tgtDokob = mapped.dokob;
+                            tgtObjky = mapped.objky;
+                        } else {
+                            // Fallback: pass-through source values (same behavior as execute)
+                            tgtDokob = lnk.dokob || '';
+                            tgtObjky = lnk.objky || '';
+                        }
+                    }
+                    expanded.push({
+                        id: r.id,
+                        source_documentnumber: r.source_documentnumber,
+                        src_tvt: srcTvt,
+                        target_documentnumber: tgtDoc,
+                        tgt_tvt: tgtTvt,
+                        src_dokob: lnk.dokob || '\u2014',
+                        src_objky: lnk.objky || '\u2014',
+                        tgt_dokob: tgtDokob,
+                        tgt_objky: tgtObjky,
+                        link_status: r.link_status || 'pending',
+                        link_error: r.link_error || '',
+                        is_no_link: false
+                    });
+                }
+            }
+        }
+        return expanded;
+    }
+
+    function renderLinks() {
+        const tbody = el('linksBody');
+        const searchTerm = (el('linksSearch').value || '').toLowerCase();
+
+        let filtered = allLinks;
+        if (linksFilter !== 'all') {
+            filtered = filtered.filter(r => r.link_status === linksFilter);
+        }
+        if (searchTerm) {
+            filtered = filtered.filter(r =>
+                (r.source_documentnumber || '').toLowerCase().includes(searchTerm) ||
+                (r.target_documentnumber || '').toLowerCase().includes(searchTerm) ||
+                (r.src_dokob || '').toLowerCase().includes(searchTerm) ||
+                (r.src_objky || '').toLowerCase().includes(searchTerm) ||
+                (r.tgt_dokob || '').toLowerCase().includes(searchTerm) ||
+                (r.tgt_objky || '').toLowerCase().includes(searchTerm) ||
+                (r.link_error || '').toLowerCase().includes(searchTerm)
+            );
+        }
+
+        const totalFiltered = filtered.length;
+        const displayed = filtered.slice(0, displayLimit);
+
+        if (!displayed.length) {
+            tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
+        } else {
+            tbody.innerHTML = displayed.map(r => {
+                // Diff coloring: compare source vs target
+                const dokobCls = diffClass(r.src_dokob, r.tgt_dokob);
+                const objkyCls = diffClass(r.src_objky, r.tgt_objky);
+                const tvtCls = diffClass(r.src_tvt, r.tgt_tvt);
+
+                // Status text for pending records
+                let statusHtml = statusBadge(r.link_status);
+                if (r.link_status === 'pending' || r.link_status === 'linking') {
+                    statusHtml = `<span class="badge badge-warning">${t('val.links.not_linked')}</span>`;
+                }
+
+                return `<tr>
+                    <td title="${esc(r.source_documentnumber || '')}">${esc(truncate(r.source_documentnumber || '\u2014', 25))}</td>
+                    <td class="${tvtCls}">${esc(r.src_tvt || '\u2014')}</td>
+                    <td title="${esc(r.target_documentnumber || '')}">${esc(truncate(r.target_documentnumber || '\u2014', 25))}</td>
+                    <td class="${tvtCls}">${esc(r.tgt_tvt || '\u2014')}</td>
+                    <td class="${dokobCls}">${esc(r.src_dokob)}</td>
+                    <td title="${esc(r.src_objky)}">${esc(truncate(r.src_objky, 25))}</td>
+                    <td class="${dokobCls}">${esc(r.tgt_dokob || '\u2014')}</td>
+                    <td class="${objkyCls}" title="${esc(r.tgt_objky)}">${esc(truncate(r.tgt_objky || '\u2014', 25))}</td>
+                    <td>${statusHtml}</td>
+                    <td title="${esc(r.link_error || '')}"><span class="err-pattern">${esc(truncate(r.link_error, 50))}</span></td>
+                </tr>`;
+            }).join('');
+        }
+        el('linksFooter').textContent = t('val.comp.showing_limit', { shown: displayed.length, filtered: totalFiltered, total: allLinks.length });
+    }
+
+    /** Return CSS class for diff highlighting */
+    function diffClass(src, tgt) {
+        if (!tgt || tgt === '\u2014') return 'diff-empty';
+        if (src === tgt) return 'diff-match';
+        return 'diff-changed';
+    }
+
+    // ═══ TAB 3: Fehleranalyse ═════════════════════════════════════
+
     function renderDokob(rows) {
         const tbody = el('dokobTable').querySelector('tbody');
         if (!rows || !rows.length) {
@@ -95,7 +328,7 @@
             const pct = total > 0 ? Math.round(mapped / total * 100) : 0;
             const barColor = pct === 100 ? '#28a745' : pct >= 50 ? '#ffc107' : '#dc3545';
             return `<tr>
-                <td><strong>${esc(r.source_dokob || '—')}</strong></td>
+                <td><strong>${esc(r.source_dokob || '\u2014')}</strong></td>
                 <td>${fmt(total)}</td>
                 <td class="text-success">${fmt(mapped)}</td>
                 <td class="${r.unmapped > 0 ? 'text-danger font-weight-bold' : ''}">${fmt(r.unmapped)}</td>
@@ -113,7 +346,6 @@
         }).join('');
     }
 
-    // ── Link error table ──────────────────────────────────────────
     function renderLinkErrors(errors) {
         const tbody = el('linkErrorBody');
         const countBadge = el('linkErrorCount');
@@ -124,16 +356,12 @@
         }
         const totalErrors = errors.reduce((s, e) => s + (e.cnt || 0), 0);
         countBadge.textContent = totalErrors;
-        tbody.innerHTML = errors.map(e => {
-            const pattern = categorizeError(e.link_error || '');
-            return `<tr>
-                <td><span class="err-pattern" title="${esc(e.link_error)}">${esc(pattern)}</span></td>
-                <td><span class="badge badge-danger">${e.cnt}</span></td>
-            </tr>`;
-        }).join('');
+        tbody.innerHTML = errors.map(e => `<tr>
+            <td><span class="err-pattern" title="${esc(e.link_error)}">${esc(categorizeError(e.link_error))}</span></td>
+            <td><span class="badge badge-danger">${e.cnt}</span></td>
+        </tr>`).join('');
     }
 
-    // ── Upload error table ────────────────────────────────────────
     function renderUploadErrors(errors) {
         const tbody = el('uploadErrorBody');
         const countBadge = el('uploadErrorCount');
@@ -144,104 +372,65 @@
         }
         const totalErrors = errors.reduce((s, e) => s + (e.cnt || 0), 0);
         countBadge.textContent = totalErrors;
-        tbody.innerHTML = errors.map(e => {
-            const pattern = categorizeError(e.execution_error || '');
-            return `<tr>
-                <td><span class="err-pattern" title="${esc(e.execution_error)}">${esc(pattern)}</span></td>
-                <td><span class="badge badge-danger">${e.cnt}</span></td>
-            </tr>`;
-        }).join('');
+        tbody.innerHTML = errors.map(e => `<tr>
+            <td><span class="err-pattern" title="${esc(e.execution_error)}">${esc(categorizeError(e.execution_error))}</span></td>
+            <td><span class="badge badge-danger">${e.cnt}</span></td>
+        </tr>`).join('');
     }
 
-    // ── Source→Target comparison ───────────────────────────────────
-    function renderComparison() {
-        const tbody = el('compBody');
-        const searchTerm = (el('compSearch').value || '').toLowerCase();
-
-        let filtered = allRows;
-        if (activeFilter !== 'all') {
-            filtered = filtered.filter(r => r.link_status === activeFilter);
-        }
-        if (searchTerm) {
-            filtered = filtered.filter(r =>
-                (r.source_documentnumber || '').toLowerCase().includes(searchTerm) ||
-                (r.target_documentnumber || '').toLowerCase().includes(searchTerm) ||
-                (r.source_dokob || '').toLowerCase().includes(searchTerm) ||
-                (r.target_dokob || '').toLowerCase().includes(searchTerm) ||
-                (r.source_objky || '').toLowerCase().includes(searchTerm) ||
-                (r.link_error || '').toLowerCase().includes(searchTerm) ||
-                String(r.id).includes(searchTerm)
-            );
-        }
-
-        if (!filtered.length) {
-            tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
-        } else {
-            tbody.innerHTML = filtered.map(r => {
-                const srcDoc = r.source_documentnumber || '—';
-                const tgtDoc = r.target_documentnumber || '—';
-                const errTruncated = r.link_error ? truncate(r.link_error, 60) : '';
-                return `<tr>
-                    <td>${r.id}</td>
-                    <td title="${esc(srcDoc)}"><span class="text-truncate">${esc(srcDoc)}</span></td>
-                    <td title="${esc(tgtDoc)}"><span class="text-truncate">${esc(tgtDoc)}</span></td>
-                    <td>${esc(r.source_dokob || '—')}</td>
-                    <td title="${esc(r.source_objky || '')}">${esc(truncate(r.source_objky || '—', 20))}</td>
-                    <td>${esc(r.target_dokob || '—')}</td>
-                    <td title="${esc(r.target_objky || '')}">${esc(truncate(r.target_objky || '—', 20))}</td>
-                    <td>${statusBadge(r.execution_status)}</td>
-                    <td>${statusBadge(r.link_status)}</td>
-                    <td title="${esc(r.link_error || '')}"><span class="err-pattern text-truncate">${esc(errTruncated)}</span></td>
-                </tr>`;
-            }).join('');
-        }
-
-        // Footer
-        el('compFooter').textContent = t('val.comp.showing', {
-            shown: filtered.length,
-            total: allRows.length
-        });
-    }
-
-    // ── Filter pills ──────────────────────────────────────────────
-    function initFilterPills() {
-        const pills = document.getElementById('compFilterPills');
-        if (!pills) return;
-        pills.addEventListener('click', function (e) {
+    // ── Filter pills (generic) ────────────────────────────────────
+    function initFilterPills(containerId, callback) {
+        const container = el(containerId);
+        if (!container) return;
+        container.addEventListener('click', function (e) {
             const btn = e.target.closest('[data-filter]');
             if (!btn) return;
-            pills.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            container.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            activeFilter = btn.dataset.filter;
-            renderComparison();
+            callback(btn.dataset.filter);
         });
     }
 
-    function initSearch() {
-        const input = el('compSearch');
+    function initSearch(inputId, callback) {
+        const input = el(inputId);
         if (!input) return;
         let timer;
         input.addEventListener('input', () => {
             clearTimeout(timer);
-            timer = setTimeout(renderComparison, 200);
+            timer = setTimeout(callback, 200);
         });
     }
 
     // ── CSV export ────────────────────────────────────────────────
     window.exportCSV = function () {
-        if (!allRows.length) return;
-        const headers = [
-            'id', 'source_documentnumber', 'source_documenttype',
-            'source_documentversion', 'source_documentpart',
-            'source_dokob', 'source_objky',
-            'target_documentnumber', 'target_documenttype',
-            'target_documentversion', 'target_documentpart',
-            'target_dokob', 'target_objky',
-            'execution_status', 'link_status', 'link_error',
-            'filename', 'file_size_bytes', 'ablage'
-        ];
+        // Export active tab data
+        const activeTab = document.querySelector('#valTabs .nav-link.active');
+        const tabHref = activeTab ? activeTab.getAttribute('href') : '#tabFiles';
+
+        let headers, rows, filename;
+
+        if (tabHref === '#tabFiles') {
+            headers = ['source_documentnumber', 'source_documenttype', 'source_documentversion', 'source_documentpart',
+                       'target_documentnumber', 'target_documenttype', 'target_documentversion', 'target_documentpart',
+                       'filename', 'mime_type', 'file_size_bytes', 'upload_status', 'error_category', 'error_detail'];
+            rows = allFiles;
+            filename = `validation_files_${BATCH_ID}.csv`;
+        } else if (tabHref === '#tabLinks') {
+            headers = ['source_documentnumber', 'src_tvt', 'target_documentnumber', 'tgt_tvt',
+                       'src_dokob', 'src_objky', 'tgt_dokob', 'tgt_objky', 'link_status', 'link_error'];
+            rows = allLinks;
+            filename = `validation_links_${BATCH_ID}.csv`;
+        } else {
+            headers = ['id', 'source_documentnumber', 'target_documentnumber', 'source_dokob',
+                       'source_objky', 'target_dokob', 'target_objky', 'execution_status',
+                       'link_status', 'link_error'];
+            rows = allComparison;
+            filename = `validation_errors_${BATCH_ID}.csv`;
+        }
+
+        if (!rows.length) return;
         const csvRows = [headers.join(';')];
-        allRows.forEach(r => {
+        rows.forEach(r => {
             csvRows.push(headers.map(h => {
                 let v = r[h];
                 if (v == null) v = '';
@@ -252,16 +441,16 @@
         const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `validation_${BATCH_ID}.csv`;
+        a.download = filename;
         a.click();
     };
 
     // ── Error categorization ──────────────────────────────────────
     function categorizeError(err) {
-        if (!err) return '—';
+        if (!err) return '\u2014';
         const e = err.toUpperCase();
-        if (e.includes('500'))           return 'SAP 500 – Server Error';
-        if (e.includes('400'))           return 'SAP 400 – Bad Request';
+        if (e.includes('500'))           return 'SAP 500 \u2013 Server Error';
+        if (e.includes('400'))           return 'SAP 400 \u2013 Bad Request';
         if (e.includes('VORHANDEN') || e.includes('ALREADY') || e.includes('EXIST') || e.includes('DUPLICATE'))
             return 'Duplicate / Already Exists';
         if (e.includes('TIMEOUT'))       return 'Timeout';
@@ -269,8 +458,28 @@
         if (e.includes('401') || e.includes('TOKEN')) return 'Auth / Token Error';
         if (e.includes('LOCKED'))        return 'Document Locked';
         if (e.includes('CONNECTION'))    return 'Connection Error';
-        // Truncate long raw error
         return truncate(err, 80);
+    }
+
+    // ── Status badge ──────────────────────────────────────────────
+    function statusBadge(status) {
+        if (!status) return '<span class="badge badge-secondary">\u2014</span>';
+        const labels = {
+            'linked': 'Verlinkt', 'link_failed': 'Fehler', 'link_exists': 'Vorhanden',
+            'partial_linked': 'Teilweise', 'pending': 'Ausstehend', 'linking': 'L\u00e4uft',
+            'link_skipped': '\u00dcbersprungen',
+            'success': 'Erfolgreich', 'failed': 'Fehlgeschlagen', 'partial': 'Teilweise',
+            'SUCCESS': 'Erfolgreich'
+        };
+        const label = labels[status] || status;
+        let cls;
+        if (['linked', 'link_exists', 'success', 'SUCCESS'].includes(status)) cls = 'badge-success';
+        else if (['link_failed', 'failed'].includes(status) || status.includes('FAIL')) cls = 'badge-danger';
+        else if (['partial', 'partial_linked'].includes(status) || status.includes('SIZE_LIMIT')) cls = 'badge-warning';
+        else if (status === 'pending') cls = 'badge-warning';
+        else if (status === 'linking') cls = 'badge-info';
+        else cls = 'badge-secondary';
+        return `<span class="badge ${cls}">${esc(label)}</span>`;
     }
 
     // ── Utilities ─────────────────────────────────────────────────
@@ -288,19 +497,13 @@
 
     function truncate(s, max) {
         if (!s || s.length <= max) return s || '';
-        return s.substring(0, max) + '…';
+        return s.substring(0, max) + '\u2026';
     }
 
-    function statusBadge(status) {
-        if (!status) return '—';
-        const cls = {
-            linked: 'badge-linked', link_failed: 'badge-link_failed',
-            pending: 'badge-pending', linking: 'badge-linking',
-            link_skipped: 'badge-link_skipped',
-            success: 'badge-success', failed: 'badge-failed',
-            partial: 'badge-partial'
-        }[status] || 'badge-secondary';
-        return `<span class="badge ${cls}">${esc(status)}</span>`;
+    function formatSize(bytes) {
+        if (!bytes) return '\u2014';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
     }
-
 })();

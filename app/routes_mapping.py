@@ -265,22 +265,62 @@ def download_batch_object_mapping(batch_id):
             """
             df_mappings = pd.read_sql(text(mappings_query), con, params={'batch_id': batch_id})
             
-            # Get unique DOKOB/OBJKY values from staging for this batch
-            # NOTE: source_dokob/source_objky are populated during EXECUTE phase from API
-            # So this will only show values for records that have been executed
-            staging_query = """
-                SELECT 
-                    source_dokob,
-                    source_objky,
-                    COUNT(*) as document_count,
-                    SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN execution_status = 'failed' THEN 1 ELSE 0 END) as failed_count
-                FROM dbo.migration_staging
-                WHERE batch_id = :batch_id AND source_dokob IS NOT NULL AND source_objky IS NOT NULL
-                GROUP BY source_dokob, source_objky
-                ORDER BY source_dokob, source_objky
+            # Get ALL unique DOKOB/OBJKY values from staging for this batch.
+            # Includes primary source_dokob/source_objky AND all links from
+            # source_object_links JSON (which can contain multiple links per record).
+            # If the batch has a DOKOB filter, only include matching DOKOB types.
+            
+            # Load batch DOKOB filter
+            bf_row = con.execute(text(
+                "SELECT dokob_filter FROM dbo.migration_batch WHERE batch_id = :batch_id"
+            ), {'batch_id': batch_id}).fetchone()
+            dokob_filter_list = []
+            if bf_row and bf_row[0]:
+                dokob_filter_list = [d.strip() for d in bf_row[0].split(',') if d.strip()]
+            
+            # Build optional DOKOB filter clause
+            dokob_where = ""
+            query_params = {'batch_id': batch_id}
+            if dokob_filter_list:
+                placeholders = ','.join(f':df{i}' for i in range(len(dokob_filter_list)))
+                dokob_where = f" AND dokob IN ({placeholders})"
+                for i, val in enumerate(dokob_filter_list):
+                    query_params[f'df{i}'] = val
+            
+            staging_query = f"""
+                WITH all_links AS (
+                    -- Primary DOKOB/OBJKY from staging columns
+                    SELECT source_dokob AS dokob, source_objky AS objky,
+                           execution_status
+                    FROM dbo.migration_staging
+                    WHERE batch_id = :batch_id
+                      AND source_dokob IS NOT NULL AND source_objky IS NOT NULL
+
+                    UNION
+
+                    -- Additional links from source_object_links JSON
+                    SELECT j.dokob, j.objky,
+                           ms.execution_status
+                    FROM dbo.migration_staging ms
+                    CROSS APPLY OPENJSON(ms.source_object_links)
+                        WITH (dokob VARCHAR(10), objky VARCHAR(100)) j
+                    WHERE ms.batch_id = :batch_id
+                      AND ms.source_object_links IS NOT NULL
+                      AND LEN(ms.source_object_links) > 2
+                      AND j.dokob IS NOT NULL AND j.objky IS NOT NULL
+                )
+                SELECT
+                    dokob  AS source_dokob,
+                    objky  AS source_objky,
+                    COUNT(*) AS document_count,
+                    SUM(CASE WHEN execution_status = 'success' THEN 1 ELSE 0 END) AS success_count,
+                    SUM(CASE WHEN execution_status = 'failed'  THEN 1 ELSE 0 END) AS failed_count
+                FROM all_links
+                WHERE 1=1 {dokob_where}
+                GROUP BY dokob, objky
+                ORDER BY dokob, objky
             """
-            df_staging = pd.read_sql(text(staging_query), con, params={'batch_id': batch_id})
+            df_staging = pd.read_sql(text(staging_query), con, params=query_params)
             
             # Count total and executed records for info sheet
             count_query = """
@@ -298,7 +338,7 @@ def download_batch_object_mapping(batch_id):
             
             # Get batch info
             batch_query = """
-                SELECT wave, description FROM dbo.migration_batch WHERE batch_id = :batch_id
+                SELECT wave, description, dokob_filter FROM dbo.migration_batch WHERE batch_id = :batch_id
             """
             batch_row = con.execute(text(batch_query), {'batch_id': batch_id}).fetchone()
             batch_wave = batch_row[0] if batch_row else ''

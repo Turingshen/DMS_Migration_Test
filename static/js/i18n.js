@@ -65,14 +65,12 @@
         'wf.step2b':                    { de: 'Anreichern & Vorschau', en: 'Enrich & Preview' },
         'wf.step3':                     { de: 'Objekt Link', en: 'Object Link' },
         'wf.step3b':                    { de: 'Objekt-Zuordnung', en: 'Object Mapping' },
-        'wf.step4':                     { de: 'Auswertung', en: 'Results' },
+        'wf.step4':                     { de: 'Validierung', en: 'Validation' },
         'wf.step4b':                    { de: 'Ausführen', en: 'Execute' },
         'wf.step1_title':              { de: 'Neuen Batch erstellen', en: 'Create new batch' },
         'wf.step2_title':              { de: 'Vorschau und Vorbereitung', en: 'Preview and preparation' },
         'wf.step3_title':              { de: 'Objekt Link & Verlinkung', en: 'Object link & linking' },
-        'wf.step4_title':              { de: 'Auswertung & Details', en: 'Results & details' },
-        'wf.step5':                    { de: 'Validierung', en: 'Validation' },
-        'wf.step5_title':              { de: 'Validierung & Prüfung', en: 'Validation & verification' },
+        'wf.step4_title':              { de: 'Validierung & Prüfung', en: 'Validation & verification' },
 
         // ══════════════════════════════════════════════════════════════
         // DASHBOARD (index.html)
@@ -168,7 +166,7 @@
 
         // Table action tooltips
         'batch_action.preview':         { de: 'Vorschau', en: 'Preview' },
-        'batch_action.results':         { de: 'Auswertung', en: 'Results' },
+        'batch_action.results':         { de: 'Validierung', en: 'Validation' },
         'batch_action.edit':            { de: 'Bearbeiten', en: 'Edit' },
         'batch_action.delete':          { de: 'Löschen', en: 'Delete' },
 
@@ -1061,7 +1059,7 @@
         'val.subtitle':                { de: 'Ergebnisübersicht nach Verlinkung', en: 'Results overview after linking' },
         'val.back_to_batch':           { de: 'Zurück zum Batch', en: 'Back to Batch' },
         'val.refresh':                 { de: 'Aktualisieren', en: 'Refresh' },
-        'val.export_csv':              { de: 'CSV Export', en: 'CSV Export' },
+        'val.export_csv':              { de: 'Excel Export', en: 'Excel Export' },
         'val.loading':                 { de: 'Lade Validierungsdaten...', en: 'Loading validation data...' },
         'val.no_data':                 { de: 'Keine Daten vorhanden', en: 'No data available' },
         'val.no_errors':               { de: 'Keine Fehler — alles in Ordnung!', en: 'No errors — all good!' },
@@ -1071,6 +1069,7 @@
         'val.kpi.linked':              { de: 'Verlinkt', en: 'Linked' },
         'val.kpi.link_failed':         { de: 'Link-Fehler', en: 'Link Errors' },
         'val.kpi.pending':             { de: 'Ausstehend', en: 'Pending' },
+        'val.kpi.files':               { de: 'Dateien', en: 'Files' },
         'val.kpi.skipped':             { de: 'Übersprungen', en: 'Skipped' },
         'val.kpi.coverage':            { de: 'Abdeckung', en: 'Coverage' },
 
@@ -1110,6 +1109,39 @@
         'val.comp.link':               { de: 'Link', en: 'Link' },
         'val.comp.error':              { de: 'Fehler', en: 'Error' },
         'val.comp.showing':            { de: 'Zeige {{shown}} von {{total}} Datensätzen', en: 'Showing {{shown}} of {{total}} records' },
+        'val.comp.showing_limit':      { de: 'Zeige {{shown}} von {{filtered}} gefilterten ({{total}} gesamt) — Export enthält alle', en: 'Showing {{shown}} of {{filtered}} filtered ({{total}} total) — Export includes all' },
+        'val.display_limit':           { de: 'Anzeige', en: 'Display' },
+
+        // Tabs
+        'val.tab.files':               { de: 'Dateien', en: 'Files' },
+        'val.tab.links':               { de: 'Objektlinks', en: 'Object Links' },
+        'val.tab.errors':              { de: 'Fehleranalyse', en: 'Error Analysis' },
+
+        // Files tab
+        'val.files.source_doc':        { de: 'Quell-Dok', en: 'Source Doc' },
+        'val.files.src_tvt':           { de: 'Quell-Typ/Ver./Teil', en: 'Source Type/Ver./Part' },
+        'val.files.target_doc':        { de: 'Ziel-Dok', en: 'Target Doc' },
+        'val.files.tgt_tvt':           { de: 'Ziel-Typ/Ver./Teil', en: 'Target Type/Ver./Part' },
+        'val.files.filename':          { de: 'Dateiname', en: 'Filename' },
+        'val.files.type':              { de: 'Typ', en: 'Type' },
+        'val.files.size':              { de: 'Größe', en: 'Size' },
+        'val.files.status':            { de: 'Status', en: 'Status' },
+        'val.files.error':             { de: 'Fehler', en: 'Error' },
+        'val.filter.success':          { de: 'Erfolgreich', en: 'Success' },
+        'val.filter.error':            { de: 'Fehler', en: 'Errors' },
+
+        // Object links tab
+        'val.links.source_doc':        { de: 'Quell-Dok', en: 'Source Doc' },
+        'val.links.src_tvt':           { de: 'Quell-Typ/Ver./Teil', en: 'Source Type/Ver./Part' },
+        'val.links.target_doc':        { de: 'Ziel-Dok', en: 'Target Doc' },
+        'val.links.tgt_tvt':           { de: 'Ziel-Typ/Ver./Teil', en: 'Target Type/Ver./Part' },
+        'val.links.src_dokob':         { de: 'Quell-DOKOB', en: 'Source DOKOB' },
+        'val.links.src_objky':         { de: 'Quell-OBJKY', en: 'Source OBJKY' },
+        'val.links.tgt_dokob':         { de: 'Ziel-DOKOB', en: 'Target DOKOB' },
+        'val.links.tgt_objky':         { de: 'Ziel-OBJKY', en: 'Target OBJKY' },
+        'val.links.status':            { de: 'Link-Status', en: 'Link Status' },
+        'val.links.error':             { de: 'Fehler', en: 'Error' },
+        'val.links.not_linked':        { de: 'Linking nicht durchgeführt', en: 'Linking not performed' },
 
         // ══════════════════════════════════════════════════════════════
         // WAVE OVERVIEW (wave_overview.html)

@@ -1572,13 +1572,17 @@ function retryFailed() {
         document.getElementById('progressETA').textContent = t('mig.eta_calc');
         startProgressPolling();
         
-        // Step 3: Execute the pending (reset) records
-        return fetch('/execute', {
+        // Step 3: Execute ONLY the reset records via execute_selected
+        return fetch('/execute_selected', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ batch_id: batchId, percent_encode_slug: document.getElementById('percentEncodeCheckbox').checked })
+            body: JSON.stringify({
+                batch_id: batchId,
+                record_ids: data.reset_ids,
+                percent_encode_slug: document.getElementById('percentEncodeCheckbox').checked
+            })
         });
     })
     .then(response => {

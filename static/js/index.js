@@ -224,7 +224,7 @@ function getActionButtons(batch) {
     buttons.push(`<a href="/preview?batch_id=${batch.batch_id}" class="btn btn-sm btn-primary" title="${t('batch_action.preview')}"><i class="fas fa-eye"></i> ${t('batch_action.preview')}</a>`);
 
     if (batch.status === 'completed' || batch.status === 'completed_with_errors' || batch.executed_records > 0) {
-        buttons.push(`<a href="/details?batch_id=${batch.batch_id}" class="btn btn-sm btn-info" title="${t('batch_action.results')}"><i class="fas fa-chart-bar"></i> ${t('batch_action.results')}</a>`);
+        buttons.push(`<a href="/batch/${batch.batch_id}/validation" class="btn btn-sm btn-info" title="${t('batch_action.results')}"><i class="fas fa-check-double"></i> ${t('batch_action.results')}</a>`);
     }
 
     buttons.push(`<button onclick="editBatch('${batch.batch_id}')" class="btn btn-sm btn-outline-primary" title="${t('batch_action.edit')}"><i class="fas fa-edit"></i></button>`);

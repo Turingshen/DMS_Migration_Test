@@ -41,7 +41,7 @@
                 { num: '2',  label: 'Vorschau & Daten anreichern',page: 'preview',     desc: 'Batch prüfen, Daten anreichern (LOIO, Dateigröße, Regeln anwenden), Datensätze überspringen' },
                 { num: '3a', label: 'Migration ausführen',           page: 'preview',     desc: 'Dokumente ins Zielsystem hochladen — Container erstellen und Dateien übertragen' },
                 { num: '3b', label: 'Objekt-Zuordnung & Verlinkung', page: 'mapping',     desc: 'Quell-Objekte auf Ziel-Objekte mappen, dann Verlinkung im Zielsystem erstellen' },
-                { num: '4',  label: 'Auswertung',                    page: 'details',     desc: 'Ergebnisse analysieren, Fehler untersuchen, fehlgeschlagene Datensätze erneut versuchen' },
+                { num: '4',  label: 'Validierung',                    page: 'validation',  desc: 'Dateien, Objektlinks und Fehler analysieren, Quell-/Ziel-Vergleich prüfen' },
             ]
         },
 
@@ -240,9 +240,9 @@
         },
 
         details: {
-            title: 'Schritt 4 — Auswertung & Ergebnisse',
-            icon: 'fas fa-chart-bar',
-            intro: 'Analysieren Sie die Migrationsergebnisse, untersuchen Sie Fehler und starten Sie fehlgeschlagene Datensätze erneut.',
+            title: 'Schritt 4 — Validierung & Prüfung',
+            icon: 'fas fa-check-double',
+            intro: 'Prüfen Sie Dateien, Objektlinks und Fehler. Vergleichen Sie Quell- und Zieldaten mit farblicher Hervorhebung.',
             sections: [
                 {
                     title: 'Zusammenfassung',

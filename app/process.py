@@ -295,6 +295,29 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
     server_session.headers.update(header_dict)
 
 
+def is_csrf_error(resp):
+    """Check if an HTTP response indicates a CSRF token validation failure."""
+    if resp is None:
+        return False
+    if resp.status_code != 403:
+        return False
+    body = ''
+    try:
+        body = (resp.text or '').lower()
+    except Exception:
+        pass
+    return 'csrf' in body
+
+
+def force_csrf_renewal(session_snapshot, sap_system):
+    """Invalidate the cached CSRF token for a system so the next
+    prepare_session_headers call fetches a fresh one."""
+    systems_ctx = session_snapshot.get('systems', {})
+    sys_ctx = systems_ctx.get(sap_system, {})
+    sys_ctx.pop('csrf_token_time', None)
+    sys_ctx.pop('x_csrf_token', None)
+
+
 def _extract_error_fields(resp, max_raw_len=500):
     """Extract structured error information from SAP/BTP OData responses."""
     info = {}
@@ -491,6 +514,16 @@ def _classify_error(err_info):
     
     # === BAD REQUEST ===
     if code == 400:
+        # Collect errordetails messages for deeper classification
+        _ed_msgs = ''
+        for _ed in (err_info.get('errordetails') or []):
+            if isinstance(_ed, dict):
+                _ed_msgs += ' ' + (_ed.get('message', '') or '').lower()
+        
+        # "Multiple Documents not allowed" → Dokumentart fehlt im Ziel, DOKTYP-Mapping nötig
+        if 'multiple documents not allowed' in detail or 'multiple documents not allowed' in _ed_msgs:
+            return 'MAPPING_DOCTYPE_MISSING'
+        
         # Fehlende Mappings erkennen (Dokumentart, Werk, etc. nicht vorhanden)
         if 'nicht vorhanden' in detail or 'not found' in detail or 'does not exist' in detail:
             if 'dokumentart' in detail or 'document type' in detail:
@@ -558,6 +591,13 @@ def get_error_description(category):
         'TARGET_LOCKED': ('Objekt gesperrt', 'Sperre lösen'),
         'TARGET_NOT_FOUND': ('Zielobjekt nicht gefunden', 'Mapping prüfen'),
         
+        # Mapping Issues
+        'MAPPING_MISSING': ('Stammdaten fehlen im Ziel', 'Mapping-Regel erstellen'),
+        'MAPPING_DOCTYPE_MISSING': ('Dokumentart fehlt im Zielsystem', 'DOKTYP-Mapping unter Einstellungen → Regeln anlegen'),
+        'MAPPING_PLANT_MISSING': ('Werk fehlt im Zielsystem', 'Werk-Mapping prüfen'),
+        'MAPPING_MATERIAL_MISSING': ('Material fehlt im Ziel', 'Material-Mapping prüfen'),
+        'MAPPING_EQUIPMENT_MISSING': ('Equipment fehlt im Ziel', 'Equipment-Mapping prüfen'),
+        
         # Upload Issues
         'UPLOAD_SIZE_EXCEEDED': ('Datei zu groß', 'Max. 99MB pro Datei'),
         'UPLOAD_TIMEOUT': ('Upload-Timeout', 'Kleinere Datei verwenden'),
@@ -617,7 +657,7 @@ def get_error_details(category):
         
         # Mapping Issues (Objekt im Zielsystem nicht vorhanden)
         'MAPPING_MISSING': ('Stammdaten fehlen im Ziel', 'Mapping-Regel erstellen'),
-        'MAPPING_DOCTYPE_MISSING': ('Dokumentart fehlt im Ziel', 'Dokumenttyp-Mapping erstellen'),
+        'MAPPING_DOCTYPE_MISSING': ('Dokumentart fehlt im Zielsystem', 'DOKTYP-Mapping unter Einstellungen → Regeln anlegen'),
         'MAPPING_PLANT_MISSING': ('Werk fehlt im Zielsystem', 'Werk-Mapping prüfen'),
         'MAPPING_MATERIAL_MISSING': ('Material fehlt im Ziel', 'Material-Mapping prüfen'),
         'MAPPING_EQUIPMENT_MISSING': ('Equipment fehlt im Ziel', 'Equipment-Mapping prüfen'),

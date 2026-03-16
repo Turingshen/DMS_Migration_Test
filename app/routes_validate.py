@@ -42,7 +42,10 @@ def validation_data(batch_id):
             kpis = dict(kpi_row._mapping) if kpi_row else {}
             total = kpis.get('total', 0) or 0
             linked = kpis.get('linked', 0) or 0
-            kpis['coverage_pct'] = round(linked / total * 100, 1) if total > 0 else 0
+            link_skipped = kpis.get('link_skipped', 0) or 0
+            # Coverage excludes link_skipped (not applicable, not an error)
+            applicable = total - link_skipped
+            kpis['coverage_pct'] = round(linked / applicable * 100, 1) if applicable > 0 else 0
 
             # ── 2. Link-status breakdown ─────────────────────────
             link_stats = con.execute(text("""
@@ -112,9 +115,9 @@ def validation_data(batch_id):
             """), {'bid': batch_id}).fetchall()
             upload_err_data = [dict(r._mapping) for r in upload_errors]
 
-            # ── 7. Source → Target comparison table (sample) ─────
+            # ── 7. Source → Target comparison table ──────────────
             comparison_rows = con.execute(text("""
-                SELECT TOP 200
+                SELECT
                     id,
                     source_documentnumber, source_documenttype,
                     source_documentversion, source_documentpart,
@@ -166,6 +169,51 @@ def validation_data(batch_id):
             if batch_info.get('created_at'):
                 batch_info['created_at'] = str(batch_info['created_at'])
 
+            # ── 10. File details (per-file upload results) ────────
+            # Use ROW_NUMBER to de-duplicate: keep only the latest record per
+            # staging_id + file_index (prevents inflated counts from retries).
+            file_rows = con.execute(text("""
+                WITH ranked AS (
+                    SELECT
+                        fd.id, fd.staging_id, fd.file_index,
+                        fd.filename, fd.mime_type,
+                        fd.file_size_bytes, fd.file_size_mb,
+                        fd.upload_status, fd.http_status_code,
+                        fd.error_category, fd.error_detail,
+                        ms.source_documentnumber, ms.source_documenttype,
+                        ms.source_documentversion, ms.source_documentpart,
+                        CASE WHEN ms.container_created = 1 THEN ms.target_documentnumber ELSE NULL END AS target_documentnumber,
+                        ms.target_documenttype, ms.target_documentversion, ms.target_documentpart,
+                        ms.execution_status, ms.container_created,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY fd.staging_id, fd.file_index
+                            ORDER BY fd.id DESC
+                        ) AS rn
+                    FROM dbo.migration_file_details fd
+                    JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
+                    WHERE fd.batch_id = :bid AND ms.skip_migration = 0
+                )
+                SELECT id, staging_id, file_index, filename, mime_type,
+                       file_size_bytes, file_size_mb, upload_status, http_status_code,
+                       error_category, error_detail,
+                       source_documentnumber, source_documenttype,
+                       source_documentversion, source_documentpart,
+                       target_documentnumber, target_documenttype,
+                       target_documentversion, target_documentpart,
+                       execution_status, container_created
+                FROM ranked WHERE rn = 1
+                ORDER BY staging_id, file_index
+            """), {'bid': batch_id}).fetchall()
+            file_details = [dict(r._mapping) for r in file_rows]
+
+            # ── 11. Object mappings (source→target per link) ─────
+            obj_map_rows = con.execute(text("""
+                SELECT source_dokob, source_objky, target_dokob, target_objky
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :bid AND active = 1
+            """), {'bid': batch_id}).fetchall()
+            obj_mappings = [dict(r._mapping) for r in obj_map_rows]
+
         return jsonify({
             'success': True,
             'kpis': kpis,
@@ -177,6 +225,8 @@ def validation_data(batch_id):
             'comparison': comparison,
             'link_counts': link_count_data,
             'batch': batch_info,
+            'file_details': file_details,
+            'obj_mappings': obj_mappings,
         })
 
     except Exception as e:

@@ -1099,6 +1099,15 @@ def refresh_batch_data_stream(batch_id):
             
             import json as _json
             
+            # Load batch DOKOB filter (if any)
+            batch_dokob_filter = None
+            with misc_engine.begin() as con:
+                bf_row = con.execute(text(
+                    "SELECT dokob_filter FROM dbo.migration_batch WHERE batch_id = :bid"
+                ), {'bid': batch_id}).fetchone()
+            if bf_row and bf_row[0]:
+                batch_dokob_filter = set(d.strip().upper() for d in bf_row[0].split(',') if d.strip())
+            
             # Load staging records with their object links
             with misc_engine.begin() as con:
                 link_rows = con.execute(text("""
@@ -1124,12 +1133,19 @@ def refresh_batch_data_stream(batch_id):
                 if not links and primary_dokob and primary_objky:
                     links = [{'dokob': primary_dokob, 'objky': primary_objky}]
                 
-                src_count = len(links)
+                # Apply DOKOB filter
+                if batch_dokob_filter and links:
+                    kept = [lk for lk in links if str(lk.get('dokob', '')).strip().upper() in batch_dokob_filter]
+                    excluded_count = len(links) - len(kept)
+                    src_count = len(kept)
+                else:
+                    excluded_count = 0
+                    src_count = len(links)
                 
                 link_updates.append({
                     'staging_id': rec_id,
                     'source_link_count': src_count,
-                    'excluded_link_count': 0,
+                    'excluded_link_count': excluded_count,
                 })
             
             # Bulk update via temp table

@@ -944,7 +944,8 @@ def create_dms_migration_batch_stream():
                     'status': 'prepared',
                     'wave': wave,
                     'description': description[:40] if description else None,
-                    'notes': f"Werke: {werke_str}\n{notes}" if werke_str else notes if notes else None
+                    'notes': f"Werke: {werke_str}\n{notes}" if werke_str else notes if notes else None,
+                    'dokob_filter': dokob_filter if dokob_filter else None
                 }])
                 
                 batch_record.to_sql(

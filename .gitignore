@@ -26,6 +26,10 @@ userdata/
 /_*.py
 /_*.xml
 /_*.html
+/debug_*.py
+/delete_*.py
+/parse_*.py
+api_metadata.xml
 
 # Response/debug artifacts
 *.html

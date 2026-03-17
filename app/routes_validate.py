@@ -4,6 +4,7 @@ from flask import render_template, request, jsonify
 from sqlalchemy import text
 
 from app.blueprint import migrate_bp, misc_engine, get_template_context
+from app_config import DilEngine
 
 
 @migrate_bp.route('/batch/<batch_id>/validation')
@@ -206,7 +207,69 @@ def validation_data(batch_id):
             """), {'bid': batch_id}).fetchall()
             file_details = [dict(r._mapping) for r in file_rows]
 
-            # ── 11. Object mappings (source→target per link) ─────
+            # ── 11a. Enrich file_details with DAPPL data from DIL ─
+            # Get unique document keys
+            doc_keys = set()
+            for fd in file_details:
+                key = (
+                    fd.get('source_documentnumber'),
+                    fd.get('source_documenttype'),
+                    fd.get('source_documentversion'),
+                    fd.get('source_documentpart')
+                )
+                if key[0]:  # has document number
+                    doc_keys.add(key)
+
+            if doc_keys:
+                # Query DIL for DAPPL data
+                doknr_list = list(set(k[0] for k in doc_keys if k[0]))
+                dappl_map = {}  # "DOKNR|DOKAR|DOKVR|DOKTL" -> {header_dappl, file_dappl, file_ext}
+
+                try:
+                    dil_db = DilEngine.load()
+                    CHUNK_SIZE = 500
+                    with dil_db.engine.connect() as dil_con:
+                        for i in range(0, len(doknr_list), CHUNK_SIZE):
+                            chunk = doknr_list[i:i + CHUNK_SIZE]
+                            placeholders = ','.join([f"'{d}'" for d in chunk])
+
+                            rows = dil_con.execute(text(f"""
+                                SELECT
+                                    d.DOKNR, d.DOKAR, d.DOKVR, d.DOKTL,
+                                    COALESCE(NULLIF(TRIM(d.DAPPL), ''), '') as HEADER_DAPPL,
+                                    COALESCE(NULLIF(TRIM(f.DAPPL), ''), '') as FILE_DAPPL,
+                                    COALESCE(f.FILENAME, '') as FILENAME
+                                FROM DIL.DRAW d
+                                LEFT JOIN DIL.DMS_DOC_FILES f 
+                                    ON f.DOKNR = d.DOKNR 
+                                    AND f.DOKAR = d.DOKAR 
+                                    AND f.DOKVR = d.DOKVR 
+                                    AND f.DOKTL = d.DOKTL
+                                    AND f.FILE_IDX = 1
+                                WHERE d.DOKNR IN ({placeholders})
+                            """)).fetchall()
+
+                            for r in rows:
+                                key = f"{r[0]}|{r[1]}|{r[2]}|{r[3]}"
+                                dappl_map[key] = {
+                                    'header_dappl': r[4] or '',
+                                    'file_dappl': r[5] or '',
+                                    'original_filename': r[6] or ''
+                                }
+                except Exception as dil_err:
+                    # Don't fail validation if DIL query fails
+                    import traceback
+                    traceback.print_exc()
+
+                # Merge DAPPL data into file_details
+                for fd in file_details:
+                    key = f"{fd.get('source_documentnumber')}|{fd.get('source_documenttype')}|{fd.get('source_documentversion')}|{fd.get('source_documentpart')}"
+                    dappl_info = dappl_map.get(key, {})
+                    fd['header_dappl'] = dappl_info.get('header_dappl', '')
+                    fd['file_dappl'] = dappl_info.get('file_dappl', '')
+                    fd['original_filename'] = dappl_info.get('original_filename', '')
+
+            # ── 12. Object mappings (source→target per link) ─────
             obj_map_rows = con.execute(text("""
                 SELECT source_dokob, source_objky, target_dokob, target_objky
                 FROM dbo.migration_object_mapping
@@ -297,4 +360,193 @@ def reset_link_errors(batch_id):
         return jsonify({'success': True, 'reset_count': reset_count})
 
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/validation/dappl-analysis')
+def dappl_analysis(batch_id):
+    """Analyze failed/problematic records by DAPPL and file extension.
+
+    Returns statistics grouped by DAPPL + Extension combination, showing:
+    - Total records per combination
+    - Upload failures
+    - Link failures
+    - Success rate
+
+    This helps identify which file types cause migration issues.
+    """
+    try:
+        # Step 1: Get all records from this batch with their document keys
+        with misc_engine.connect() as con:
+            staging_rows = con.execute(text("""
+                SELECT
+                    id,
+                    source_documentnumber,
+                    source_documenttype,
+                    source_documentversion,
+                    source_documentpart,
+                    execution_status,
+                    link_status,
+                    filename
+                FROM dbo.migration_staging
+                WHERE batch_id = :bid AND skip_migration = 0
+            """), {'bid': batch_id}).fetchall()
+
+        if not staging_rows:
+            return jsonify({
+                'success': True,
+                'analysis': [],
+                'summary': {'total': 0, 'combinations': 0}
+            })
+
+        # Build lookup: doknr -> staging record info
+        doc_keys = {}  # "DOKNR|DOKAR|DOKVR|DOKTL" -> staging_info
+        for row in staging_rows:
+            key = f"{row.source_documentnumber}|{row.source_documenttype}|{row.source_documentversion}|{row.source_documentpart}"
+            doc_keys[key] = {
+                'id': row.id,
+                'execution_status': row.execution_status,
+                'link_status': row.link_status,
+                'filename': row.filename
+            }
+
+        # Step 2: Query DIL.DRAW for DAPPL values (batch query)
+        doknr_list = list(set(r.source_documentnumber for r in staging_rows if r.source_documentnumber))
+
+        if not doknr_list:
+            return jsonify({
+                'success': True,
+                'analysis': [],
+                'summary': {'total': 0, 'combinations': 0}
+            })
+
+        # Query DIL in chunks to avoid "too many conditions" error
+        CHUNK_SIZE = 500
+        dappl_map = {}  # "DOKNR|DOKAR|DOKVR|DOKTL" -> {'header_dappl': ..., 'file_dappl': ..., 'file_ext': ...}
+
+        dil_db = DilEngine.load()
+        with dil_db.engine.connect() as dil_con:
+            for i in range(0, len(doknr_list), CHUNK_SIZE):
+                chunk = doknr_list[i:i + CHUNK_SIZE]
+                placeholders = ','.join([f"'{d}'" for d in chunk])
+
+                # Query DRAW for header DAPPL and DMS_DOC_FILES for actual file DAPPL
+                rows = dil_con.execute(text(f"""
+                    SELECT
+                        d.DOKNR, d.DOKAR, d.DOKVR, d.DOKTL,
+                        COALESCE(NULLIF(TRIM(d.DAPPL), ''), '(leer)') as HEADER_DAPPL,
+                        COALESCE(NULLIF(TRIM(f.DAPPL), ''), '(leer)') as FILE_DAPPL,
+                        CASE
+                            WHEN f.FILENAME IS NULL OR TRIM(f.FILENAME) = '' THEN '(keine)'
+                            WHEN LOCATE('.', f.FILENAME) > 0 THEN IFNULL(UPPER(SUBSTR_REGEXPR('\\.([^.]+)$' IN f.FILENAME GROUP 1)), '(keine)')
+                            ELSE '(keine)'
+                        END as FILE_EXT
+                    FROM DIL.DRAW d
+                    LEFT JOIN DIL.DMS_DOC_FILES f 
+                        ON f.DOKNR = d.DOKNR 
+                        AND f.DOKAR = d.DOKAR 
+                        AND f.DOKVR = d.DOKVR 
+                        AND f.DOKTL = d.DOKTL
+                        AND f.FILE_IDX = 1
+                    WHERE d.DOKNR IN ({placeholders})
+                """)).fetchall()
+
+                for r in rows:
+                    key = f"{r[0]}|{r[1]}|{r[2]}|{r[3]}"
+                    dappl_map[key] = {
+                        'header_dappl': r[4] or '(leer)',
+                        'file_dappl': r[5] or '(leer)',
+                        'file_ext': r[6] or '(keine)'
+                    }
+
+        # Step 3: Combine staging info with DAPPL data and aggregate
+        from collections import defaultdict
+        analysis = defaultdict(lambda: {
+            'total': 0,
+            'upload_success': 0,
+            'upload_failed': 0,
+            'upload_pending': 0,
+            'link_success': 0,
+            'link_failed': 0,
+            'link_pending': 0,
+            'link_skipped': 0,
+            'sample_docs': []
+        })
+
+        for key, staging_info in doc_keys.items():
+            dappl_info = dappl_map.get(key, {'header_dappl': '(unbekannt)', 'file_dappl': '(unbekannt)', 'file_ext': '(unbekannt)'})
+            combo_key = f"{dappl_info['header_dappl']}|{dappl_info['file_dappl']}|{dappl_info['file_ext']}"
+
+            stats = analysis[combo_key]
+            stats['total'] += 1
+
+            # Upload status
+            exec_status = staging_info['execution_status'] or 'pending'
+            if exec_status == 'success':
+                stats['upload_success'] += 1
+            elif exec_status in ('failed', 'partial'):
+                stats['upload_failed'] += 1
+            else:
+                stats['upload_pending'] += 1
+
+            # Link status
+            link_status = staging_info['link_status'] or 'pending'
+            if link_status == 'linked':
+                stats['link_success'] += 1
+            elif link_status == 'link_failed':
+                stats['link_failed'] += 1
+            elif link_status == 'link_skipped':
+                stats['link_skipped'] += 1
+            else:
+                stats['link_pending'] += 1
+
+            # Sample documents (max 5 per combination for debugging)
+            if len(stats['sample_docs']) < 5:
+                doknr = key.split('|')[0]
+                stats['sample_docs'].append({
+                    'doknr': doknr,
+                    'filename': staging_info['filename'],
+                    'exec_status': exec_status,
+                    'link_status': link_status
+                })
+
+        # Step 4: Convert to list and sort by problems (failures first)
+        result = []
+        for combo_key, stats in analysis.items():
+            parts = combo_key.split('|')
+            header_dappl = parts[0]
+            file_dappl = parts[1] if len(parts) > 1 else '(unbekannt)'
+            file_ext = parts[2] if len(parts) > 2 else '(unbekannt)'
+            mismatch = header_dappl != file_dappl and header_dappl != '(leer)' and file_dappl != '(leer)'
+            problems = stats['upload_failed'] + stats['link_failed']
+            success_rate = round(
+                (stats['upload_success'] + stats['link_success']) /
+                max(stats['total'] * 2, 1) * 100, 1
+            )
+            result.append({
+                'header_dappl': header_dappl,
+                'file_dappl': file_dappl,
+                'file_ext': file_ext,
+                'mismatch': mismatch,
+                **stats,
+                'problems': problems,
+                'success_rate': success_rate
+            })
+
+        # Sort: mismatches first, then most problems, then by total count
+        result.sort(key=lambda x: (-x['mismatch'], -x['problems'], -x['total']))
+
+        return jsonify({
+            'success': True,
+            'analysis': result,
+            'summary': {
+                'total': sum(s['total'] for s in result),
+                'combinations': len(result),
+                'total_problems': sum(s['problems'] for s in result)
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500

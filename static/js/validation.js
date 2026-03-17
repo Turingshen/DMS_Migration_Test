@@ -151,7 +151,7 @@
         const displayed = filtered.slice(0, displayLimit);
 
         if (!displayed.length) {
-            tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="11" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
         } else {
             tbody.innerHTML = displayed.map(f => {
                 const statusCls = f.upload_status === 'SUCCESS' ? 'diff-match' : 'diff-changed';
@@ -159,11 +159,19 @@
                 const tgtTvt = f.container_created
                     ? [f.target_documenttype, f.target_documentversion, f.target_documentpart].filter(Boolean).join('/')
                     : '';
+                // DAPPL mismatch highlighting
+                const headerDappl = f.header_dappl || '';
+                const fileDappl = f.file_dappl || '';
+                const dapplMismatch = headerDappl && fileDappl && headerDappl !== fileDappl;
+                const dapplCls = dapplMismatch ? 'class="table-info"' : '';
+                const dapplIcon = dapplMismatch ? ' <i class="fas fa-exchange-alt text-info" title="DAPPL mismatch"></i>' : '';
                 return `<tr>
                     <td title="${esc(f.source_documentnumber || '')}">${esc(truncate(f.source_documentnumber || '\u2014', 25))}</td>
                     <td>${esc(srcTvt || '\u2014')}</td>
                     <td title="${esc(f.target_documentnumber || '')}">${esc(truncate(f.target_documentnumber || '\u2014', 25))}</td>
                     <td>${esc(tgtTvt || '\u2014')}</td>
+                    <td ${dapplCls}><strong>${esc(headerDappl || '\u2014')}</strong>${dapplIcon}</td>
+                    <td ${dapplCls}><strong>${esc(fileDappl || '\u2014')}</strong></td>
                     <td title="${esc(f.filename || '')}">${esc(truncate(f.filename || '\u2014', 35))}</td>
                     <td>${esc(f.mime_type || '\u2014')}</td>
                     <td>${formatSize(f.file_size_bytes)}</td>
@@ -505,5 +513,96 @@
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    // ═══ DAPPL/Extension Analysis ═════════════════════════════════
+    window.loadDapplAnalysis = async function () {
+        const loadingEl = el('dapplLoading');
+        const contentEl = el('dapplContent');
+        const emptyEl = el('dapplEmpty');
+        const refreshBtn = el('dapplRefreshBtn');
+
+        // Show loading state
+        hide('dapplContent');
+        hide('dapplEmpty');
+        show('dapplLoading');
+        if (refreshBtn) refreshBtn.disabled = true;
+
+        try {
+            const res = await fetch(`/batch/${BATCH_ID}/validation/dappl-analysis`);
+            const data = await res.json();
+
+            if (!data.success) throw new Error(data.error || 'Unknown error');
+
+            renderDapplAnalysis(data.analysis, data.summary);
+            hide('dapplLoading');
+            show('dapplContent');
+        } catch (err) {
+            hide('dapplLoading');
+            el('dapplContent').innerHTML = `
+                <div class="alert alert-danger m-3">
+                    <i class="fas fa-exclamation-triangle"></i> ${esc(err.message)}
+                </div>`;
+            show('dapplContent');
+        } finally {
+            if (refreshBtn) refreshBtn.disabled = false;
+        }
+    };
+
+    function renderDapplAnalysis(analysis, summary) {
+        // Update badge
+        setText('dapplComboCount', summary.combinations || 0);
+
+        // Count mismatches
+        const mismatchCount = analysis.filter(r => r.mismatch).length;
+
+        // Summary alert
+        const summaryEl = el('dapplSummary');
+        const problemCount = summary.total_problems || 0;
+        const alertClass = (problemCount > 0 || mismatchCount > 0) ? 'alert-warning' : 'alert-success';
+        summaryEl.className = `alert ${alertClass} m-3 py-2`;
+        summaryEl.innerHTML = `
+            <i class="fas fa-${(problemCount > 0 || mismatchCount > 0) ? 'exclamation-triangle' : 'check-circle'}"></i>
+            <strong>${fmt(summary.combinations)}</strong> DAPPL/Endung-Kombinationen gefunden.
+            <strong>${fmt(summary.total)}</strong> Datensätze analysiert.
+            ${mismatchCount > 0 ? `<span class="text-info ml-2"><i class="fas fa-exchange-alt"></i> <strong>${fmt(mismatchCount)}</strong> DAPPL-Abweichungen (Header ≠ File).</span>` : ''}
+            ${problemCount > 0 ? `<span class="text-danger ml-2"><strong>${fmt(problemCount)}</strong> Probleme erkannt.</span>` : ''}
+        `;
+
+        // Table body
+        const tbody = el('dapplBody');
+        if (!analysis || !analysis.length) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">${t('val.no_data')}</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = analysis.map(r => {
+            const hasProblems = r.problems > 0;
+            const rowClass = r.mismatch ? 'table-info' : (hasProblems ? 'table-warning' : '');
+            const successPct = r.success_rate || 0;
+            const barColor = successPct >= 90 ? '#28a745' : successPct >= 50 ? '#ffc107' : '#dc3545';
+
+            // Icon for mismatch
+            const mismatchIcon = r.mismatch ? '<i class="fas fa-exchange-alt text-info ml-1" title="Header DAPPL differs from File DAPPL"></i>' : '';
+
+            return `<tr class="${rowClass}">
+                <td><strong>${esc(r.header_dappl)}</strong>${mismatchIcon}</td>
+                <td><strong>${esc(r.file_dappl)}</strong></td>
+                <td><code>${esc(r.file_ext)}</code></td>
+                <td>${fmt(r.total)}</td>
+                <td class="text-success">${fmt(r.upload_success)}</td>
+                <td class="${r.upload_failed > 0 ? 'text-danger font-weight-bold' : ''}">${fmt(r.upload_failed)}</td>
+                <td class="text-success">${fmt(r.link_success)}</td>
+                <td class="${r.link_failed > 0 ? 'text-danger font-weight-bold' : ''}">${fmt(r.link_failed)}</td>
+                <td style="min-width:100px">
+                    <div class="d-flex align-items-center">
+                        <div class="mini-progress flex-grow-1 mr-2" style="height:4px;">
+                            <div class="bar" style="width:${successPct}%; background:${barColor};"></div>
+                        </div>
+                        <small class="${successPct < 50 ? 'text-danger' : ''}">${successPct}%</small>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
     }
 })();

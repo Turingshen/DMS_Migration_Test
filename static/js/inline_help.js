@@ -41,7 +41,7 @@
             },
             {
                 selector: '#btnStartMigration',
-                text: 'Startet den Upload: Für jeden Datensatz wird ein Container im Zielsystem erstellt und die Datei(en) übertragen.',
+                text: 'Startet den Upload: Für jeden Datensatz wird ein Container im Zielsystem erstellt und die Datei(en) übertragen.\n\n■ Normale Dateien: Download aus Quellsystem → Upload ins Zielsystem\n■ WEB-Links (DAPPL=HTM): Web-URLs werden als .url-Shortcut gespeichert\n■ Lokale Links (LOCAL_LINK): Pfade wie C:\\... oder \\\\server\\... werden als .url-Shortcut migriert, da SAP keine file://-URLs unterstützt',
                 position: 'bottom'
             },
             {
@@ -116,7 +116,7 @@
             },
             {
                 selector: '#btnStartMigration',
-                text: 'Starts the upload: For each record, a container is created in the target system and the file(s) are transferred.',
+                text: 'Starts the upload: For each record, a container is created in the target system and the file(s) are transferred.\n\n■ Normal files: Download from source → Upload to target\n■ WEB links (DAPPL=HTM): Web URLs are stored as .url shortcuts\n■ Local links (LOCAL_LINK): Paths like C:\\... or \\\\server\\... are migrated as .url shortcuts, since SAP does not support file:// URLs',
                 position: 'bottom'
             },
             {

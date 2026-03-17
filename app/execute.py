@@ -235,6 +235,209 @@ def get_filename_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> st
     return ''
 
 
+# ============================================================================
+# LOCAL_LINK Detection - Handles documents with local file paths (DAPPL=HTM)
+# ============================================================================
+# Background:
+#   Some DMS documents (DAPPL=HTM) contain references to LOCAL FILE PATHS
+#   instead of files stored in the SAP Content Repository (KPRO).
+#   These paths are stored in DRAW.FILEP and look like:
+#     - C:\Users\parkje\Desktop\file.pdf
+#     - \\server\share\folder\file.pdf
+#     - file:///C:/temp/document.pdf
+#
+# Challenge:
+#   - The SAP API's CreateUrlAsAttachment function import only accepts
+#     http:// or https:// URLs - file:// URLs are rejected.
+#   - These "local link" documents have NO content in the Content Repository,
+#     so there's nothing to download.
+#
+# Solution:
+#   We create a Windows Internet Shortcut file (.url) containing the local path
+#   and upload it as a regular attachment. When users download this file from
+#   SAP and double-click it, Windows opens the local path (if accessible).
+#
+# Detection:
+#   - DAPPL = 'HTM' (marked as hyperlink in DMS)
+#   - DRAW.FILEP contains a local path (C:\, \\, file://) instead of http(s)://
+# ============================================================================
+
+def is_local_path(path: str) -> bool:
+    """Check if a path is a local file path vs a remote web URL.
+    
+    LOCAL paths (.url shortcut required):
+        - file://C:/... or file:///C:/...
+        - C:\... or D:\... (Windows drive letter paths)
+        - \\server\share\... (UNC network paths)
+    
+    REMOTE paths (CreateUrlAsAttachment works):
+        - http://...
+        - https://...
+    
+    Args:
+        path: The path/URL string to check
+    
+    Returns:
+        True if path is local (needs .url workaround), False for remote URLs
+    """
+    if not path:
+        return False
+    
+    path_stripped = path.strip()
+    path_lower = path_stripped.lower()
+    
+    # Remote web URLs - these work with CreateUrlAsAttachment
+    if path_lower.startswith(('http://', 'https://')):
+        return False
+    
+    # Local paths - need .url file workaround
+    if path_lower.startswith('file://'):
+        return True
+    # Windows drive letter path: C:\, D:\, etc.
+    if len(path_stripped) >= 2 and path_stripped[1] == ':':
+        return True
+    # UNC path: \\server\share
+    if path_stripped.startswith('\\\\'):
+        return True
+    
+    # Unknown format - assume local if it looks like a path
+    return False
+
+
+def is_web_url(path: str) -> bool:
+    """Check if a path is a remote web URL (http:// or https://).
+    
+    WEB URLs require CreateUrlAsAttachment or .url shortcut upload.
+    This is used to detect HTM documents that contain web links
+    instead of local file paths or Content Repository files.
+    
+    Args:
+        path: The path/URL string to check
+    
+    Returns:
+        True if path is a web URL (http:// or https://)
+    """
+    if not path:
+        return False
+    return path.strip().lower().startswith(('http://', 'https://'))
+
+
+def get_filep_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> str:
+    """Get the raw FILEP value from DRAW for LOCAL_LINK detection.
+    
+    FILEP contains either:
+        - A local file path (for DAPPL=HTM local links): C:\..., \\\\server\\...
+        - A URL (for DAPPL=HTM web links): http://..., https://...
+        - A filename (for normal files)
+    
+    Args:
+        doknr: Document number (25 chars)
+        dokar: Document type (e.g. 'IY1')
+        dokvr: Document version (e.g. '00')
+        doktl: Document part (e.g. '000')
+    
+    Returns:
+        The raw FILEP value, or empty string if not found.
+    """
+    if not DIL_AVAILABLE or not dil_engine:
+        return ''
+    
+    try:
+        query = text("""
+            SELECT FILEP FROM DIL.DRAW
+            WHERE DOKNR = :doknr AND DOKAR = :dokar
+              AND DOKVR = :dokvr AND DOKTL = :doktl
+        """)
+        with dil_engine.begin() as con:
+            result = con.execute(query, {
+                'doknr': doknr,
+                'dokar': dokar,
+                'dokvr': str(dokvr).zfill(2),
+                'doktl': str(doktl).zfill(3)
+            }).fetchone()
+        
+        if result and result[0]:
+            return str(result[0]).strip()
+    except Exception as e:
+        print(f"[WARN] get_filep_from_draw failed: {e}")
+    
+    return ''
+
+
+def create_url_shortcut_content(target_path: str) -> bytes:
+    """Create Windows Internet Shortcut (.url) file content for a local path or web URL.
+    
+    The .url file format is a simple INI file:
+        [InternetShortcut]
+        URL=file:///C:/path/to/file.pdf     (for local paths)
+        URL=http://example.com/page.html    (for web URLs)
+    
+    When downloaded from SAP and double-clicked, Windows opens the target.
+    
+    Args:
+        target_path: The local file path (C:\..., \\\\server\\..., or file://...) 
+                     OR a web URL (http://... or https://...)
+    
+    Returns:
+        UTF-8 encoded .url file content
+    """
+    target_path = target_path.strip()
+    
+    # Check if it's already a web URL (http/https) - use directly
+    if target_path.lower().startswith(('http://', 'https://')):
+        file_url = target_path
+    # Check if already a file:// URL
+    elif target_path.lower().startswith('file://'):
+        file_url = target_path
+    elif target_path.startswith('\\\\'):
+        # UNC path: \\server\share → file://server/share
+        file_url = 'file:' + target_path.replace('\\', '/')
+    else:
+        # Windows path: C:\path\file → file:///C:/path/file
+        file_url = 'file:///' + target_path.replace('\\', '/')
+    
+    # Create .url file content (Windows Internet Shortcut format)
+    content = f"[InternetShortcut]\r\nURL={file_url}\r\n"
+    return content.encode('utf-8')
+
+
+def get_shortcut_filename(original_path: str) -> str:
+    """Generate a meaningful .url filename from the original path.
+    
+    Examples:
+        C:\temp\document.pdf → document.url
+        \\server\share\file.xls → file.url
+        file:///C:/path/report.docx → report.url
+    
+    Args:
+        original_path: The original local path
+    
+    Returns:
+        A filename with .url extension
+    """
+    import os
+    
+    # Clean up the path
+    path = original_path.strip()
+    
+    # Handle file:// URLs
+    if path.lower().startswith('file://'):
+        path = path[7:]  # Remove file://
+        if path.startswith('/'):
+            path = path[1:]  # Remove leading /
+    
+    # Get just the filename part
+    basename = os.path.basename(path.replace('/', '\\'))
+    
+    # If it has an extension, replace with .url
+    if '.' in basename:
+        name, _ = os.path.splitext(basename)
+        return f"{name}.url"
+    
+    # No extension - just add .url
+    return f"{basename}.url" if basename else "link.url"
+
+
 def get_filename_from_dms_doc_files(doknr: str, dokar: str, dokvr: str, doktl: str, file_index: int = 0) -> str:
     """
     Fallback: Get filename with extension from DIL.DMS_DOC_FILES.
@@ -883,6 +1086,8 @@ def _auto_classify_error(error):
     # Check for common patterns
     if 'LOCAL_LINK' in error_str:
         return 'LOCAL_LINK'
+    if 'WEB_URL' in error_str:
+        return 'WEB_URL'
     if 'READ_EMPTY' in error_str or 'NO DOCUMENTS FOUND' in error_str:
         return 'READ_EMPTY'
     if 'READ_TIMEOUT' in error_str or 'TIMEOUT' in error_str:
@@ -1218,10 +1423,35 @@ def _download_one_file(file_index, document, session_snapshot, source_system, st
     }
 
 
+def _patch_url_description(session, upload_resp, file_description, logger):
+    """PATCH the created attachment to set UrlDescription from DRAO Description."""
+    if not file_description:
+        return
+    try:
+        resp_data = upload_resp.json()
+        entity_uri = resp_data.get('d', {}).get('__metadata', {}).get('uri', '')
+        if not entity_uri:
+            logger.debug("No entity URI in upload response — skip UrlDescription PATCH", category="UPLOAD")
+            return
+        patch_resp = session.patch(
+            entity_uri,
+            json={'UrlDescription': file_description},
+            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+            timeout=30,
+        )
+        if patch_resp.status_code in (200, 204):
+            logger.info(f"UrlDescription set: '{file_description}'", category="UPLOAD")
+        else:
+            logger.warning(f"UrlDescription PATCH {patch_resp.status_code}: {patch_resp.text[:200]}", category="UPLOAD")
+    except Exception as e:
+        logger.debug(f"Could not PATCH UrlDescription: {e}", category="UPLOAD")
+
+
 def _upload_one_file(file_index, content, filename, mime_type,
                      doc_type, doc_number, doc_version, doc_part,
                      session_snapshot, target_system, staging_id, batch_id,
-                     loio_id, start_time, logger):
+                     loio_id, start_time, logger,
+                     file_description=''):
     """Upload a single file to target. Thread-safe (creates own session)."""
     ul_session = requests.Session()
     prepare_session_headers(ul_session, session_snapshot, target_system)
@@ -1288,6 +1518,7 @@ def _upload_one_file(file_index, content, filename, mime_type,
 
     if upload_resp.status_code in (200, 201):
         logger.info(f"Uploaded file {file_index}: {filename} ({file_size_mb:.2f} MB) in {upload_elapsed:.1f}s", category="UPLOAD")
+        _patch_url_description(ul_session, upload_resp, file_description, logger)
         return {
             'file_index': file_index, 'success': True,
             'file_result': {
@@ -1389,21 +1620,22 @@ def execute_single_document(staging_record, session_snapshot):
                 except Exception as _lle:
                     logger.debug(f"Local link DAPPL check failed: {_lle}", category="READ")
                 
-                if _local_link_dappl == 'HTM':
-                    error_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
-                                 "Datei nicht im Content Repository gespeichert. "
-                                 "Lokale Pfad-Referenz kann nicht migriert werden.")
-                    logger.info(error_msg, category="READ")
-                    update_execution_status(staging_id, 'success', error_msg)
-                    update_link_status(staging_id, 'link_skipped',
-                                       'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
-                    return {
-                        'staging_id': staging_id,
-                        'status': 'success',
-                        'error': error_msg,
-                        'error_category': 'LOCAL_LINK',
-                        'status_code': 200
-                    }
+                # HTM skip disabled for testing
+                # if _local_link_dappl == 'HTM':
+                #     error_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
+                #                  "Datei nicht im Content Repository gespeichert. "
+                #                  "Lokale Pfad-Referenz kann nicht migriert werden.")
+                #     logger.info(error_msg, category="READ")
+                #     update_execution_status(staging_id, 'success', error_msg)
+                #     update_link_status(staging_id, 'link_skipped',
+                #                        'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
+                #     return {
+                #         'staging_id': staging_id,
+                #         'status': 'success',
+                #         'error': error_msg,
+                #         'error_category': 'LOCAL_LINK',
+                #         'status_code': 200
+                #     }
             
             # NORMAL MODE: Read from source system
             # Prepare session headers for read system
@@ -1447,21 +1679,22 @@ def execute_single_document(staging_record, session_snapshot):
             except Exception:
                 pass
             
-            if _read_fail_dappl == 'HTM':
-                skip_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
-                            "READ fehlgeschlagen, Datei nicht im Content Repository. "
-                            "Lokale Pfad-Referenz kann nicht migriert werden.")
-                logger.info(skip_msg, category="READ")
-                update_execution_status(staging_id, 'success', skip_msg)
-                update_link_status(staging_id, 'link_skipped',
-                                   'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
-                return {
-                    'staging_id': staging_id,
-                    'status': 'success',
-                    'error': skip_msg,
-                    'error_category': 'LOCAL_LINK',
-                    'status_code': 200
-                }
+            # HTM skip disabled for testing
+            # if _read_fail_dappl == 'HTM':
+            #     skip_msg = ("LOCAL_LINK - Lokaler Link (DAPPL=HTM) - "
+            #                 "READ fehlgeschlagen, Datei nicht im Content Repository. "
+            #                 "Lokale Pfad-Referenz kann nicht migriert werden.")
+            #     logger.info(skip_msg, category="READ")
+            #     update_execution_status(staging_id, 'success', skip_msg)
+            #     update_link_status(staging_id, 'link_skipped',
+            #                        'Nicht notwendig - Lokaler Link (kein KPRO-Inhalt)')
+            #     return {
+            #         'staging_id': staging_id,
+            #         'status': 'success',
+            #         'error': skip_msg,
+            #         'error_category': 'LOCAL_LINK',
+            #         'status_code': 200
+            #     }
             
             error_json = json.dumps(error_info)
             logger.error(error_msg, category="READ", details=error_info)
@@ -1911,6 +2144,7 @@ def execute_single_document(staging_record, session_snapshot):
                     
                     if upload_resp.status_code in (200, 201):
                         logger.info(f"WEB URL reference uploaded successfully", category="UPLOAD")
+                        _patch_url_description(server_session, upload_resp, document.get('FileDescription', ''), logger)
                         file_result = {
                             'file': filename,
                             'status': 'SUCCESS',
@@ -1932,6 +2166,221 @@ def execute_single_document(staging_record, session_snapshot):
                     results.append(file_result)
                     save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
                 continue  # Skip normal download/upload flow for WEB
+            
+            # ── LOCAL_LINK / WEB_URL: Handle documents with path references ──
+            # Documents with DAPPL=HTM may contain references to:
+            #   1. LOCAL file paths (C:\..., \\server\..., file://...)
+            #   2. WEB URLs (http://..., https://...)
+            # Neither type has files in the Content Repository - FILEP is the reference.
+            # 
+            # For LOCAL paths: SAP API rejects file:// URLs, so we create a .url shortcut
+            # For WEB URLs: We also create a .url shortcut (same approach works)
+            # Users can download and double-click to open the target.
+            _is_local_link = False
+            _is_web_url_link = False
+            _link_path = ''
+            
+            if ws_appl in ('HTM', '') and file_index == 0:  # Check only first file for links
+                # Get FILEP from DRAW to check if it's a local path or web URL
+                _filep = get_filep_from_draw(
+                    staging_record['source_documentnumber'],
+                    staging_record['source_documenttype'],
+                    staging_record['source_documentversion'],
+                    staging_record['source_documentpart']
+                )
+                if _filep:
+                    if is_local_path(_filep):
+                        _is_local_link = True
+                        _link_path = _filep
+                        logger.info(f"LOCAL_LINK detected — local path reference: {_filep[:100]}...", category="READ")
+                    elif is_web_url(_filep):
+                        _is_web_url_link = True
+                        _link_path = _filep
+                        logger.info(f"WEB_URL detected — web URL reference (HTM): {_filep[:100]}...", category="READ")
+            
+            if (_is_local_link or _is_web_url_link) and _link_path:
+                # Create .url shortcut file for the local path or web URL
+                url_content = create_url_shortcut_content(_link_path)
+                filename = get_shortcut_filename(_link_path)
+                link_type = 'LOCAL_LINK' if _is_local_link else 'WEB_URL'
+                
+                logger.info(f"Creating .url shortcut for {link_type} → {filename}", category="READ")
+                
+                # Update metadata
+                if not metadata_updated:
+                    update_metadata_fields(
+                        staging_id,
+                        loioid=document.get('LOIOID'),
+                        description=doc_description,
+                        filename=filename,
+                        file_size=len(url_content),
+                        mime_type='application/x-url'
+                    )
+                    metadata_updated = True
+                
+                # Switch to target system and create container if needed
+                prepare_session_headers(server_session, session_snapshot, target_system)
+                
+                if not doc_created:
+                    # Container creation for LOCAL_LINK/WEB_URL (same as WEB flow)
+                    source_doc_number = staging_record['source_documentnumber']
+                    effective_description = doc_description or staging_record.get('source_description') or filename
+                    if isinstance(effective_description, str):
+                        effective_description = effective_description.strip()
+                    if not effective_description:
+                        effective_description = filename
+                    if len(effective_description) > MAX_DESC_LEN:
+                        effective_description = effective_description[:MAX_DESC_LEN]
+                    
+                    doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    create_url = f"{doc_base_url}/A_DocumentInfoRecord"
+                    server_session.headers.update({'Content-Type': 'application/json'})
+                    
+                    dms_payload = {
+                        'DocumentInfoRecordDocType': doc_type,
+                        'DocumentInfoRecordDocVersion': doc_version,
+                        'DocumentInfoRecordDocPart': doc_part,
+                        'to_DocDesc': [
+                            {'Language': 'DE', 'DocumentDescription': effective_description},
+                            {'Language': 'EN', 'DocumentDescription': effective_description}
+                        ]
+                    }
+                    
+                    effective_doc_number = staging_record.get('target_documentnumber') or doc_number
+                    doc_number_sent_to_s4 = False
+                    rule_set_doc_number = staging_record.get('target_documentnumber')
+                    if rule_set_doc_number:
+                        dms_payload['DocumentInfoRecordDocNumber'] = rule_set_doc_number
+                        doc_number_sent_to_s4 = True
+                    elif effective_doc_number and not _is_purely_numeric(effective_doc_number):
+                        dms_payload['DocumentInfoRecordDocNumber'] = effective_doc_number
+                        doc_number_sent_to_s4 = True
+                    
+                    staging_authgroup = staging_record.get('authorization_group')
+                    if staging_authgroup is not None:
+                        effective_authgroup = staging_authgroup.strip() if staging_authgroup else ''
+                    else:
+                        effective_authgroup = doc_authgroup or ''
+                    if effective_authgroup:
+                        dms_payload['AuthorizationGroup'] = effective_authgroup
+                    
+                    logger.info(f"Creating document info record ({link_type})", category="CREATE")
+                    create_resp = server_session.post(create_url, json=dms_payload)
+                    
+                    # CSRF retry
+                    if is_csrf_error(create_resp):
+                        logger.warning(f"CSRF token expired during {link_type} CREATE — refreshing", category="CREATE")
+                        force_csrf_renewal(session_snapshot, target_system)
+                        prepare_session_headers(server_session, session_snapshot, target_system)
+                        server_session.headers.update({'Content-Type': 'application/json'})
+                        create_resp = server_session.post(create_url, json=dms_payload)
+                    
+                    if create_resp.status_code in (200, 201):
+                        try:
+                            resp_d = create_resp.json().get('d', {})
+                            created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
+                            if created_doc_number:
+                                doc_number = created_doc_number
+                                with misc_engine.begin() as con:
+                                    con.execute(text("""
+                                        UPDATE dbo.migration_staging
+                                        SET target_documentnumber = :num WHERE id = :sid
+                                    """), {'num': created_doc_number, 'sid': staging_id})
+                            created_doc_version = resp_d.get('DocumentInfoRecordDocVersion')
+                            if created_doc_version and created_doc_version != doc_version:
+                                doc_version = created_doc_version
+                                with misc_engine.begin() as con:
+                                    con.execute(text("UPDATE dbo.migration_staging SET target_documentversion = :v WHERE id = :sid"), {'v': doc_version, 'sid': staging_id})
+                            created_doc_part = resp_d.get('DocumentInfoRecordDocPart')
+                            if created_doc_part and created_doc_part != doc_part:
+                                doc_part = created_doc_part
+                                with misc_engine.begin() as con:
+                                    con.execute(text("UPDATE dbo.migration_staging SET target_documentpart = :p WHERE id = :sid"), {'p': doc_part, 'sid': staging_id})
+                        except Exception as e:
+                            logger.warning(f"Failed to extract doc number from {link_type} CREATE response: {e}", category="CREATE")
+                        
+                        if not doc_number_sent_to_s4 and not doc_number:
+                            error_msg = f"CREATE_DOC_NUMBER_LOST: {link_type} doc created but number not captured"
+                            logger.error(error_msg, category="CREATE")
+                            update_execution_status(staging_id, 'failed', error_msg)
+                            return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg}
+                        
+                        doc_created = True
+                        with misc_engine.begin() as con:
+                            con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
+                        logger.info(f"{link_type} document container created: {doc_number}", category="CREATE")
+                    else:
+                        error_info = _extract_error_fields(create_resp)
+                        error_msg = f"CREATE_FAIL_{create_resp.status_code}"
+                        logger.error(error_msg, category="CREATE", details=error_info)
+                        import json as _json
+                        update_execution_status(staging_id, 'failed', _json.dumps(error_info))
+                        return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
+                
+                # Upload the .url shortcut file as attachment
+                if doc_created and doc_number:
+                    slug_filename = _sanitize_slug(filename)
+                    server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
+                    
+                    try:
+                        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+                    except Exception:
+                        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    
+                    attachment_url = (
+                        f"{attachment_base_url}/A_DocumentInfoRecordAttch"
+                        f"(DocumentInfoRecordDocType='{doc_type}',"
+                        f"DocumentInfoRecordDocNumber='{doc_number}',"
+                        f"DocumentInfoRecordDocVersion='{doc_version}',"
+                        f"DocumentInfoRecordDocPart='{doc_part}'"
+                        f")/DocumentInfoRecordToAttachmentNavigation"
+                    )
+                    
+                    logger.info(f"Uploading {link_type} shortcut: {filename} ({len(url_content)} bytes)", category="UPLOAD")
+                    try:
+                        upload_resp = server_session.post(attachment_url, data=url_content, timeout=60)
+                        # CSRF retry
+                        if is_csrf_error(upload_resp):
+                            logger.warning(f"CSRF token expired during {link_type} UPLOAD — refreshing", category="UPLOAD")
+                            force_csrf_renewal(session_snapshot, target_system)
+                            prepare_session_headers(server_session, session_snapshot, target_system)
+                            server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
+                            upload_resp = server_session.post(attachment_url, data=url_content, timeout=60)
+                    except Exception as ex:
+                        error_msg = f'UPLOAD_{link_type}_ERROR: {str(ex)[:300]}'
+                        logger.error(error_msg, category="UPLOAD")
+                        file_result = {'file': filename, 'status': error_msg, 'error_category': 'CONNECTION_ERROR'}
+                        results.append(file_result)
+                        save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                        continue
+                    
+                    if upload_resp.status_code in (200, 201):
+                        logger.info(f"{link_type} shortcut uploaded successfully: {_link_path[:60]}...", category="UPLOAD")
+                        _patch_url_description(server_session, upload_resp, document.get('FileDescription', ''), logger)
+                        file_result = {
+                            'file': filename,
+                            'status': 'SUCCESS',
+                            'file_size': len(url_content),
+                            'file_size_mb': 0,
+                            'mime_type': 'application/x-url',
+                            'actual_time_seconds': 0,
+                            'local_link': _is_local_link,
+                            'web_url_link': _is_web_url_link,
+                            'original_path': _link_path[:200]
+                        }
+                    else:
+                        error_info = _extract_error_fields(upload_resp)
+                        error_msg = f"UPLOAD_{link_type}_FAIL_{upload_resp.status_code}"
+                        logger.error(f"{link_type} upload failed: {error_msg}", category="UPLOAD", details=error_info)
+                        file_result = {
+                            'file': filename,
+                            'status': error_msg,
+                            'error_detail': error_info,
+                            'error_category': _classify_error(error_info)
+                        }
+                    results.append(file_result)
+                    save_file_details(staging_id, batch_id, file_index, file_result, loio_id=document.get('LOIOID'))
+                continue  # Skip normal download/upload flow for LOCAL_LINK/WEB_URL
             
             # ── DOWNLOAD: Use prefetched content or download inline ─────────
             if file_index in _prefetched:
@@ -2364,6 +2813,7 @@ def execute_single_document(staging_record, session_snapshot):
                 if upload_resp.status_code in (200, 201):
                     upload_time = time.time() - start_time  # Actual processing time (no pacing)
                     logger.info(f"File uploaded successfully: {filename} (status {upload_resp.status_code}, {upload_elapsed:.1f}s, {file_size_mb:.2f} MB)", category="UPLOAD")
+                    _patch_url_description(server_session, upload_resp, document.get('FileDescription', ''), logger)
                     file_result = {
                         'file': filename, 
                         'status': 'SUCCESS', 
@@ -2453,7 +2903,8 @@ def execute_single_document(staging_record, session_snapshot):
                             _upload_one_file, fi, pf['content'], pf['filename'],
                             pf['mime_type'], doc_type, doc_number, doc_version, doc_part,
                             session_snapshot, target_system, staging_id, batch_id,
-                            documents[2][fi].get('LOIOID'), start_time, logger
+                            documents[2][fi].get('LOIOID'), start_time, logger,
+                            file_description=documents[2][fi].get('FileDescription', '')
                         ): fi
                         for fi, pf in _ok_uploads
                     }

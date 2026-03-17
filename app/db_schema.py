@@ -343,6 +343,74 @@ CREATE TABLE dbo.migration_wave_plan (
 );
 """
 
+CREATE_QM_MATERIAL_STAGING_TABLE = """
+CREATE TABLE dbo.qm_material_staging (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    batch_id VARCHAR(50) NOT NULL,
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    created_by VARCHAR(100),
+
+    -- Row number from source file
+    line_number INT,
+
+    -- Document / file
+    doc NVARCHAR(255),
+    source_file NVARCHAR(500),
+
+    -- Material & vendor
+    material VARCHAR(18),
+    vendor VARCHAR(10),
+
+    -- Organisational
+    cocd VARCHAR(4),
+    plnt VARCHAR(4),
+    sloc VARCHAR(4),
+    bunit VARCHAR(4),
+
+    -- Product info
+    trade_name NVARCHAR(255),
+    hand_prod VARCHAR(1),
+    vmds VARCHAR(1),
+
+    -- Specification
+    spec_nr VARCHAR(20),
+    revision VARCHAR(10),
+    sp_agr_dt VARCHAR(10),
+    approv_dt VARCHAR(10),
+
+    -- Quality flags
+    q_crit_ind VARCHAR(3),
+    q_nr VARCHAR(6),
+    flag_bga VARCHAR(1),
+    flag_fda VARCHAR(1),
+    restr_use NVARCHAR(255),
+
+    -- Archive
+    archivnr VARCHAR(20),
+    inactive VARCHAR(1),
+    archive_id VARCHAR(50),
+
+    -- Target system (ZVF)
+    target_dokar VARCHAR(3),
+    target_dokvr VARCHAR(2),
+    target_doktl VARCHAR(3),
+    target_description NVARCHAR(255),
+    target_doknr VARCHAR(25),
+
+    -- Migration status
+    status VARCHAR(20) DEFAULT 'pending',
+    file_uploaded BIT DEFAULT 0,
+    error_message NVARCHAR(MAX),
+    migrated_at DATETIME2,
+
+    INDEX idx_qm_batch_id (batch_id),
+    INDEX idx_qm_material (material),
+    INDEX idx_qm_vendor (vendor),
+    INDEX idx_qm_plnt (plnt),
+    INDEX idx_qm_status (status)
+);
+"""
+
 def init_staging_tables(engine):
     """Initialize migration staging tables if they don't exist."""
     with engine.begin() as con:
@@ -782,3 +850,26 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created migration_user_settings table")
         else:
             print("[DB_INIT] migration_user_settings table already exists")
+
+        # Check and create qm_material_staging table
+        check_qm = text("""
+        SELECT COUNT(*) as cnt
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'qm_material_staging'
+        """)
+        result = con.execute(check_qm).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_QM_MATERIAL_STAGING_TABLE))
+            print("[DB_INIT] Created qm_material_staging table")
+        else:
+            # Ensure new columns exist (added later)
+            for col, typedef in [('target_dokar', 'VARCHAR(3)'), ('target_dokvr', 'VARCHAR(2)'), ('target_doktl', 'VARCHAR(3)'), ('target_description', 'NVARCHAR(255)'), ('target_doknr', 'VARCHAR(25)'), ('source_file', 'NVARCHAR(500)'), ('file_uploaded', 'BIT DEFAULT 0')]:
+                exists = con.execute(text(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='qm_material_staging' "
+                    f"AND COLUMN_NAME='{col}'"
+                )).fetchone()
+                if exists[0] == 0:
+                    con.execute(text(f"ALTER TABLE dbo.qm_material_staging ADD {col} {typedef}"))
+                    print(f"[DB_INIT] Added column {col} to qm_material_staging")
+            print("[DB_INIT] qm_material_staging table already exists")

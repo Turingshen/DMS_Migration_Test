@@ -584,6 +584,7 @@ def get_error_description(category):
         'SOURCE_NOT_FOUND': ('Dokument in R/3 nicht gefunden', 'Quelldaten prüfen'),
         'SOURCE_EMPTY': ('Container ohne Dateien', 'Erwartet - leer'),
         'SOURCE_READ_ERROR': ('Lesefehler im Quellsystem', 'R/3 API prüfen'),
+        'LOCAL_LINK': ('Lokaler Pfad-Verweis', '.url Shortcut erstellt'),
         
         # Target System Issues (S/4)
         'TARGET_CREATE_FAILED': ('Anlage fehlgeschlagen', 'SAP Log prüfen'),
@@ -648,6 +649,7 @@ def get_error_details(category):
         'SOURCE_NOT_FOUND': ('Dokument in R/3 nicht gefunden', 'Quelldaten prüfen'),
         'SOURCE_EMPTY': ('Container ohne Dateien', 'Erwartet - leer'),
         'SOURCE_READ_ERROR': ('Lesefehler im Quellsystem', 'R/3 API prüfen'),
+        'LOCAL_LINK': ('Lokaler Pfad-Verweis', '.url Shortcut erstellt'),
         
         # Target System Issues (S/4)
         'TARGET_CREATE_FAILED': ('Anlage fehlgeschlagen', 'SAP Log prüfen'),
@@ -894,6 +896,8 @@ def get_info(server_session, sap_system, Documentnumber, Documentpart='000', Doc
         # list of documents
         for item in data:
             item.pop('__metadata')
+            # Preserve original file-level Description (DRAO) before overwrite
+            item['FileDescription'] = (item.get('Description', '') or '').strip()
             # Description priority:
             #   1) DESCRIPTIONSSet primary_description (best: multi-language document description)
             #   2) Parent ET_DOCUMENT Description

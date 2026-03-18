@@ -6,7 +6,7 @@ import threading
 import requests
 import time
 from datetime import datetime
-from flask import render_template, request, jsonify, session
+from flask import render_template, request, jsonify, session, Response
 from sqlalchemy import text
 from werkzeug.utils import secure_filename
 
@@ -299,7 +299,9 @@ def qm_material_data(batch_id):
         'id', 'line_number', 'doc', 'source_file', 'material', 'vendor', 'cocd', 'plnt', 'sloc',
         'trade_name', 'hand_prod', 'vmds', 'spec_nr', 'revision',
         'sp_agr_dt', 'approv_dt', 'archivnr', 'target_dokar', 'target_dokvr', 'target_doktl',
-        'target_description', 'target_doknr', 'file_uploaded', 'status', 'error_message',
+        'target_description', 'target_doknr', 'file_uploaded',
+        'qinf_material', 'qinf_zaehl',
+        'status', 'error_message',
     ]
 
     with misc_engine.connect() as con:
@@ -488,7 +490,8 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                 placeholders = ','.join(str(int(rid)) for rid in record_ids)
                 rows = con.execute(text(f"""
                     SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
-                           target_doknr, source_file, material, vendor, cocd, plnt, sloc, status
+                           target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
+                           qinf_material, qinf_zaehl
                     FROM dbo.qm_material_staging
                     WHERE batch_id = :bid AND id IN ({placeholders})
                     ORDER BY id
@@ -499,7 +502,8 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                     rows = con.execute(text("""
                         SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
                                target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
-                               ISNULL(file_uploaded, 0) AS file_uploaded
+                               ISNULL(file_uploaded, 0) AS file_uploaded,
+                               qinf_material, qinf_zaehl
                         FROM dbo.qm_material_staging
                         WHERE batch_id = :bid AND (status = 'pending' OR (status = 'done' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0))
                         ORDER BY id
@@ -507,7 +511,8 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                 else:
                     rows = con.execute(text("""
                         SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
-                               target_doknr, source_file, material, vendor, cocd, plnt, sloc, status
+                               target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
+                               qinf_material, qinf_zaehl
                         FROM dbo.qm_material_staging
                         WHERE batch_id = :bid AND status = 'pending'
                         ORDER BY id
@@ -563,6 +568,18 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             {'Language': 'EN', 'DocumentDescription': description},
                         ]
                     }
+
+                    # Add QINF object link via Deep Insert if mapping exists
+                    qinf_mat = (getattr(rec, 'qinf_material', None) or '').strip()
+                    qinf_z = (getattr(rec, 'qinf_zaehl', None) or '').strip()
+                    if qinf_mat and qinf_z:
+                        objky = qinf_mat.zfill(18) + ' ' * 22 + qinf_z.zfill(6)
+                        payload['to_ProductObj'] = [{
+                            'LinkedSAPObject': 'QINF',
+                            'LinkedSAPObjectKey': objky,
+                            'DocObjectLinkCounter': '001',
+                        }]
+                        logger.info(f"[QM_EXEC] Record {rec_id}: QINF link → OBJKY='{objky}'", category="QM_EXEC")
 
                     server_session.headers.update({'Content-Type': 'application/json'})
                     resp = server_session.post(create_url, json=payload, timeout=30)
@@ -713,3 +730,127 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                 'status': 'error',
                 'errors': [{'id': 0, 'error': str(e)[:500]}],
             })
+
+
+# ── QINF Mapping (Excel download / upload) ──────────────────────────
+
+@migrate_bp.route('/api/qm-material/qinf-mapping/download/<batch_id>', methods=['GET'])
+def qinf_mapping_download(batch_id):
+    """Download QINF mapping template as Excel for a QM material batch.
+
+    Columns: id, material, vendor, cocd, plnt, sloc, qinf_material, qinf_zaehl
+    """
+    import pandas as pd
+    from io import BytesIO
+
+    with misc_engine.connect() as con:
+        df = pd.read_sql(text("""
+            SELECT id, material, vendor, cocd, plnt, sloc,
+                   ISNULL(qinf_material, '') AS qinf_material,
+                   ISNULL(qinf_zaehl, '') AS qinf_zaehl
+            FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+            ORDER BY id
+        """), con, params={'bid': batch_id})
+
+    if df.empty:
+        return jsonify({'ok': False, 'error': 'Keine Daten für diesen Batch'}), 404
+
+    # Rename columns for the Excel template
+    df.rename(columns={
+        'id': 'ID',
+        'material': 'Material',
+        'vendor': 'Vendor',
+        'cocd': 'CoCd',
+        'plnt': 'Plnt',
+        'sloc': 'SLoc',
+        'qinf_material': 'Map to Material',
+        'qinf_zaehl': 'Zähler',
+    }, inplace=True)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='QINF Mapping', index=False)
+
+        # Auto-width columns
+        ws = writer.sheets['QINF Mapping']
+        for col_cells in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col_cells) + 2
+            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len, 30)
+
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename=QINF_Mapping_{batch_id}.xlsx'},
+    )
+
+
+@migrate_bp.route('/api/qm-material/qinf-mapping/upload/<batch_id>', methods=['POST'])
+def qinf_mapping_upload(batch_id):
+    """Upload QINF mapping Excel and update staging table.
+
+    Expects columns: ID, Map to Material, Zähler
+    """
+    import pandas as pd
+
+    if 'file' not in request.files:
+        return jsonify({'ok': False, 'error': 'Keine Datei hochgeladen'}), 400
+
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'ok': False, 'error': 'Leerer Dateiname'}), 400
+
+    try:
+        df = pd.read_excel(f, sheet_name=0, dtype=str)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Excel-Fehler: {e}'}), 400
+
+    # Normalise column names
+    col_map = {}
+    for c in df.columns:
+        cl = c.strip().lower()
+        if cl == 'id':
+            col_map[c] = 'id'
+        elif cl in ('map to material', 'qinf_material', 'material_map'):
+            col_map[c] = 'qinf_material'
+        elif cl in ('zähler', 'zaehler', 'zaehl', 'qinf_zaehl', 'counter'):
+            col_map[c] = 'qinf_zaehl'
+    df.rename(columns=col_map, inplace=True)
+
+    if 'id' not in df.columns:
+        return jsonify({'ok': False, 'error': 'Spalte "ID" fehlt in der Datei'}), 400
+
+    updated = 0
+    skipped = 0
+    with misc_engine.begin() as con:
+        for _, row in df.iterrows():
+            rid = str(row.get('id', '')).strip()
+            if not rid or not rid.isdigit():
+                skipped += 1
+                continue
+
+            mat = str(row.get('qinf_material', '') or '').strip()
+            zaehl = str(row.get('qinf_zaehl', '') or '').strip()
+
+            if not mat and not zaehl:
+                skipped += 1
+                continue
+
+            # Pad zaehl to 6 digits if numeric
+            if zaehl and zaehl.isdigit():
+                zaehl = zaehl.zfill(6)
+
+            con.execute(text("""
+                UPDATE dbo.qm_material_staging
+                SET qinf_material = :mat, qinf_zaehl = :zaehl
+                WHERE id = :rid AND batch_id = :bid
+            """), {'mat': mat or None, 'zaehl': zaehl or None, 'rid': int(rid), 'bid': batch_id})
+            updated += 1
+
+    return jsonify({
+        'ok': True,
+        'updated': updated,
+        'skipped': skipped,
+        'message': f'{updated} Zuordnungen aktualisiert, {skipped} übersprungen',
+    })

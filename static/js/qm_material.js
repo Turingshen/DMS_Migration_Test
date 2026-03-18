@@ -452,8 +452,8 @@
         head.empty();
         body.empty();
 
-        var cols = ['material', 'vendor', 'cocd', 'plnt', 'source_file', 'target_dokar', 'target_dokvr', 'target_doktl', 'target_description', 'target_doknr', 'file_uploaded', 'status', 'error_message'];
-        var labels = ['Material', 'Vendor', 'CoCd', 'Plnt', 'Datei', 'Typ', 'Ver.', 'Teil', 'Beschreibung', 'DOKNR (Ziel)', 'Datei hochgeladen', 'Status', 'Fehler'];
+        var cols = ['material', 'vendor', 'cocd', 'plnt', 'source_file', 'target_dokar', 'target_dokvr', 'target_doktl', 'target_description', 'target_doknr', 'qinf_material', 'qinf_zaehl', 'file_uploaded', 'status', 'error_message'];
+        var labels = ['Material', 'Vendor', 'CoCd', 'Plnt', 'Datei', 'Typ', 'Ver.', 'Teil', 'Beschreibung', 'DOKNR (Ziel)', 'QINF Material', 'QINF Zähler', 'Datei hochgeladen', 'Status', 'Fehler'];
 
         var hrow = '<th>#</th>';
         labels.forEach(function (l) { hrow += '<th>' + l + '</th>'; });
@@ -613,5 +613,53 @@
                 resultDiv.html('<div class="alert alert-danger mb-0 py-2">' + escHtml(msg) + '</div>');
             }
         });
+    };
+
+    // ── QINF Mapping (download / upload) ──────────────────────────
+    window.qmQinfDownload = function () {
+        if (!currentBatchId) { alert('Kein Batch geladen'); return; }
+        window.location.href = '/api/qm-material/qinf-mapping/download/' + encodeURIComponent(currentBatchId);
+    };
+
+    window.qmQinfUpload = function (input) {
+        if (!input.files || !input.files[0]) return;
+        if (!currentBatchId) { alert('Kein Batch geladen'); return; }
+
+        var formData = new FormData();
+        formData.append('file', input.files[0]);
+
+        var resultDiv = $('#qmQinfResult');
+        resultDiv.removeClass('d-none').html('<i class="fas fa-spinner fa-spin"></i> Wird hochgeladen...');
+
+        $.ajax({
+            url: '/api/qm-material/qinf-mapping/upload/' + encodeURIComponent(currentBatchId),
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function (resp) {
+                if (resp.ok) {
+                    resultDiv.html(
+                        '<div class="alert alert-success mb-0 py-2">' +
+                        '<i class="fas fa-check-circle"></i> ' + escHtml(resp.message) +
+                        '</div>'
+                    );
+                    // Reload table to show updated QINF columns
+                    _loadPage(currentPage);
+                } else {
+                    resultDiv.html(
+                        '<div class="alert alert-danger mb-0 py-2">' + escHtml(resp.error || 'Fehler') + '</div>'
+                    );
+                }
+            },
+            error: function (xhr) {
+                var msg = 'Upload fehlgeschlagen';
+                if (xhr.responseJSON && xhr.responseJSON.error) msg = xhr.responseJSON.error;
+                resultDiv.html('<div class="alert alert-danger mb-0 py-2">' + escHtml(msg) + '</div>');
+            }
+        });
+
+        // Reset input so same file can be re-selected
+        input.value = '';
     };
 })();

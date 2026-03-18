@@ -67,6 +67,8 @@ let visibleColumns = {
     'link_count': true,
     'ablage': true,
     'source_auth_group': true,
+    'pers_resp_source': true,
+    'pers_resp_target': true,
     'target_auth_group': true,
     'execution': true,
     'link_status': true,
@@ -167,7 +169,7 @@ const defaultVisibleColumns = {
     'objky': true, 'target_objky': true,
     'doc_status': true, 'description': true,
     'filename': true, 'file_size': true, 'file_count': true, 'link_count': true, 'ablage': true,
-    'source_auth_group': true, 'target_auth_group': true, 'execution': true,
+    'source_auth_group': true, 'pers_resp_source': true, 'pers_resp_target': true, 'target_auth_group': true, 'execution': true,
     'link_status': true, 'error_category': true,
     'source_loioid': false, 'mime_type': false, 'batch_id': false,
     'created_at': false, 'created_by': false,
@@ -781,6 +783,8 @@ function displayRecords(records) {
                 <td data-column="link_count"><small>${formatLinkCount(record)}</small></td>
                 <td data-column="ablage">${record.ablage === 'DB' ? '<span class="badge badge-warning"><i class="fas fa-database"></i> DB</span>' : '<span class="badge badge-info"><i class="fas fa-cloud"></i> KPRO</span>'}</td>
                 <td data-column="source_auth_group"><small>${record.source_authorization_group || '-'}</small></td>
+                <td data-column="pers_resp_source"><small>${record.pers_resp_source || '-'}</small></td>
+                <td data-column="pers_resp_target"><small>${record.pers_resp_target || '-'}</small></td>
                 <td data-column="target_auth_group"${isAuthGroupModified ? ' class="rule-modified"' : ''}><small>${record.authorization_group || '-'}</small></td>
                 <td data-column="execution">${executionBadge}</td>
                 <td data-column="link_status">${getLinkStatusBadge(record.link_status, record.execution_status, record.target_dokob)}</td>
@@ -1337,6 +1341,8 @@ function displayRecordDetail(record) {
     html += `<tr><th>${t('detail.doc_type')}</th><td>${record.source_documenttype}</td></tr>`;
     html += `<tr><th>${t('detail.description')}</th><td>${record.source_description || '-'}</td></tr>`;
     html += `<tr><th>${t('detail.source_auth_group')}</th><td>${record.source_authorization_group || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.pers_resp_source')}</th><td>${record.pers_resp_source || '-'}</td></tr>`;
+    html += `<tr><th>${t('detail.pers_resp_target')}</th><td>${record.pers_resp_target || '-'}</td></tr>`;
     html += `<tr><th>${t('detail.target_auth_group')}</th><td>${record.authorization_group || '-'}</td></tr>`;
     html += `</table></div>`;
     

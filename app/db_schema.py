@@ -38,6 +38,8 @@ CREATE TABLE dbo.migration_staging (
     file_size_bytes INT,
     mime_type VARCHAR(100),
     source_authorization_group VARCHAR(20),
+    pers_resp_source VARCHAR(12),
+    pers_resp_target VARCHAR(12),
     authorization_group VARCHAR(20),
     
     -- Validation status
@@ -626,6 +628,26 @@ def init_staging_tables(engine):
             print("[DB_INIT] Ensured migration_staging has source_authorization_group column")
         except Exception as e:
             print(f"[DB_INIT_WARN] Could not add source_authorization_group column: {e}")
+
+        # Pers. Resp. Source (DWNAM from DRAW - responsible person in source system)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'pers_resp_source') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD pers_resp_source VARCHAR(12) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has pers_resp_source column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add pers_resp_source column: {e}")
+
+        # Pers. Resp. Target (ResponsiblePersonName actually set in target system)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.migration_staging', 'pers_resp_target') IS NULL
+                    ALTER TABLE dbo.migration_staging ADD pers_resp_target VARCHAR(12) NULL;
+            """))
+            print("[DB_INIT] Ensured migration_staging has pers_resp_target column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add pers_resp_target column: {e}")
 
         # Sanitized document number (DOKNR with slashes, umlauts, etc. fixed)
         try:

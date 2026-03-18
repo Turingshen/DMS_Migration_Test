@@ -1407,6 +1407,32 @@ def _download_one_file(file_index, document, session_snapshot, source_system, st
     }
 
 
+def _patch_responsible_person(session, create_resp_d, source_user, staging_id, misc_engine, logger):
+    """PATCH the created document to set ResponsiblePersonName (SAP ignores it on POST)."""
+    if not source_user or not source_user.strip():
+        return
+    try:
+        entity_uri = create_resp_d.get('__metadata', {}).get('uri', '')
+        if not entity_uri:
+            logger.debug("No entity URI in CREATE response — skip ResponsiblePersonName PATCH", category="CREATE")
+            return
+        patch_resp = session.patch(
+            entity_uri,
+            json={'ResponsiblePersonName': source_user.strip()},
+            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+            timeout=30,
+        )
+        if patch_resp.status_code in (200, 204):
+            logger.info(f"ResponsiblePersonName set to '{source_user.strip()}' via PATCH", category="CREATE")
+            with misc_engine.begin() as con:
+                con.execute(text("UPDATE dbo.migration_staging SET pers_resp_target = :v WHERE id = :sid"),
+                            {'v': source_user.strip(), 'sid': staging_id})
+        else:
+            logger.warning(f"ResponsiblePersonName PATCH {patch_resp.status_code}: {patch_resp.text[:200]}", category="CREATE")
+    except Exception as e:
+        logger.debug(f"Could not PATCH ResponsiblePersonName: {e}", category="CREATE")
+
+
 def _patch_url_description(session, upload_resp, file_description, logger):
     """PATCH the created attachment to set UrlDescription from DRAO Description."""
     if not file_description:
@@ -2036,6 +2062,8 @@ def execute_single_document(staging_record, session_snapshot):
                     if effective_authgroup:
                         dms_payload['AuthorizationGroup'] = effective_authgroup
                     
+                    source_user = staging_record.get('pers_resp_source')
+                    
                     logger.info(f"Creating document info record (WEB)", category="CREATE")
                     create_resp = server_session.post(create_url, json=dms_payload)
                     
@@ -2048,6 +2076,7 @@ def execute_single_document(staging_record, session_snapshot):
                         create_resp = server_session.post(create_url, json=dms_payload)
                     
                     if create_resp.status_code in (200, 201):
+                        resp_d = {}
                         try:
                             resp_d = create_resp.json().get('d', {})
                             created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
@@ -2081,6 +2110,8 @@ def execute_single_document(staging_record, session_snapshot):
                         with misc_engine.begin() as con:
                             con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
                         logger.info(f"WEB document container created: {doc_number}", category="CREATE")
+                        
+                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
                     else:
                         error_info = _extract_error_fields(create_resp)
                         error_msg = f"CREATE_FAIL_{create_resp.status_code}"
@@ -2248,6 +2279,8 @@ def execute_single_document(staging_record, session_snapshot):
                     if effective_authgroup:
                         dms_payload['AuthorizationGroup'] = effective_authgroup
                     
+                    source_user = staging_record.get('pers_resp_source')
+                    
                     logger.info(f"Creating document info record ({link_type})", category="CREATE")
                     create_resp = server_session.post(create_url, json=dms_payload)
                     
@@ -2260,6 +2293,7 @@ def execute_single_document(staging_record, session_snapshot):
                         create_resp = server_session.post(create_url, json=dms_payload)
                     
                     if create_resp.status_code in (200, 201):
+                        resp_d = {}
                         try:
                             resp_d = create_resp.json().get('d', {})
                             created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
@@ -2292,6 +2326,8 @@ def execute_single_document(staging_record, session_snapshot):
                         doc_created = True
                         with misc_engine.begin() as con:
                             con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
+                        
+                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
                         logger.info(f"{link_type} document container created: {doc_number}", category="CREATE")
                     else:
                         error_info = _extract_error_fields(create_resp)
@@ -2573,6 +2609,8 @@ def execute_single_document(staging_record, session_snapshot):
                 if effective_authgroup:
                     dms_payload['AuthorizationGroup'] = effective_authgroup
                 
+                source_user = staging_record.get('pers_resp_source')
+                
                 # Document status: do NOT include in CREATE payload.
                 # S4 rejects internal-numbering types (IY1/IY2) when status is set during creation.
                 # Status will be set via a separate PATCH call after document creation.
@@ -2597,6 +2635,7 @@ def execute_single_document(staging_record, session_snapshot):
                     # Always extract the document number from response
                     # S4 may auto-generate a new number (for types with internal numbering like IY1/IY2)
                     # or confirm the number we sent (for types like I9D/I9S/I9T)
+                    resp_d = {}
                     try:
                         response_data = create_resp.json()
                         if response_data and 'd' in response_data:
@@ -2666,6 +2705,8 @@ def execute_single_document(staging_record, session_snapshot):
                             SET container_created = 1
                             WHERE id = :staging_id
                         """), {'staging_id': staging_id})
+                    
+                    _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
                     
                     # NOTE: Object Link creation is now Phase 2 (execute_linking)
                     # Phase 1 only creates the container and uploads files

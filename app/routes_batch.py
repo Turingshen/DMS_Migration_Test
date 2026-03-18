@@ -531,7 +531,7 @@ def refresh_batch_data_stream(batch_id):
                 where_clause = " OR ".join(chunk)
                 
                 draw_query = f"""
-                    SELECT doknr, dokar, dokvr, doktl, filep, dokst, begru
+                    SELECT doknr, dokar, dokvr, doktl, filep, dokst, begru, dwnam
                     FROM dil.DRAW
                     WHERE {where_clause}
 """
@@ -742,7 +742,7 @@ def refresh_batch_data_stream(batch_id):
                 df_merged['_doktl'] = df_merged['source_documentpart'].astype(str).str.zfill(3)
                 
                 df_merged = df_merged.merge(
-                    filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep', 'dokst']],
+                    filename_df[['doknr', 'dokar', 'dokvr', 'doktl', 'filep', 'dokst', 'begru', 'dwnam']],
                     how='left',
                     left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
                     right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
@@ -794,6 +794,11 @@ def refresh_batch_data_stream(batch_id):
                 if begru:
                     begru = begru.strip()[:20] or None
                 
+                # Source user (DWNAM) from DRAW
+                dwnam = str(row.get('dwnam', '')) if pd.notna(row.get('dwnam')) else None
+                if dwnam:
+                    dwnam = dwnam.strip()[:12] or None
+                
                 # Description from DRAT.DKTXT
                 drat_desc = str(row.get('dktxt', '')) if pd.notna(row.get('dktxt')) else None
                 if drat_desc and drat_desc.strip():
@@ -808,7 +813,8 @@ def refresh_batch_data_stream(batch_id):
                     'filename': filename,
                     'source_document_status': dokst if dokst else None,
                     'source_description': drat_desc,
-                    'source_authorization_group': begru
+                    'source_authorization_group': begru,
+                    'pers_resp_source': dwnam
                 })
             
             # Also get rule updates - ONLY for non-successful records (preserve successful migrations)
@@ -846,13 +852,14 @@ def refresh_batch_data_stream(batch_id):
                         filename NVARCHAR(500),
                         source_document_status NVARCHAR(20),
                         source_description NVARCHAR(200),
-                        source_authorization_group NVARCHAR(20)
+                        source_authorization_group NVARCHAR(20),
+                        pers_resp_source NVARCHAR(12)
                     );
                 """))
                 
                 # Insert metadata updates
                 update_df = pd.DataFrame(update_data)
-                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna() | update_df['source_description'].notna() | update_df['source_authorization_group'].notna()]
+                update_df = update_df[update_df['source_loioid'].notna() | update_df['filename'].notna() | update_df['source_document_status'].notna() | update_df['source_description'].notna() | update_df['source_authorization_group'].notna() | update_df['pers_resp_source'].notna()]
                 
                 if len(update_df) > 0:
                     chunk_size = 900
@@ -875,7 +882,8 @@ def refresh_batch_data_stream(batch_id):
                             s.source_description = CASE WHEN t.source_description IS NOT NULL AND t.source_description != ''
                                                         AND (s.source_description IS NULL OR s.source_description = '')
                                                         THEN t.source_description ELSE s.source_description END,
-                            s.source_authorization_group = COALESCE(t.source_authorization_group, s.source_authorization_group)
+                            s.source_authorization_group = COALESCE(t.source_authorization_group, s.source_authorization_group),
+                            s.pers_resp_source = COALESCE(t.pers_resp_source, s.pers_resp_source)
                         FROM dbo.migration_staging s
                         INNER JOIN #refresh_update t ON s.id = t.staging_id
                     """))

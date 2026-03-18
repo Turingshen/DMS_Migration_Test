@@ -1,0 +1,353 @@
+{% extends "base_simple.html" %}
+
+{% block title %}QM Material{% endblock %}
+
+{% block head %}
+<style>
+    /* ── Workflow Steps ── */
+    .workflow-steps { display: flex; align-items: center; margin-bottom: 25px; }
+    .workflow-step {
+        display: flex; align-items: center; padding: 8px 18px;
+        border-radius: 20px; font-weight: 600; font-size: 0.85rem;
+        background: #e9ecef; color: #6c757d; cursor: pointer;
+        transition: all 0.2s;
+    }
+    .workflow-step.active { background: #17a2b8; color: #fff; }
+    .workflow-step.done   { background: #28a745; color: #fff; }
+    .workflow-step .step-num {
+        width: 24px; height: 24px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.3); margin-right: 8px; font-size: 0.8rem;
+    }
+    .workflow-arrow { margin: 0 10px; color: #adb5bd; font-size: 1.2rem; }
+
+    /* ── Cards ── */
+    .mat-card { border-radius: 8px; transition: transform 0.2s; }
+    .mat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+    .mat-kpi-value { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
+    .mat-kpi-label { font-size: 0.8rem; color: #6c757d; }
+
+    /* ── Upload area ── */
+    .upload-zone {
+        border: 2px dashed #17a2b8; border-radius: 10px; padding: 40px;
+        text-align: center; cursor: pointer; transition: all 0.2s;
+        background: #f0fbff;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+        background: #d1ecf1; border-color: #0c7c8c;
+    }
+
+    /* ── Data Table ── */
+    .mat-table th { font-size: 0.8rem; white-space: nowrap; }
+    .mat-table td { font-size: 0.85rem; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .status-dot.pending  { background: #ffc107; }
+    .status-dot.success  { background: #28a745; }
+    .status-dot.error    { background: #dc3545; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+
+    <!-- Workflow Step Indicator -->
+    <div class="workflow-steps">
+        <div class="workflow-step active" id="qmStep1">
+            <span class="step-num">1</span> <span data-i18n="qm.wf.step1">Daten hochladen</span>
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step" id="qmStep2">
+            <span class="step-num">2</span> <span data-i18n="qm.wf.step2">Prüfen & Zuordnen</span>
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step" id="qmStep3">
+            <span class="step-num">3</span> <span data-i18n="qm.wf.step3">Migration ausführen</span>
+        </div>
+        <i class="fas fa-chevron-right workflow-arrow"></i>
+        <div class="workflow-step" id="qmStep4">
+            <span class="step-num">4</span> <span data-i18n="qm.wf.step4">Ergebnis & Bericht</span>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="fas fa-vial text-info"></i> <span data-i18n="qm.title">QM Material</span></h2>
+            <p class="text-muted" data-i18n="qm.subtitle">Migration von Qualitätsmanagement-Materialdokumenten (Q-Zertifikate, Spezifikationen, Prüfberichte)</p>
+        </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="row mb-4" id="qmKpiRow">
+        <div class="col-md-2">
+            <div class="card mat-card text-center border-info">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value text-info" id="qmKpiTotal">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.total">Gesamt</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card mat-card text-center">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value" id="qmKpiMaterials">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.materials">Materialien</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card mat-card text-center">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value" id="qmKpiVendors">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.vendors">Lieferanten</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card mat-card text-center border-warning">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value text-warning" id="qmKpiPending">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.pending">Ausstehend</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card mat-card text-center border-success">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value text-success" id="qmKpiDone">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.done">Erledigt</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card mat-card text-center border-danger">
+                <div class="card-body py-2">
+                    <div class="mat-kpi-value text-danger" id="qmKpiFailed">0</div>
+                    <div class="mat-kpi-label" data-i18n="qm.kpi.failed">Fehler</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 1: Upload -->
+    <div id="qmPanelUpload">
+        <div class="card mb-4">
+            <div class="card-header py-2">
+                <h6 class="mb-0"><i class="fas fa-upload"></i> <span data-i18n="qm.upload.title">Daten hochladen</span></h6>
+            </div>
+            <div class="card-body">
+                <input type="file" id="qmFileInput" accept=".xls,.xlsx,.csv" style="opacity:0;position:absolute;width:0;height:0;overflow:hidden">
+                <label for="qmFileInput" class="upload-zone mb-0" id="qmUploadZone" style="cursor:pointer">
+                    <i class="fas fa-cloud-upload-alt fa-3x text-info mb-3"></i>
+                    <p class="mb-1 font-weight-bold" data-i18n="qm.upload.drag">XLS / XLSX / CSV Datei hierher ziehen</p>
+                    <p class="text-muted mb-0" data-i18n="qm.upload.or_click">oder klicken zum Auswählen</p>
+                </label>
+                <div class="mt-3 d-none" id="qmFileInfo">
+                    <div class="alert alert-info d-flex align-items-center">
+                        <i class="fas fa-file-excel mr-2"></i>
+                        <span id="qmFileName"></span>
+                        <span class="badge badge-info ml-2" id="qmFileRows"></span>
+                        <button class="btn btn-sm btn-outline-danger ml-auto" onclick="qmClearFile()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Column Selection (shown after parse) -->
+                <div class="mt-3 d-none" id="qmColumnSelect">
+                    <div class="card border-info">
+                        <div class="card-header py-2 bg-light d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0"><i class="fas fa-columns text-info"></i> Spalten auswählen</h6>
+                            <div>
+                                <button class="btn btn-xs btn-outline-info mr-1" onclick="qmSelectAllCols(true)">Alle</button>
+                                <button class="btn btn-xs btn-outline-secondary mr-1" onclick="qmSelectAllCols(false)">Keine</button>
+                                <span class="badge badge-info" id="qmColCount">0 / 0</span>
+                            </div>
+                        </div>
+                        <div class="card-body py-2">
+                            <div class="row" id="qmColumnList">
+                                <!-- filled by JS -->
+                            </div>
+                        </div>
+                        <div class="card-footer py-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted" id="qmPreviewInfo"></small>
+                                <button class="btn btn-info" id="qmBtnSave" onclick="qmSaveToStaging()">
+                                    <i class="fas fa-database"></i> In Staging speichern
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Mini preview table -->
+                    <div class="mt-3">
+                        <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                            <table class="table table-sm table-bordered table-hover mb-0" id="qmPreviewTable">
+                                <thead class="thead-light" id="qmPreviewHead"></thead>
+                                <tbody id="qmPreviewBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Existing Batches -->
+        <div class="card mb-4">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-database text-info"></i> Vorhandene Batches</h6>
+                <button class="btn btn-xs btn-outline-info" onclick="qmLoadBatchList()">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div id="qmBatchList" class="text-center text-muted py-3">
+                    <i class="fas fa-spinner fa-spin"></i> Lade...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 2: Review & Mapping Table -->
+    <div id="qmPanelReview" class="d-none">
+        <!-- File path input -->
+        <div class="card mb-3">
+            <div class="card-header py-2">
+                <h6 class="mb-0"><i class="fas fa-folder-open text-info"></i> Dateipfad für Verlinkung</h6>
+            </div>
+            <div class="card-body py-2">
+                <div class="input-group input-group-sm">
+                    <div class="input-group-prepend"><span class="input-group-text"><i class="fas fa-folder"></i></span></div>
+                    <input type="text" id="qmFilePath" class="form-control" placeholder="z.B. C:\temp\Test_MAT_DMS" value="">
+                    <div class="input-group-append">
+                        <button class="btn btn-info" onclick="qmScanFiles()"><i class="fas fa-search"></i> Dateien scannen</button>
+                    </div>
+                </div>
+                <div id="qmScanResult" class="mt-2 d-none"></div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-table"></i> <span data-i18n="qm.review.title">Datenprüfung</span></h6>
+                <div class="d-flex align-items-center">
+                    <input type="text" id="qmSearchTable" class="form-control form-control-sm d-inline-block mr-2"
+                           style="width: 200px;" placeholder="Suchen..." data-i18n-placeholder="search">
+                    <span class="badge badge-info mr-2" id="qmSelCount">0 ausgewählt</span>
+                    <button class="btn btn-sm btn-outline-success mr-1" id="qmBtnExecSelected" onclick="qmExecuteSelected()" disabled>
+                        <i class="fas fa-play"></i> Ausgewählte migrieren
+                    </button>
+                    <button class="btn btn-sm btn-success" id="qmBtnExecAll" onclick="qmExecuteAll()">
+                        <i class="fas fa-rocket"></i> Alle migrieren
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                    <table class="table table-sm table-hover mat-table mb-0" id="qmDataTable">
+                        <thead class="thead-light">
+                            <tr id="qmTableHead"></tr>
+                        </thead>
+                        <tbody id="qmTableBody">
+                            <tr><td colspan="10" class="text-center text-muted py-4" data-i18n="qm.review.no_data">Keine Daten geladen</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- Pagination -->
+                <div class="card-footer py-2 d-flex justify-content-between align-items-center" id="qmPagination">
+                    <small class="text-muted" id="qmPageInfo">Seite 1 / 1</small>
+                    <div>
+                        <button class="btn btn-sm btn-outline-secondary mr-1" id="qmPageFirst" onclick="qmGoToPage(1)" disabled>&laquo;</button>
+                        <button class="btn btn-sm btn-outline-secondary mr-1" id="qmPagePrev" onclick="qmGoToPage('prev')" disabled>&lsaquo; Zurück</button>
+                        <button class="btn btn-sm btn-outline-secondary mr-1" id="qmPageNext" onclick="qmGoToPage('next')">Weiter &rsaquo;</button>
+                        <button class="btn btn-sm btn-outline-secondary" id="qmPageLast" onclick="qmGoToPage('last')">&raquo;</button>
+                    </div>
+                    <small class="text-muted" id="qmTotalInfo">0 Datensätze</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 3: Execute -->
+    <div id="qmPanelExecute" class="d-none">
+        <div class="card mb-4">
+            <div class="card-header py-2">
+                <h6 class="mb-0"><i class="fas fa-play-circle"></i> <span data-i18n="qm.exec.title">Migration läuft</span></h6>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-3 text-center">
+                        <div class="mat-kpi-value text-info" id="qmExecTotal">0</div>
+                        <div class="mat-kpi-label">Gesamt</div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mat-kpi-value text-success" id="qmExecDone">0</div>
+                        <div class="mat-kpi-label">Erfolgreich</div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mat-kpi-value text-danger" id="qmExecFailed">0</div>
+                        <div class="mat-kpi-label">Fehler</div>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mat-kpi-value text-warning" id="qmExecRemaining">0</div>
+                        <div class="mat-kpi-label">Ausstehend</div>
+                    </div>
+                </div>
+                <div class="progress" style="height: 24px;">
+                    <div class="progress-bar bg-success progress-bar-striped progress-bar-animated"
+                         role="progressbar" style="width: 0%;" id="qmProgressDone">0</div>
+                    <div class="progress-bar bg-danger"
+                         role="progressbar" style="width: 0%;" id="qmProgressFailed">0</div>
+                </div>
+                <div class="text-center mt-3" id="qmExecSpinner">
+                    <i class="fas fa-spinner fa-spin fa-2x text-info"></i>
+                    <p class="mt-2 text-muted">Container werden in ZVF angelegt...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step 4: Results -->
+    <div id="qmPanelResult" class="d-none">
+        <div class="card mb-4">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-chart-bar"></i> <span data-i18n="qm.result.title">Ergebnis & Bericht</span></h6>
+                <button class="btn btn-sm btn-outline-info" onclick="qmBackToReview()">
+                    <i class="fas fa-arrow-left"></i> Zurück zur Übersicht
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3" id="qmResultKpis">
+                    <div class="col-md-4 text-center">
+                        <div class="mat-kpi-value text-info" id="qmResTotal">0</div>
+                        <div class="mat-kpi-label">Gesamt</div>
+                    </div>
+                    <div class="col-md-4 text-center">
+                        <div class="mat-kpi-value text-success" id="qmResDone">0</div>
+                        <div class="mat-kpi-label">Erfolgreich</div>
+                    </div>
+                    <div class="col-md-4 text-center">
+                        <div class="mat-kpi-value text-danger" id="qmResFailed">0</div>
+                        <div class="mat-kpi-label">Fehler</div>
+                    </div>
+                </div>
+                <div id="qmResultErrors"></div>
+                <div class="table-responsive mt-3" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-sm table-hover mat-table mb-0" id="qmResultTable">
+                        <thead class="thead-light">
+                            <tr id="qmResultHead"></tr>
+                        </thead>
+                        <tbody id="qmResultBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/qm_material.js') }}"></script>
+{% endblock %}

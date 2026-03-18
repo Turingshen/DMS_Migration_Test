@@ -364,56 +364,45 @@ def get_filep_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> str:
     return ''
 
 
-def create_url_shortcut_content(target_path: str) -> bytes:
-    """Create Windows Internet Shortcut (.url) file content for a local path or web URL.
+def create_local_link_placeholder(target_path: str) -> bytes:
+    """Create empty placeholder content for local link files.
     
-    The .url file format is a simple INI file:
-        [InternetShortcut]
-        URL=file:///C:/path/to/file.pdf     (for local paths)
-        URL=http://example.com/page.html    (for web URLs)
+    For local links (files not in KPRO), we upload an empty file with the
+    original filename. SAP determines DAPPL from the Slug header extension.
     
-    When downloaded from SAP and double-clicked, Windows opens the target.
+    NOTE: We don't create .url shortcut content because SAP rejects file:// URLs.
+    Instead we upload empty content with the original filename so SAP assigns
+    the correct DAPPL (PDF, JPG, etc.) based on file extension.
     
     Args:
-        target_path: The local file path (C:\..., \\\\server\\..., or file://...) 
-                     OR a web URL (http://... or https://...)
+        target_path: The local file path (unused, kept for API compatibility)
     
     Returns:
-        UTF-8 encoded .url file content
+        Empty bytes (placeholder file with 0 bytes)
     """
-    target_path = target_path.strip()
-    
-    # Check if it's already a web URL (http/https) - use directly
-    if target_path.lower().startswith(('http://', 'https://')):
-        file_url = target_path
-    # Check if already a file:// URL
-    elif target_path.lower().startswith('file://'):
-        file_url = target_path
-    elif target_path.startswith('\\\\'):
-        # UNC path: \\server\share → file://server/share
-        file_url = 'file:' + target_path.replace('\\', '/')
-    else:
-        # Windows path: C:\path\file → file:///C:/path/file
-        file_url = 'file:///' + target_path.replace('\\', '/')
-    
-    # Create .url file content (Windows Internet Shortcut format)
-    content = f"[InternetShortcut]\r\nURL={file_url}\r\n"
-    return content.encode('utf-8')
+    # Return empty bytes - SAP will create a 0-byte file with correct DAPPL
+    # based on the filename extension in the Slug header
+    return b''
 
 
 def get_shortcut_filename(original_path: str) -> str:
-    """Generate a meaningful .url filename from the original path.
+    """Extract the original filename from a local path for SAP DAPPL detection.
+    
+    SAP determines DAPPL from the file extension in the Slug header.
+    By keeping the original extension (e.g., .pdf, .jpg), SAP assigns the
+    correct DAPPL instead of BIN/HTM.
     
     Examples:
-        C:\temp\document.pdf → document.url
-        \\server\share\file.xls → file.url
-        file:///C:/path/report.docx → report.url
+        C:\temp\document.pdf → document.pdf (SAP DAPPL: PDF)
+        \\server\share\file.xls → file.xls (SAP DAPPL: XLS)
+        file:///C:/path/report.docx → report.docx (SAP DAPPL: DOC)
+        C:\path\image.jpg → image.jpg (SAP DAPPL: JPG)
     
     Args:
         original_path: The original local path
     
     Returns:
-        A filename with .url extension
+        The filename with ORIGINAL extension for correct SAP DAPPL assignment
     """
     import os
     
@@ -426,16 +415,11 @@ def get_shortcut_filename(original_path: str) -> str:
         if path.startswith('/'):
             path = path[1:]  # Remove leading /
     
-    # Get just the filename part
+    # Get just the filename part - KEEP ORIGINAL EXTENSION
     basename = os.path.basename(path.replace('/', '\\'))
     
-    # If it has an extension, replace with .url
-    if '.' in basename:
-        name, _ = os.path.splitext(basename)
-        return f"{name}.url"
-    
-    # No extension - just add .url
-    return f"{basename}.url" if basename else "link.url"
+    # Return original filename with extension for correct SAP DAPPL
+    return basename if basename else "link.url"
 
 
 def get_filename_from_dms_doc_files(doknr: str, dokar: str, dokvr: str, doktl: str, file_index: int = 0) -> str:
@@ -2168,19 +2152,18 @@ def execute_single_document(staging_record, session_snapshot):
                 continue  # Skip normal download/upload flow for WEB
             
             # ── LOCAL_LINK / WEB_URL: Handle documents with path references ──
-            # Documents with DAPPL=HTM may contain references to:
-            #   1. LOCAL file paths (C:\..., \\server\..., file://...)
-            #   2. WEB URLs (http://..., https://...)
-            # Neither type has files in the Content Repository - FILEP is the reference.
-            # 
-            # For LOCAL paths: SAP API rejects file:// URLs, so we create a .url shortcut
-            # For WEB URLs: We also create a .url shortcut (same approach works)
-            # Users can download and double-click to open the target.
+            # NOTE: Most documents with local paths in FILEP still have content in the 
+            # SAP Archive (Content Server). The download API uses DOKNR/LOID to fetch content,
+            # NOT the file path. Therefore, we let the normal download flow handle these files.
+            # The filename is correctly extracted by _resolve_filename() using split('/')[-1].
+            #
+            # This logic is now DISABLED - only kept for true "no content" cases in the future.
+            # The normal download/upload pipeline handles all cases correctly.
             _is_local_link = False
             _is_web_url_link = False
             _link_path = ''
             
-            if ws_appl in ('HTM', '') and file_index == 0:  # Check only first file for links
+            if False and file_index == 0:  # DISABLED: Normal download handles local paths correctly
                 # Get FILEP from DRAW to check if it's a local path or web URL
                 _filep = get_filep_from_draw(
                     staging_record['source_documentnumber'],
@@ -2199,12 +2182,13 @@ def execute_single_document(staging_record, session_snapshot):
                         logger.info(f"WEB_URL detected — web URL reference (HTM): {_filep[:100]}...", category="READ")
             
             if (_is_local_link or _is_web_url_link) and _link_path:
-                # Create .url shortcut file for the local path or web URL
-                url_content = create_url_shortcut_content(_link_path)
+                # Create empty placeholder file with original filename for correct DAPPL
+                # Note: We don't use .url shortcut content because SAP rejects file:// URLs
+                url_content = create_local_link_placeholder(_link_path)
                 filename = get_shortcut_filename(_link_path)
                 link_type = 'LOCAL_LINK' if _is_local_link else 'WEB_URL'
                 
-                logger.info(f"Creating .url shortcut for {link_type} → {filename}", category="READ")
+                logger.info(f"{link_type} placeholder → {filename} (original path: {_link_path[:80]}...)", category="READ")
                 
                 # Update metadata
                 if not metadata_updated:
@@ -2213,8 +2197,8 @@ def execute_single_document(staging_record, session_snapshot):
                         loioid=document.get('LOIOID'),
                         description=doc_description,
                         filename=filename,
-                        file_size=len(url_content),
-                        mime_type='application/x-url'
+                        file_size=0,  # Empty placeholder
+                        mime_type='application/octet-stream'
                     )
                     metadata_updated = True
                 
@@ -2317,7 +2301,7 @@ def execute_single_document(staging_record, session_snapshot):
                         update_execution_status(staging_id, 'failed', _json.dumps(error_info))
                         return {'staging_id': staging_id, 'status': 'failed', 'error': error_msg, 'error_detail': error_info}
                 
-                # Upload the .url shortcut file as attachment
+                # Upload the empty placeholder file as attachment (with original filename for DAPPL)
                 if doc_created and doc_number:
                     slug_filename = _sanitize_slug(filename)
                     server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
@@ -2355,14 +2339,14 @@ def execute_single_document(staging_record, session_snapshot):
                         continue
                     
                     if upload_resp.status_code in (200, 201):
-                        logger.info(f"{link_type} shortcut uploaded successfully: {_link_path[:60]}...", category="UPLOAD")
+                        logger.info(f"{link_type} placeholder uploaded: {filename} (ref: {_link_path[:60]}...)", category="UPLOAD")
                         _patch_url_description(server_session, upload_resp, document.get('FileDescription', ''), logger)
                         file_result = {
                             'file': filename,
                             'status': 'SUCCESS',
-                            'file_size': len(url_content),
+                            'file_size': 0,  # Empty placeholder
                             'file_size_mb': 0,
-                            'mime_type': 'application/x-url',
+                            'mime_type': 'application/octet-stream',
                             'actual_time_seconds': 0,
                             'local_link': _is_local_link,
                             'web_url_link': _is_web_url_link,

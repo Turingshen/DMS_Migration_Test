@@ -52,19 +52,19 @@
 
     <!-- Workflow Step Indicator -->
     <div class="workflow-steps">
-        <div class="workflow-step active" id="techStep1">
+        <div class="workflow-step active" id="techStep1" onclick="techSetStep(1)">
             <span class="step-num">1</span> <span data-i18n="tech.wf.step1">Daten hochladen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="techStep2">
+        <div class="workflow-step" id="techStep2" onclick="techSetStep(2)">
             <span class="step-num">2</span> <span data-i18n="tech.wf.step2">Prüfen & Zuordnen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="techStep3">
+        <div class="workflow-step" id="techStep3" onclick="techSetStep(3)">
             <span class="step-num">3</span> <span data-i18n="tech.wf.step3">Migration ausführen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="techStep4">
+        <div class="workflow-step" id="techStep4" onclick="techSetStep(4)">
             <span class="step-num">4</span> <span data-i18n="tech.wf.step4">Ergebnis & Bericht</span>
         </div>
     </div>
@@ -83,31 +83,31 @@
             <div class="card mat-card text-center" style="border-color: #6f42c1;">
                 <div class="card-body py-2">
                     <div class="mat-kpi-value" style="color: #6f42c1;" id="techKpiTotal">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.total">Gesamt</div>
+                    <div class="mat-kpi-label">Gesamt</div>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
             <div class="card mat-card text-center">
                 <div class="card-body py-2">
-                    <div class="mat-kpi-value" id="techKpiMaterials">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.materials">Materialien</div>
+                    <div class="mat-kpi-value" id="techKpiDocuments">0</div>
+                    <div class="mat-kpi-label">Dokumente</div>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
             <div class="card mat-card text-center">
                 <div class="card-body py-2">
-                    <div class="mat-kpi-value" id="techKpiPlants">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.plants">Werke</div>
+                    <div class="mat-kpi-value" id="techKpiTypes">0</div>
+                    <div class="mat-kpi-label">Dokumentarten</div>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card mat-card text-center border-warning">
+            <div class="card mat-card text-center border-info">
                 <div class="card-body py-2">
-                    <div class="mat-kpi-value text-warning" id="techKpiPending">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.pending">Ausstehend</div>
+                    <div class="mat-kpi-value text-info" id="techKpiWithFile">0</div>
+                    <div class="mat-kpi-label">Mit Datei</div>
                 </div>
             </div>
         </div>
@@ -115,7 +115,7 @@
             <div class="card mat-card text-center border-success">
                 <div class="card-body py-2">
                     <div class="mat-kpi-value text-success" id="techKpiDone">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.done">Erledigt</div>
+                    <div class="mat-kpi-label">Erledigt</div>
                 </div>
             </div>
         </div>
@@ -123,7 +123,7 @@
             <div class="card mat-card text-center border-danger">
                 <div class="card-body py-2">
                     <div class="mat-kpi-value text-danger" id="techKpiFailed">0</div>
-                    <div class="mat-kpi-label" data-i18n="tech.kpi.failed">Fehler</div>
+                    <div class="mat-kpi-label">Fehler</div>
                 </div>
             </div>
         </div>
@@ -131,39 +131,72 @@
 
     <!-- Step 1: Upload -->
     <div id="techPanelUpload">
-        <div class="card mb-4">
-            <div class="card-header py-2">
-                <h6 class="mb-0"><i class="fas fa-upload"></i> <span data-i18n="tech.upload.title">Daten hochladen</span></h6>
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card mb-4">
+                    <div class="card-header py-2">
+                        <h6 class="mb-0"><i class="fas fa-upload"></i> Daten hochladen</h6>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted mb-3">
+                            Excel-Datei (.xlsx/.csv) mit Spalten: <code>DOKAR</code>, <code>DOKNR</code>,
+                            <code>DOKVR</code>, <code>DOKTL</code>, <code>DOKOB</code>, <code>OBZAE</code>, <code>OBJKY</code>
+                        </p>
+                        <input type="file" id="techFileInput" accept=".xls,.xlsx,.csv" style="display:none">
+                        <label for="techFileInput" class="upload-zone mb-0" id="techUploadZone" style="cursor:pointer">
+                            <i class="fas fa-cloud-upload-alt fa-3x mb-3" style="color: #6f42c1;"></i>
+                            <p class="mb-1 font-weight-bold">XLS / XLSX / CSV Datei hierher ziehen</p>
+                            <p class="text-muted mb-0">oder klicken zum Auswählen</p>
+                        </label>
+                        <div class="mt-3 d-none" id="techFileInfo">
+                            <div class="alert d-flex align-items-center" style="background: #f5f0ff; border-color: #6f42c1;">
+                                <i class="fas fa-file-excel mr-2"></i>
+                                <span id="techFileName"></span>
+                                <span class="badge ml-2" style="background: #6f42c1; color: #fff;" id="techFileRows"></span>
+                                <button class="btn btn-sm btn-outline-danger ml-auto" onclick="techClearFile()">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <button class="btn d-none" id="techSaveBtn"
+                                    style="background: #6f42c1; color: #fff;"
+                                    onclick="techSaveAndEnrich()">
+                                <i class="bi bi-check-circle me-1"></i> Speichern &amp; DIL-Anreicherung starten
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <input type="file" id="techFileInput" accept=".xls,.xlsx,.csv" style="display:none">
-                <label for="techFileInput" class="upload-zone mb-0" id="techUploadZone" style="cursor:pointer">
-                    <i class="fas fa-cloud-upload-alt fa-3x mb-3" style="color: #6f42c1;"></i>
-                    <p class="mb-1 font-weight-bold" data-i18n="tech.upload.drag">XLS / XLSX / CSV Datei hierher ziehen</p>
-                    <p class="text-muted mb-0" data-i18n="tech.upload.or_click">oder klicken zum Auswählen</p>
-                </label>
-                <div class="mt-3 d-none" id="techFileInfo">
-                    <div class="alert d-flex align-items-center" style="background: #f5f0ff; border-color: #6f42c1;">
-                        <i class="fas fa-file-excel mr-2"></i>
-                        <span id="techFileName"></span>
-                        <span class="badge ml-2" style="background: #6f42c1; color: #fff;" id="techFileRows"></span>
-                        <button class="btn btn-sm btn-outline-danger ml-auto" onclick="techClearFile()">
-                            <i class="fas fa-times"></i>
-                        </button>
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-header py-2">
+                        <h6 class="mb-0"><i class="fas fa-history"></i> Vorherige Batches</h6>
+                    </div>
+                    <div class="card-body p-0" style="max-height: 350px; overflow-y: auto;">
+                        <ul class="list-group list-group-flush" id="techBatchList">
+                            <li class="list-group-item text-muted">Keine Batches vorhanden</li>
+                        </ul>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Step 2: Review & Mapping Table -->
+    <!-- Step 2: Review enriched data -->
     <div id="techPanelReview" class="d-none">
         <div class="card mb-4">
             <div class="card-header py-2 d-flex justify-content-between align-items-center">
-                <h6 class="mb-0"><i class="fas fa-table"></i> <span data-i18n="tech.review.title">Datenprüfung</span></h6>
+                <h6 class="mb-0"><i class="fas fa-table"></i> Staging-Daten (mit DIL-Anreicherung)</h6>
                 <div>
-                    <input type="text" id="techSearchTable" class="form-control form-control-sm d-inline-block"
-                           style="width: 200px;" placeholder="Suchen..." data-i18n-placeholder="search">
+                    <button class="btn btn-sm btn-outline-secondary me-2" onclick="techSetStep(1)">
+                        <i class="fas fa-arrow-left"></i> Zurück
+                    </button>
+                    <input type="text" id="techSearchTable" class="form-control form-control-sm d-inline-block me-2"
+                           style="width: 200px;" placeholder="Suchen...">
+                    <button class="btn btn-sm" style="background: #6f42c1; color: #fff;" onclick="techSetStep(3)">
+                        <i class="fas fa-download"></i> Weiter zum Download
+                    </button>
                 </div>
             </div>
             <div class="card-body p-0">
@@ -182,18 +215,56 @@
     </div>
 
     <!-- Step 3: Execute -->
+    <!-- Step 3: Execute -->
     <div id="techPanelExecute" class="d-none">
         <div class="card mb-4">
-            <div class="card-header py-2">
-                <h6 class="mb-0"><i class="fas fa-play-circle"></i> <span data-i18n="tech.exec.title">Migration ausführen</span></h6>
-            </div>
-            <div class="card-body text-center py-5">
-                <p class="text-muted mb-3" data-i18n="tech.exec.info">Starten Sie die TECH-Material-Migration für die geprüften Datensätze.</p>
-                <button class="btn btn-lg" style="background: #6f42c1; color: #fff;" id="techBtnExecute" onclick="techStartMigration()">
-                    <i class="fas fa-rocket"></i> <span data-i18n="tech.exec.start">Migration starten</span>
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-play-circle"></i> <span data-i18n="tech.exec.title">Download ausführen</span></h6>
+                <button class="btn btn-sm btn-outline-secondary" onclick="techSetStep(2)">
+                    <i class="fas fa-arrow-left"></i> Zurück
                 </button>
-                <div class="progress mt-4 d-none" id="techProgressBar" style="height: 24px;">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%; background: #6f42c1;" id="techProgress">0%</div>
+            </div>
+            <div class="card-body">
+                <!-- Download path input -->
+                <div class="row mb-4">
+                    <div class="col-md-8">
+                        <label class="form-label fw-bold"><i class="fas fa-folder-open me-1"></i> Speicherpfad</label>
+                        <input type="text" class="form-control" id="techDownloadPath"
+                               placeholder="z.B. C:\Downloads\TECH_Material">
+                        <small class="text-muted">Der Batch-Ordner wird automatisch erstellt.</small>
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button class="btn btn-lg w-100" style="background: #6f42c1; color: #fff;" id="techBtnExecute" onclick="techStartDownload()">
+                            <i class="fas fa-download"></i> Download starten
+                        </button>
+                    </div>
+                </div>
+                <!-- Progress -->
+                <div id="techExecProgress" class="d-none">
+                    <div class="progress mb-3" style="height: 24px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             role="progressbar" style="width: 0%; background: #6f42c1;"
+                             id="techProgress">0%</div>
+                    </div>
+                    <div class="row text-center mb-3">
+                        <div class="col">
+                            <span class="badge bg-success fs-6" id="techStatDone">0</span>
+                            <small class="d-block text-muted">Heruntergeladen</small>
+                        </div>
+                        <div class="col">
+                            <span class="badge bg-danger fs-6" id="techStatFailed">0</span>
+                            <small class="d-block text-muted">Fehler</small>
+                        </div>
+                        <div class="col">
+                            <span class="badge bg-secondary fs-6" id="techStatSkipped">0</span>
+                            <small class="d-block text-muted">Übersprungen</small>
+                        </div>
+                        <div class="col">
+                            <span class="badge bg-info fs-6" id="techStatTotal">0</span>
+                            <small class="d-block text-muted">Gesamt</small>
+                        </div>
+                    </div>
+                    <p class="text-muted text-center mb-0" id="techCurrentDoc"></p>
                 </div>
             </div>
         </div>
@@ -206,9 +277,57 @@
                 <h6 class="mb-0"><i class="fas fa-chart-bar"></i> <span data-i18n="tech.result.title">Ergebnis & Bericht</span></h6>
             </div>
             <div class="card-body">
-                <div id="techResultContent" class="text-center text-muted py-4">
-                    <i class="fas fa-clipboard-check fa-3x mb-3"></i>
-                    <p data-i18n="tech.result.empty">Noch kein Migrationsergebnis vorhanden.</p>
+                <div id="techResultContent">
+                    <div class="row text-center mb-4">
+                        <div class="col-md-3">
+                            <div class="card border-success">
+                                <div class="card-body py-3">
+                                    <h3 class="text-success mb-0" id="techResDone">0</h3>
+                                    <small class="text-muted">Heruntergeladen</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card border-danger">
+                                <div class="card-body py-3">
+                                    <h3 class="text-danger mb-0" id="techResFailed">0</h3>
+                                    <small class="text-muted">Fehler</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card border-secondary">
+                                <div class="card-body py-3">
+                                    <h3 class="text-secondary mb-0" id="techResSkipped">0</h3>
+                                    <small class="text-muted">Übersprungen</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card border-primary">
+                                <div class="card-body py-3">
+                                    <h3 class="text-primary mb-0" id="techResTotal">0</h3>
+                                    <small class="text-muted">Gesamt</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-3" id="techResPathBox" style="display:none;">
+                        <label class="form-label fw-bold"><i class="fas fa-folder me-1"></i> Download-Ordner</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="techResPath" readonly>
+                        </div>
+                    </div>
+                    <div class="mb-3" id="techResExcelBox" style="display:none;">
+                        <label class="form-label fw-bold"><i class="fas fa-file-excel me-1"></i> Mapping-Datei</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="techResExcel" readonly>
+                        </div>
+                    </div>
+                    <div id="techResErrors" class="d-none">
+                        <label class="form-label fw-bold text-danger"><i class="fas fa-exclamation-triangle me-1"></i> Fehler</label>
+                        <ul class="list-group" id="techResErrorList"></ul>
+                    </div>
                 </div>
             </div>
         </div>

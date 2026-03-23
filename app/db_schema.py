@@ -345,6 +345,47 @@ CREATE TABLE dbo.migration_wave_plan (
 );
 """
 
+CREATE_TECH_MATERIAL_STAGING_TABLE = """
+CREATE TABLE dbo.tech_material_staging (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    batch_id VARCHAR(50) NOT NULL,
+    created_at DATETIME2 DEFAULT GETUTCDATE(),
+    created_by VARCHAR(100),
+
+    -- Source document keys (from uploaded Excel)
+    source_dokar VARCHAR(3),
+    source_doknr VARCHAR(25),
+    source_dokvr VARCHAR(2),
+    source_doktl VARCHAR(3),
+    source_dokob VARCHAR(10),
+    source_obzae VARCHAR(6),
+    source_objky VARCHAR(100),
+
+    -- Enriched from DIL
+    source_description NVARCHAR(255),
+    filename NVARCHAR(255),
+    file_size_bytes BIGINT,
+    loio_id VARCHAR(100),
+    ablage VARCHAR(10) DEFAULT 'KPRO',
+    has_file BIT DEFAULT 0,
+    source_document_status VARCHAR(20),
+
+    -- All object links for this document (JSON array)
+    source_object_links NVARCHAR(MAX),
+    source_link_count INT DEFAULT 0,
+
+    -- Migration status
+    status VARCHAR(20) DEFAULT 'pending',
+    error_message NVARCHAR(MAX),
+    migrated_at DATETIME2,
+
+    INDEX idx_tech_batch_id (batch_id),
+    INDEX idx_tech_doknr (source_doknr),
+    INDEX idx_tech_dokob (source_dokob),
+    INDEX idx_tech_status (status)
+);
+"""
+
 CREATE_QM_MATERIAL_STAGING_TABLE = """
 CREATE TABLE dbo.qm_material_staging (
     id INT IDENTITY(1,1) PRIMARY KEY,
@@ -895,3 +936,16 @@ def init_staging_tables(engine):
                     con.execute(text(f"ALTER TABLE dbo.qm_material_staging ADD {col} {typedef}"))
                     print(f"[DB_INIT] Added column {col} to qm_material_staging")
             print("[DB_INIT] qm_material_staging table already exists")
+
+        # Check and create tech_material_staging table
+        check_tech = text("""
+        SELECT COUNT(*) as cnt
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'tech_material_staging'
+        """)
+        result = con.execute(check_tech).fetchone()
+        if result[0] == 0:
+            con.execute(text(CREATE_TECH_MATERIAL_STAGING_TABLE))
+            print("[DB_INIT] Created tech_material_staging table")
+        else:
+            print("[DB_INIT] tech_material_staging table already exists")

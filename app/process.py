@@ -292,6 +292,12 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
             'sap-language': 'DE',  # SAP-specific language header
             'X-CSRF-Token': sys_ctx['x_csrf_token']
         }
+    try:
+        sap_client = cfg.get(sap_system, 'client')
+    except Exception:
+        sap_client = None
+    if sap_client:
+        header_dict['sap-client'] = str(sap_client)
     server_session.headers.update(header_dict)
 
 

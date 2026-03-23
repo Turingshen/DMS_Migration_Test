@@ -1,18 +1,22 @@
 /**
  * tech_material.js — TECH Material workflow logic
- * Handles: file upload, data review, migration execution, results
+ * Handles: file upload → preview → DIL enrichment → staging review
  */
 (function () {
     'use strict';
 
     // ── State ──────────────────────────────────────────────────────
     let currentStep = 1;
-    let uploadedData = [];
-    let columns = [];
+    let uploadedFilename = '';
+    let previewData = [];
+    let stagedData = [];
+    let stagedColumns = [];
+    let currentBatchId = '';
 
     // ── Init ───────────────────────────────────────────────────────
     $(document).ready(function () {
         initUploadZone();
+        loadBatches();
         if (typeof I18n !== 'undefined') I18n.applyAll();
     });
 
@@ -48,66 +52,155 @@
         });
     }
 
+    // Step 1: Upload & parse → show preview
     function handleFile(file) {
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('workflow', 'tech_material');
 
         $('#techFileName').text(file.name);
         $('#techFileInfo').removeClass('d-none');
 
         $.ajax({
-            url: '/api/material/upload',
+            url: '/api/tech-material/upload',
             type: 'POST',
             data: formData,
             processData: false,
             contentType: false,
             success: function (resp) {
                 if (resp.ok) {
-                    uploadedData = resp.data || [];
-                    columns = resp.columns || [];
-                    $('#techFileRows').text(uploadedData.length + ' Zeilen');
-                    updateKpis();
-                    buildTable();
-                    setStep(2);
+                    uploadedFilename = resp.filename;
+                    previewData = resp.preview || [];
+                    $('#techFileRows').text(resp.total + ' Zeilen');
+                    buildPreviewTable(resp.columns, previewData);
+                    updateUploadKpis(resp.total, previewData);
+                    // Show save button
+                    $('#techSaveBtn').removeClass('d-none');
                 } else {
                     alert(resp.error || 'Upload fehlgeschlagen');
                 }
             },
-            error: function () {
-                alert('Upload fehlgeschlagen');
+            error: function (xhr) {
+                const msg = xhr.responseJSON ? xhr.responseJSON.error : 'Upload fehlgeschlagen';
+                alert(msg);
             }
         });
     }
 
-    window.techClearFile = function () {
-        uploadedData = [];
-        columns = [];
-        $('#techFileInfo').addClass('d-none');
-        $('#techFileInput').val('');
-        setStep(1);
-        updateKpis();
+    // Step 2: Save to staging + DIL enrichment
+    window.techSaveAndEnrich = function () {
+        if (!uploadedFilename) { alert('Bitte erst eine Datei hochladen'); return; }
+
+        $('#techSaveBtn').prop('disabled', true).html(
+            '<span class="spinner-border spinner-border-sm me-1"></span>DIL-Abfrage läuft…'
+        );
+
+        $.ajax({
+            url: '/api/tech-material/save',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ filename: uploadedFilename }),
+            success: function (resp) {
+                $('#techSaveBtn').prop('disabled', false).html(
+                    '<i class="bi bi-check-circle me-1"></i>Speichern & Anreichern'
+                );
+                if (resp.ok) {
+                    currentBatchId = resp.batch_id;
+                    stagedData = resp.data || [];
+                    stagedColumns = resp.columns || [];
+
+                    // Show enrichment messages
+                    if (resp.enrich_errors && resp.enrich_errors.length > 0) {
+                        let msg = 'Hinweise:\n' + resp.enrich_errors.join('\n');
+                        alert(msg);
+                    }
+
+                    buildStagedTable(stagedColumns, stagedData);
+                    updateStagedKpis(stagedData, resp.total);
+                    setStep(2);
+                    loadBatches();
+                } else {
+                    alert(resp.error || 'Speichern fehlgeschlagen');
+                }
+            },
+            error: function (xhr) {
+                $('#techSaveBtn').prop('disabled', false).html(
+                    '<i class="bi bi-check-circle me-1"></i>Speichern & Anreichern'
+                );
+                const msg = xhr.responseJSON ? xhr.responseJSON.error : 'Speichern fehlgeschlagen';
+                alert(msg);
+            }
+        });
     };
 
-    // ── Table ──────────────────────────────────────────────────────
-    function buildTable() {
+    window.techClearFile = function () {
+        uploadedFilename = '';
+        previewData = [];
+        stagedData = [];
+        stagedColumns = [];
+        currentBatchId = '';
+        $('#techFileInfo').addClass('d-none');
+        $('#techFileInput').val('');
+        $('#techSaveBtn').addClass('d-none');
+        $('#techTableHead').empty();
+        $('#techTableBody').empty();
+        setStep(1);
+        updateUploadKpis(0, []);
+    };
+
+    // ── Preview table (after upload, before save) ──────────────────
+    function buildPreviewTable(cols, data) {
         const head = $('#techTableHead');
         const body = $('#techTableBody');
         head.empty();
         body.empty();
 
-        if (columns.length === 0) return;
+        if (!cols || cols.length === 0) return;
 
-        // Header
         let hrow = '<th>#</th>';
-        columns.forEach(function (c) { hrow += '<th>' + escHtml(c) + '</th>'; });
+        cols.forEach(function (c) { hrow += '<th>' + escHtml(c) + '</th>'; });
         head.html(hrow);
 
-        // Rows
-        uploadedData.forEach(function (row, idx) {
+        data.forEach(function (row, idx) {
             let tr = '<tr><td>' + (idx + 1) + '</td>';
-            columns.forEach(function (c) {
+            cols.forEach(function (c) {
                 tr += '<td>' + escHtml(row[c] || '') + '</td>';
+            });
+            tr += '</tr>';
+            body.append(tr);
+        });
+    }
+
+    // ── Staged table (after DIL enrichment) ────────────────────────
+    function buildStagedTable(cols, data) {
+        const head = $('#techTableHead');
+        const body = $('#techTableBody');
+        head.empty();
+        body.empty();
+
+        if (!cols || cols.length === 0) return;
+
+        let hrow = '<th>#</th>';
+        cols.forEach(function (c) { hrow += '<th>' + escHtml(c) + '</th>'; });
+        head.html(hrow);
+
+        data.forEach(function (row, idx) {
+            let tr = '<tr><td>' + (idx + 1) + '</td>';
+            cols.forEach(function (c) {
+                let val = row[c] || '';
+                // Shorten long JSON for display
+                if (c === 'Objektlinks' && val.length > 60) {
+                    val = val.substring(0, 57) + '…';
+                }
+                // Color-code status
+                if (c === 'Status') {
+                    const cls = val === 'done' ? 'text-success' : val === 'error' ? 'text-danger' : 'text-muted';
+                    tr += '<td class="' + cls + '">' + escHtml(val) + '</td>';
+                } else if (c === 'Datei?') {
+                    const cls = val === 'Ja' ? 'text-success' : 'text-warning';
+                    tr += '<td class="' + cls + '">' + escHtml(val) + '</td>';
+                } else {
+                    tr += '<td>' + escHtml(val) + '</td>';
+                }
             });
             tr += '</tr>';
             body.append(tr);
@@ -122,35 +215,174 @@
         });
     }
 
-    // ── KPI update ─────────────────────────────────────────────────
-    function updateKpis() {
-        const total = uploadedData.length;
-        const materials = new Set(uploadedData.map(function (r) { return r['Material'] || r['material'] || ''; })).size;
-        const plants = new Set(uploadedData.map(function (r) { return r['Plnt'] || r['Plant'] || r['Werk'] || ''; })).size;
+    // ── KPIs ───────────────────────────────────────────────────────
+    function updateUploadKpis(total, data) {
+        const docs = new Set(data.map(function (r) { return r['DOKNR'] || ''; })).size;
+        const types = new Set(data.map(function (r) { return r['DOKAR'] || ''; })).size;
         $('#techKpiTotal').text(total);
-        $('#techKpiMaterials').text(materials);
-        $('#techKpiPlants').text(plants);
-        $('#techKpiPending').text(total);
+        $('#techKpiDocuments').text(docs);
+        $('#techKpiTypes').text(types);
+        $('#techKpiWithFile').text('-');
         $('#techKpiDone').text(0);
         $('#techKpiFailed').text(0);
     }
 
-    // ── Execute migration ──────────────────────────────────────────
-    window.techStartMigration = function () {
-        setStep(3);
-        $('#techProgressBar').removeClass('d-none');
-        // Placeholder – will be connected to backend API
-        let pct = 0;
-        const iv = setInterval(function () {
-            pct += 5;
-            if (pct > 100) pct = 100;
-            $('#techProgress').css('width', pct + '%').text(pct + '%');
-            if (pct >= 100) {
-                clearInterval(iv);
-                setTimeout(function () { setStep(4); }, 500);
+    function updateStagedKpis(data, total) {
+        const withFile = data.filter(function (r) { return r['Datei?'] === 'Ja'; }).length;
+        const done = data.filter(function (r) { return r['Status'] === 'done'; }).length;
+        const errors = data.filter(function (r) { return r['Status'] === 'error'; }).length;
+        const docs = new Set(data.map(function (r) { return r['DOKNR'] || ''; })).size;
+        const types = new Set(data.map(function (r) { return r['DOKAR'] || ''; })).size;
+        $('#techKpiTotal').text(total);
+        $('#techKpiDocuments').text(docs);
+        $('#techKpiTypes').text(types);
+        $('#techKpiWithFile').text(withFile);
+        $('#techKpiDone').text(done);
+        $('#techKpiFailed').text(errors);
+    }
+
+    // ── Batch history ──────────────────────────────────────────────
+    function loadBatches() {
+        $.getJSON('/api/tech-material/batches', function (resp) {
+            if (!resp.ok) return;
+            const list = $('#techBatchList');
+            list.empty();
+            if (resp.batches.length === 0) {
+                list.html('<li class="list-group-item text-muted">Keine Batches vorhanden</li>');
+                return;
             }
-        }, 200);
+            resp.batches.forEach(function (b) {
+                const dt = b.created_at ? new Date(b.created_at).toLocaleString('de-DE') : '';
+                list.append(
+                    '<li class="list-group-item d-flex justify-content-between align-items-center" ' +
+                    'style="cursor:pointer" onclick="techLoadBatch(\'' + escHtml(b.batch_id) + '\')">' +
+                    '<div><strong>' + escHtml(b.batch_id) + '</strong><br>' +
+                    '<small class="text-muted">' + dt + ' — ' + escHtml(b.created_by || '') + '</small></div>' +
+                    '<div class="text-end">' +
+                    '<span class="badge bg-secondary">' + b.total + ' Zeilen</span> ' +
+                    '<span class="badge bg-info">' + b.documents + ' Docs</span> ' +
+                    '<span class="badge bg-success">' + b.with_file + ' m. Datei</span>' +
+                    '</div></li>'
+                );
+            });
+        });
+    }
+
+    window.techLoadBatch = function (batchId) {
+        $.getJSON('/api/tech-material/data/' + encodeURIComponent(batchId), function (resp) {
+            if (!resp.ok) { alert('Fehler beim Laden'); return; }
+            currentBatchId = batchId;
+            stagedData = resp.data || [];
+            stagedColumns = resp.columns || [];
+            buildStagedTable(stagedColumns, stagedData);
+            updateStagedKpis(stagedData, resp.total);
+            setStep(2);
+        });
     };
+
+    // ── Execute: Start download ──────────────────────────────────
+    let _techPollTimer = null;
+
+    window.techStartDownload = function () {
+        const dlPath = ($('#techDownloadPath').val() || '').trim();
+        if (!dlPath) {
+            alert('Bitte einen Speicherpfad angeben.');
+            return;
+        }
+        if (!currentBatchId) {
+            alert('Kein Batch ausgewählt.');
+            return;
+        }
+
+        $('#techBtnExecute').prop('disabled', true);
+        $('#techDownloadPath').prop('readonly', true);
+        $('#techExecProgress').removeClass('d-none');
+        $('#techCurrentDoc').text('Starte Download…');
+
+        $.ajax({
+            url: '/api/tech-material/execute',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ batch_id: currentBatchId, download_path: dlPath }),
+            success: function (resp) {
+                if (!resp.ok) {
+                    alert(resp.error || 'Fehler');
+                    _resetExecuteUI();
+                    return;
+                }
+                _techPollTimer = setInterval(function () {
+                    _pollTechProgress(currentBatchId);
+                }, 2000);
+            },
+            error: function (xhr) {
+                const msg = (xhr.responseJSON || {}).error || 'Server-Fehler';
+                alert(msg);
+                _resetExecuteUI();
+            }
+        });
+    };
+
+    function _pollTechProgress(batchId) {
+        $.getJSON('/api/tech-material/execute/progress/' + encodeURIComponent(batchId), function (resp) {
+            if (!resp.ok) return;
+            const total = resp.total || 0;
+            const done = resp.done || 0;
+            const failed = resp.failed || 0;
+            const skipped = resp.skipped || 0;
+            const pct = total > 0 ? Math.round(((done + failed) / total) * 100) : 0;
+
+            $('#techProgress').css('width', pct + '%').text(pct + '%');
+            $('#techStatDone').text(done);
+            $('#techStatFailed').text(failed);
+            $('#techStatSkipped').text(skipped);
+            $('#techStatTotal').text(total);
+            if (resp.current_doc) {
+                $('#techCurrentDoc').text('Aktuell: ' + resp.current_doc);
+            }
+
+            if (resp.status === 'done' || resp.status === 'error') {
+                clearInterval(_techPollTimer);
+                _techPollTimer = null;
+                _showTechResults(resp);
+            }
+        });
+    }
+
+    function _showTechResults(resp) {
+        // Fill result panel
+        $('#techResDone').text(resp.done || 0);
+        $('#techResFailed').text(resp.failed || 0);
+        $('#techResSkipped').text(resp.skipped || 0);
+        $('#techResTotal').text(resp.total || 0);
+
+        if (resp.download_path) {
+            $('#techResPath').val(resp.download_path);
+            $('#techResPathBox').show();
+        }
+        if (resp.excel_path) {
+            $('#techResExcel').val(resp.excel_path);
+            $('#techResExcelBox').show();
+        }
+
+        var errList = resp.errors || [];
+        if (errList.length > 0) {
+            var $ul = $('#techResErrorList').empty();
+            errList.forEach(function (e) {
+                $ul.append('<li class="list-group-item list-group-item-danger small">' + escHtml(e) + '</li>');
+            });
+            $('#techResErrors').removeClass('d-none');
+        } else {
+            $('#techResErrors').addClass('d-none');
+        }
+
+        setStep(4);
+        _resetExecuteUI();
+    }
+
+    function _resetExecuteUI() {
+        $('#techBtnExecute').prop('disabled', false);
+        $('#techDownloadPath').prop('readonly', false);
+    }
 
     // ── Helpers ────────────────────────────────────────────────────
     function escHtml(s) {

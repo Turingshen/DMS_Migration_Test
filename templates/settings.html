@@ -137,6 +137,9 @@
                         <button class="btn btn-sm btn-light float-right" onclick="loadCredentials()">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
                         </button>
+                        <button class="btn btn-sm btn-success float-right mr-2" onclick="toggleNewCredForm()">
+                            <i class="fas fa-plus"></i> Neues System
+                        </button>
                     </h5>
                 </div>
                 <div class="card-body">
@@ -145,6 +148,71 @@
                         Bei OAuth-Systemen können optional Credentials für den Direktzugang hinterlegt werden.
                         Die Passwörter werden verschlüsselt in der Datenbank gespeichert.
                     </p>
+
+                    <!-- Add New System Form (hidden by default) -->
+                    <div id="newCredForm" class="card border-success mb-3" style="display: none;">
+                        <div class="card-header bg-success text-white py-2">
+                            <strong><i class="fas fa-plus-circle"></i> Neues System hinzufügen</strong>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-row">
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-server"></i> System-ID</label>
+                                        <input type="text" class="form-control" id="new-cred-sid"
+                                               placeholder="z.B. zvn_200" maxlength="50"
+                                               pattern="[a-zA-Z0-9_]{2,50}">
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-tag"></i> Beschreibung</label>
+                                        <input type="text" class="form-control" id="new-cred-desc"
+                                               placeholder="z.B. Mercury – ZVN (Prod)" maxlength="200">
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-globe"></i> Host</label>
+                                        <input type="text" class="form-control" id="new-cred-host"
+                                               placeholder="z.B. zvfr3.basf.net">
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-user"></i> Benutzername</label>
+                                        <input type="text" class="form-control" id="new-cred-user"
+                                               placeholder="SAP User" autocomplete="off">
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-lock"></i> Passwort</label>
+                                        <input type="password" class="form-control" id="new-cred-pass"
+                                               placeholder="Passwort" autocomplete="new-password">
+                                    </div>
+                                </div>
+                                <div class="col-md-1">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-building"></i> Mandant</label>
+                                        <input type="text" class="form-control" id="new-cred-client"
+                                               placeholder="100" maxlength="3" pattern="[0-9]{3}">
+                                    </div>
+                                </div>
+                                <div class="col-md-1 d-flex align-items-end">
+                                    <div class="form-group mb-0 w-100">
+                                        <button class="btn btn-success mr-1" onclick="saveNewCredential()" title="Speichern">
+                                            <i class="fas fa-save"></i>
+                                        </button>
+                                        <button class="btn btn-outline-secondary" onclick="toggleNewCredForm()" title="Abbrechen">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="new-cred-result"></div>
+                        </div>
+                    </div>
                     
                     <div id="credentialsLoading" class="text-center py-3">
                         <i class="fas fa-spinner fa-spin fa-2x"></i>
@@ -169,7 +237,7 @@
             <div class="card">
                 <div class="card-header bg-success text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-server"></i> <span data-i18n="set.sys.title">SAP Systeme verwalten</span>
+                        <i class="fas fa-server"></i> <span data-i18n="set.sys.title">API-Endpunkte konfigurieren</span>
                         <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
                         </button>
@@ -180,7 +248,7 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted" data-i18n="set.sys.info">
-                        SAP-Systeme und deren API-Endpunkte konfigurieren. 
+                        API-Endpunkte konfigurieren. 
                         <strong>YAML</strong> liefert die Defaults, <strong>DB-Einträge</strong> haben Vorrang.
                         Neue Systeme werden in der Datenbank gespeichert.
                     </p>

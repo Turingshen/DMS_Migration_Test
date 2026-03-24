@@ -498,6 +498,7 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                 """), {'bid': batch_id}).fetchall()
             else:
                 # Include 'done' records that have a source_file but need upload (when dir_path given)
+                # Also include 'error' records where container was created but upload failed
                 if dir_path:
                     rows = con.execute(text("""
                         SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
@@ -505,7 +506,11 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                                ISNULL(file_uploaded, 0) AS file_uploaded,
                                qinf_material, qinf_zaehl
                         FROM dbo.qm_material_staging
-                        WHERE batch_id = :bid AND (status = 'pending' OR (status = 'done' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0))
+                        WHERE batch_id = :bid AND (
+                            status = 'pending'
+                            OR (status = 'done' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0)
+                            OR (status = 'error' AND target_doknr IS NOT NULL AND target_doknr <> '' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0)
+                        )
                         ORDER BY id
                     """), {'bid': batch_id}).fetchall()
                 else:
@@ -514,7 +519,10 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                                target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
                                qinf_material, qinf_zaehl
                         FROM dbo.qm_material_staging
-                        WHERE batch_id = :bid AND status = 'pending'
+                        WHERE batch_id = :bid AND (
+                            status = 'pending'
+                            OR (status = 'error' AND target_doknr IS NOT NULL AND target_doknr <> '')
+                        )
                         ORDER BY id
                     """), {'bid': batch_id}).fetchall()
 
@@ -591,6 +599,25 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                         prepare_session_headers(server_session, session_snapshot, target_system)
                         server_session.headers.update({'Content-Type': 'application/json'})
                         resp = server_session.post(create_url, json=payload, timeout=30)
+
+                    # Fallback: if QINF link fails (26/285 = only one doc link allowed),
+                    # retry without the QINF link so the container is still created
+                    if resp.status_code == 400 and 'to_ProductObj' in payload:
+                        try:
+                            err_body = resp.json()
+                            err_code = err_body.get('error', {}).get('code', '')
+                        except Exception:
+                            err_code = ''
+                        if '26/285' in err_code or 'nur eine Dokumentverknüpfung' in resp.text:
+                            logger.warning(f"[QM_EXEC] Record {rec_id}: QINF already linked, retrying without QINF link", category="QM_CREATE")
+                            payload_no_qinf = {k: v for k, v in payload.items() if k != 'to_ProductObj'}
+                            server_session.headers.update({'Content-Type': 'application/json'})
+                            resp = server_session.post(create_url, json=payload_no_qinf, timeout=30)
+                            if is_csrf_error(resp):
+                                force_csrf_renewal(session_snapshot, target_system)
+                                prepare_session_headers(server_session, session_snapshot, target_system)
+                                server_session.headers.update({'Content-Type': 'application/json'})
+                                resp = server_session.post(create_url, json=payload_no_qinf, timeout=30)
 
                     if resp.status_code not in (200, 201):
                         err_text = resp.text[:500] if resp.text else resp.reason

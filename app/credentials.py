@@ -41,13 +41,16 @@ def decrypt(token: str) -> str:
     return f.decrypt(token.encode('utf-8')).decode('utf-8')
 
 
-def save_credentials(system_id: str, username: str, password: str, updated_by: str = 'system'):
+def save_credentials(system_id: str, username: str, password: str, updated_by: str = 'system', sap_client: str = None, description: str = None, host: str = None):
     """Save encrypted credentials for a SAP system.
     
     Upserts (inserts or updates) the credentials in dbo.sap_credentials.
+    If password is empty and the entry already exists, the existing password is kept.
+    sap_client: optional 3-digit SAP Mandant (e.g. '100', '200').
+    description: optional custom system description.
+    host: optional hostname for direct connections (e.g. 'zvfr3.basf.net').
     """
     enc_user = encrypt(username)
-    enc_pass = encrypt(password)
 
     with misc_engine.begin() as con:
         # Check if entry already exists
@@ -57,27 +60,37 @@ def save_credentials(system_id: str, username: str, password: str, updated_by: s
         ).fetchone()
 
         if existing:
-            con.execute(text("""
-                UPDATE dbo.sap_credentials 
-                SET username_enc = :user, password_enc = :pw, 
-                    updated_at = GETUTCDATE(), updated_by = :by
-                WHERE system_id = :sid
-            """), {'user': enc_user, 'pw': enc_pass, 'by': updated_by, 'sid': system_id})
+            if password:
+                enc_pass = encrypt(password)
+                con.execute(text("""
+                    UPDATE dbo.sap_credentials 
+                    SET username_enc = :user, password_enc = :pw, sap_client = :client,
+                        description = :desc, host = :host, updated_at = GETUTCDATE(), updated_by = :by
+                    WHERE system_id = :sid
+                """), {'user': enc_user, 'pw': enc_pass, 'client': sap_client, 'desc': description, 'host': host, 'by': updated_by, 'sid': system_id})
+            else:
+                con.execute(text("""
+                    UPDATE dbo.sap_credentials 
+                    SET username_enc = :user, sap_client = :client,
+                        description = :desc, host = :host, updated_at = GETUTCDATE(), updated_by = :by
+                    WHERE system_id = :sid
+                """), {'user': enc_user, 'client': sap_client, 'desc': description, 'host': host, 'by': updated_by, 'sid': system_id})
         else:
+            enc_pass = encrypt(password)
             con.execute(text("""
-                INSERT INTO dbo.sap_credentials (system_id, username_enc, password_enc, updated_by)
-                VALUES (:sid, :user, :pw, :by)
-            """), {'sid': system_id, 'user': enc_user, 'pw': enc_pass, 'by': updated_by})
+                INSERT INTO dbo.sap_credentials (system_id, username_enc, password_enc, sap_client, description, host, updated_by)
+                VALUES (:sid, :user, :pw, :client, :desc, :host, :by)
+            """), {'sid': system_id, 'user': enc_user, 'pw': enc_pass, 'client': sap_client, 'desc': description, 'host': host, 'by': updated_by})
 
 
 def get_credentials(system_id: str) -> dict | None:
     """Retrieve decrypted credentials for a SAP system.
     
-    Returns {'username': ..., 'password': ...} or None if not found.
+    Returns {'username': ..., 'password': ..., 'sap_client': ...} or None if not found.
     """
     with misc_engine.connect() as con:
         row = con.execute(
-            text("SELECT username_enc, password_enc FROM dbo.sap_credentials WHERE system_id = :sid"),
+            text("SELECT username_enc, password_enc, sap_client FROM dbo.sap_credentials WHERE system_id = :sid"),
             {'sid': system_id}
         ).fetchone()
 
@@ -86,7 +99,8 @@ def get_credentials(system_id: str) -> dict | None:
 
     return {
         'username': decrypt(row[0]),
-        'password': decrypt(row[1])
+        'password': decrypt(row[1]),
+        'sap_client': row[2] or None
     }
 
 
@@ -107,7 +121,7 @@ def get_credential_info(system_id: str) -> dict | None:
     """
     with misc_engine.connect() as con:
         row = con.execute(text("""
-            SELECT username_enc, updated_at, updated_by 
+            SELECT username_enc, updated_at, updated_by, sap_client, description, host 
             FROM dbo.sap_credentials 
             WHERE system_id = :sid
         """), {'sid': system_id}).fetchone()
@@ -118,7 +132,10 @@ def get_credential_info(system_id: str) -> dict | None:
     return {
         'username': decrypt(row[0]),
         'updated_at': row[1].isoformat() if row[1] else None,
-        'updated_by': row[2]
+        'updated_by': row[2],
+        'sap_client': row[3] or None,
+        'description': row[4] or None,
+        'host': row[5] or None
     }
 
 
@@ -155,3 +172,28 @@ def list_all_sap_systems() -> list[dict]:
                 'auth_type': value.get('auth_type', 'oauth'),
             })
     return systems
+
+
+def list_db_only_credentials(known_ids: list[str]) -> list[dict]:
+    """Return credential rows whose system_id is NOT in *known_ids*.
+
+    These are "custom" systems created purely through the credentials UI.
+    """
+    with misc_engine.connect() as con:
+        rows = con.execute(text(
+            "SELECT system_id, username_enc, updated_at, updated_by, sap_client, description, host "
+            "FROM dbo.sap_credentials"
+        )).fetchall()
+    result = []
+    for r in rows:
+        if r[0] not in known_ids:
+            result.append({
+                'system_id': r[0],
+                'username': decrypt(r[1]),
+                'updated_at': r[2].isoformat() if r[2] else None,
+                'updated_by': r[3],
+                'sap_client': r[4] or None,
+                'description': r[5] or None,
+                'host': r[6] or None,
+            })
+    return result

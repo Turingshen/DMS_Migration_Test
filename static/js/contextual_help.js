@@ -93,7 +93,7 @@
                     content: '<b>Max API Workers</b> (1–50): Anzahl paralleler API-Aufrufe. Mehr = schneller, aber höhere Last auf dem Zielsystem.\n\n<b>Pacing</b> (Sekunden): Verzögerung zwischen API-Aufrufen.\n• <b>0 = Dynamisch</b> (empfohlen): Passt die Verzögerung automatisch an die Dateigröße an\n• Fester Wert: Konstante Verzögerung'
                 },
                 {
-                    title: 'SAP-Systeme verwalten',
+                    title: 'API-Endpunkte konfigurieren',
                     content: 'Fügen Sie Quellsysteme (R/3) und Zielsysteme (S/4HANA) hinzu:\n• <b>System-ID</b>: Eindeutiger Kurzname (z.B. „zv1", „s4qual")\n• <b>Typ</b>: R3 (Quelle) oder S4 (Ziel)\n• <b>Auth-Typ</b>: OAuth oder Basic Auth\n• <b>API-Endpunkte</b>: URLs für die verschiedenen APIs (Metadata, Download, Upload, Link)'
                 },
                 {

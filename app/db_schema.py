@@ -266,6 +266,9 @@ CREATE TABLE dbo.sap_credentials (
     system_id VARCHAR(50) NOT NULL UNIQUE,   -- e.g. 'zvfr3'
     username_enc NVARCHAR(500) NOT NULL,     -- Fernet-encrypted username
     password_enc NVARCHAR(500) NOT NULL,     -- Fernet-encrypted password
+    sap_client VARCHAR(3),                   -- SAP Mandant (e.g. '100', '200')
+    description NVARCHAR(200),               -- Custom system description (overrides config label)
+    host VARCHAR(255),                       -- Hostname for test connection (e.g. 'zvfr3.basf.net')
     updated_at DATETIME2 DEFAULT GETUTCDATE(),
     updated_by VARCHAR(100),
     
@@ -435,8 +438,8 @@ CREATE TABLE dbo.qm_material_staging (
 
     -- Target system (ZVF)
     target_dokar VARCHAR(3),
-    target_dokvr VARCHAR(2),
-    target_doktl VARCHAR(3),
+    target_dokvr VARCHAR(2) DEFAULT '00',
+    target_doktl VARCHAR(3) DEFAULT '000',
     target_description NVARCHAR(255),
     target_doknr VARCHAR(25),
 
@@ -764,6 +767,53 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created sap_credentials table")
         else:
             print("[DB_INIT] sap_credentials table already exists")
+
+        # Ensure sap_client column exists (added for Mandant support)
+        try:
+            con.execute(text("""
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='sap_credentials' AND COLUMN_NAME='sap_client'
+                ) ALTER TABLE dbo.sap_credentials ADD sap_client VARCHAR(3) NULL
+            """))
+            print("[DB_INIT] Ensured sap_credentials has sap_client column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add sap_client column: {e}")
+
+        # Ensure description column exists (custom system description)
+        try:
+            con.execute(text("""
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='sap_credentials' AND COLUMN_NAME='description'
+                ) ALTER TABLE dbo.sap_credentials ADD description NVARCHAR(200) NULL
+            """))
+            print("[DB_INIT] Ensured sap_credentials has description column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add description column: {e}")
+
+        # Migrate zvm_100_uat → zvn_100_uat (system key rename)
+        try:
+            con.execute(text("""
+                UPDATE dbo.sap_credentials 
+                SET system_id = 'zvn_100_uat' 
+                WHERE system_id = 'zvm_100_uat'
+            """))
+            print("[DB_INIT] Migrated zvm_100_uat -> zvn_100_uat in sap_credentials")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not migrate zvm_100_uat: {e}")
+
+        # Ensure host column exists (for custom system test connections)
+        try:
+            con.execute(text("""
+                IF NOT EXISTS (
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='sap_credentials' AND COLUMN_NAME='host'
+                ) ALTER TABLE dbo.sap_credentials ADD host VARCHAR(255) NULL
+            """))
+            print("[DB_INIT] Ensured sap_credentials has host column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add host column: {e}")
 
         # Check and create sap_systems table
         check_sap_systems = text("""

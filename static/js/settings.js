@@ -188,9 +188,11 @@ function loadCredentials() {
                     ? '<span class="badge badge-success"><i class="fas fa-check"></i> ' + t('set.cred.configured') + '</span>'
                     : '<span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> ' + t('set.cred.not_configured') + '</span>';
                 
-                const typeBadge = sys.system_type === 'R3'
-                    ? '<span class="badge badge-info ml-1">R/3 Source</span>'
-                    : '<span class="badge badge-primary ml-1">S/4 Target</span>';
+                const typeBadge = sys.is_custom
+                    ? '<span class="badge badge-warning ml-1">Benutzerdefiniert</span>'
+                    : sys.system_type === 'R3'
+                        ? '<span class="badge badge-info ml-1">R/3 Source</span>'
+                        : '<span class="badge badge-primary ml-1">S/4 Target</span>';
                 
                 const authBadge = sys.auth_type === 'basic'
                     ? '<span class="badge badge-dark ml-1">Basic Auth</span>'
@@ -198,6 +200,8 @@ function loadCredentials() {
                 
                 const userInfo = sys.has_credentials
                     ? `<span class="text-muted">${t('set.cred.user')} <strong>${sys.username}</strong></span>
+                       ${sys.sap_client ? '<span class="text-muted ml-3">Mandant <strong>' + sys.sap_client + '</strong></span>' : ''}
+                       ${sys.host ? '<span class="text-muted ml-3">Host <strong>' + sys.host + '</strong></span>' : ''}
                        <span class="text-muted ml-3">${t('set.cred.updated_at')} ${sys.updated_at ? new Date(sys.updated_at).toLocaleString('de-DE') : '-'}</span>
                        <span class="text-muted ml-3">${t('set.cred.updated_by')} ${sys.updated_by || '-'}</span>`
                     : '<span class="text-muted">' + t('set.cred.none') + '</span>';
@@ -207,7 +211,7 @@ function loadCredentials() {
                         <span>
                             <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
                             ${typeBadge}${authBadge}
-                            <small class="text-muted ml-2">${sys.system_label}</small>
+                            <small class="text-muted ml-2">${sys.description || sys.system_label}</small>
                         </span>
                         ${statusBadge}
                     </div>
@@ -215,8 +219,28 @@ function loadCredentials() {
                         <div class="mb-2">${userInfo}</div>
                         
                         <div id="cred-form-${sys.system_id}" style="display: none;">
+                            <div class="form-row mb-2">
+                                <div class="${sys.is_custom ? 'col-md-6' : 'col-md-12'}">
+                                    <div class="form-group mb-1">
+                                        <label><i class="fas fa-tag"></i> Beschreibung</label>
+                                        <input type="text" class="form-control" id="cred-desc-${sys.system_id}" 
+                                               value="${sys.description || sys.system_label}" 
+                                               maxlength="200" placeholder="${sys.system_label}">
+                                    </div>
+                                </div>
+                                ${sys.is_custom ? `
+                                <div class="col-md-6">
+                                    <div class="form-group mb-1">
+                                        <label><i class="fas fa-globe"></i> Host</label>
+                                        <input type="text" class="form-control" id="cred-host-${sys.system_id}" 
+                                               value="${sys.host || ''}" 
+                                               placeholder="z.B. zvfr3.basf.net">
+                                    </div>
+                                </div>
+                                ` : ''}
+                            </div>
                             <div class="form-row">
-                                <div class="col-md-4">
+                                <div class="col-md-3">
                                     <div class="form-group">
                                         <label><i class="fas fa-user"></i> ${t('set.cred.username')}</label>
                                         <input type="text" class="form-control" id="cred-user-${sys.system_id}" 
@@ -224,12 +248,22 @@ function loadCredentials() {
                                                placeholder="${t('set.cred.ph_example')}" autocomplete="off">
                                     </div>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-md-3">
                                     <div class="form-group">
                                         <label><i class="fas fa-lock"></i> ${t('set.cred.password')}</label>
                                         <input type="password" class="form-control" id="cred-pass-${sys.system_id}" 
                                                placeholder="${sys.has_credentials ? t('set.cred.password_unchanged') : t('set.cred.password_enter')}" 
                                                autocomplete="new-password">
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="form-group">
+                                        <label><i class="fas fa-building"></i> Mandant</label>
+                                        <input type="text" class="form-control" id="cred-client-${sys.system_id}" 
+                                               value="${sys.sap_client || sys.config_client || '100'}" 
+                                               maxlength="3" pattern="[0-9]{3}"
+                                               placeholder="100"
+                                               ${sys.system_type === 'R3' ? 'disabled' : ''}>
                                     </div>
                                 </div>
                                 <div class="col-md-4 d-flex align-items-end">
@@ -295,20 +329,31 @@ function toggleCredForm(systemId) {
 function saveCredential(systemId) {
     const username = document.getElementById('cred-user-' + systemId).value.trim();
     const password = document.getElementById('cred-pass-' + systemId).value;
+    const clientEl = document.getElementById('cred-client-' + systemId);
+    const sapClient = clientEl && !clientEl.disabled ? clientEl.value.trim() : null;
+    const descEl = document.getElementById('cred-desc-' + systemId);
+    const description = descEl ? descEl.value.trim() : null;
+    const hostEl = document.getElementById('cred-host-' + systemId);
+    const host = hostEl ? hostEl.value.trim() : null;
     
     if (!username) {
         alert(t('set.cred.required'));
         return;
     }
-    if (!password) {
-        alert(t('set.cred.password_required'));
+    if (sapClient !== null && !/^[0-9]{3}$/.test(sapClient)) {
+        alert('Mandant muss 3-stellig numerisch sein (z.B. 100)');
         return;
     }
+    
+    const payload = { system_id: systemId, username: username, password: password };
+    if (sapClient !== null) payload.sap_client = sapClient;
+    if (description) payload.description = description;
+    if (host) payload.host = host;
     
     fetch('/credentials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system_id: systemId, username: username, password: password })
+        body: JSON.stringify(payload)
     })
     .then(response => response.json())
     .then(data => {
@@ -336,9 +381,12 @@ function testCredential(systemId) {
         .then(data => {
             if (data.success) {
                 resultEl.innerHTML = '<div class="alert alert-success mt-2"><i class="fas fa-check-circle"></i> ' + data.message + 
-                    (data.csrf_token_received ? ' ' + t('set.cred.csrf_received') : '') + '</div>';
+                    (data.csrf_token_received ? ' ' + t('set.cred.csrf_received') : '') +
+                    (data.details ? '<br><small class="text-muted">' + data.details + '</small>' : '') + '</div>';
             } else {
-                resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times-circle"></i> ' + data.error + '</div>';
+                resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times-circle"></i> ' + data.error +
+                    (data.details ? '<br><small class="text-muted">' + data.details + '</small>' : '') +
+                    (data.body ? '<br><small class="text-muted text-break">' + data.body.substring(0, 200) + '</small>' : '') + '</div>';
             }
         })
         .catch(error => {
@@ -359,6 +407,74 @@ function deleteCredential(systemId) {
             }
         })
         .catch(error => alert(t('error_prefix') + error));
+}
+
+// ─── New System Credential ──────────────────────────────────────────
+
+function toggleNewCredForm() {
+    const form = document.getElementById('newCredForm');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    document.getElementById('new-cred-result').innerHTML = '';
+}
+
+function saveNewCredential() {
+    const sid   = document.getElementById('new-cred-sid').value.trim().toLowerCase();
+    const desc  = document.getElementById('new-cred-desc').value.trim();
+    const host  = document.getElementById('new-cred-host').value.trim();
+    const user  = document.getElementById('new-cred-user').value.trim();
+    const pass  = document.getElementById('new-cred-pass').value;
+    const client = document.getElementById('new-cred-client').value.trim();
+    const resultEl = document.getElementById('new-cred-result');
+
+    if (!sid || !/^[a-zA-Z0-9_]{2,50}$/.test(sid)) {
+        resultEl.innerHTML = '<div class="alert alert-danger mt-2">System-ID ist erforderlich (Buchstaben, Ziffern, _, 2-50 Zeichen)</div>';
+        return;
+    }
+    if (!user) {
+        resultEl.innerHTML = '<div class="alert alert-danger mt-2">Benutzername ist erforderlich</div>';
+        return;
+    }
+    if (!pass) {
+        resultEl.innerHTML = '<div class="alert alert-danger mt-2">Passwort ist erforderlich</div>';
+        return;
+    }
+    if (client && !/^[0-9]{3}$/.test(client)) {
+        resultEl.innerHTML = '<div class="alert alert-danger mt-2">Mandant muss 3-stellig numerisch sein (z.B. 100)</div>';
+        return;
+    }
+
+    const payload = { system_id: sid, username: user, password: pass };
+    if (client) payload.sap_client = client;
+    if (desc)   payload.description = desc;
+    if (host)   payload.host = host;
+
+    fetch('/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            resultEl.innerHTML = '<div class="alert alert-success mt-2"><i class="fas fa-check"></i> ' + data.message + '</div>';
+            // Clear form
+            document.getElementById('new-cred-sid').value = '';
+            document.getElementById('new-cred-desc').value = '';
+            document.getElementById('new-cred-host').value = '';
+            document.getElementById('new-cred-user').value = '';
+            document.getElementById('new-cred-pass').value = '';
+            document.getElementById('new-cred-client').value = '';
+            setTimeout(() => {
+                toggleNewCredForm();
+                loadCredentials();
+            }, 1200);
+        } else {
+            resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times"></i> ' + data.error + '</div>';
+        }
+    })
+    .catch(err => {
+        resultEl.innerHTML = '<div class="alert alert-danger mt-2"><i class="fas fa-times"></i> ' + err + '</div>';
+    });
 }
 
 // ─── SAP System Management ──────────────────────────────────────────

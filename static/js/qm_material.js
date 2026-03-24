@@ -42,6 +42,32 @@
         $('#qmPanelReview').toggleClass('d-none', step !== 2);
         $('#qmPanelExecute').toggleClass('d-none', step !== 3);
         $('#qmPanelResult').toggleClass('d-none', step !== 4);
+
+        // When navigating to Step 4 directly, load results from DB
+        if (step === 4 && currentBatchId) {
+            _loadResultsFromDB();
+        }
+    }
+
+    function _loadResultsFromDB() {
+        $.getJSON('/api/qm-material/data/' + currentBatchId + '?page=1&per_page=' + perPage, function (resp) {
+            if (resp.ok) {
+                var data = resp.data || [];
+                uploadedData = data;
+                totalRecords = resp.total || 0;
+                // Compute KPIs from data
+                var doneCount = 0, errorCount = 0;
+                data.forEach(function (r) {
+                    if (r.status === 'done') doneCount++;
+                    else if (r.status === 'error') errorCount++;
+                });
+                $('#qmResTotal').text(data.length);
+                $('#qmResDone').text(doneCount);
+                $('#qmResFailed').text(errorCount);
+                updateKpis();
+                _buildResultTable(data);
+            }
+        });
     }
 
     // ── Upload zone ────────────────────────────────────────────────
@@ -236,10 +262,14 @@
 
         if (cols.length === 0) return;
 
+        // Filter out columns shown separately (status, error_message)
+        var hideCols = ['status', 'error_message'];
+        var visibleCols = cols.filter(function (c) { return hideCols.indexOf(c) === -1; });
+
         // Header with select-all checkbox
         var hrow = '<th><input type="checkbox" id="qmSelectAll"></th><th>#</th>';
-        cols.forEach(function (c) { hrow += '<th>' + escHtml(c) + '</th>'; });
-        hrow += '<th>Status</th>';
+        visibleCols.forEach(function (c) { hrow += '<th>' + escHtml(c) + '</th>'; });
+        hrow += '<th>Status</th><th>Fehler</th>';
         head.html(hrow);
 
         data.forEach(function (row, idx) {
@@ -247,13 +277,17 @@
             var status = row['status'] || row['Status'] || 'pending';
             var checked = selectedRecords[rowId] ? 'checked' : '';
             var statusBadge = _statusBadge(status);
+            var errMsg = row['error_message'] || '';
+            var errBadge = errMsg
+                ? '<span class="badge badge-danger" style="cursor:pointer;" onclick="qmShowError(this)" data-error="' + escAttr(errMsg) + '"><i class="fas fa-exclamation-circle"></i> Detail</span>'
+                : '<span class="badge badge-light">–</span>';
             var tr = '<tr data-id="' + rowId + '">' +
                 '<td><input type="checkbox" class="qm-row-cb" value="' + rowId + '" ' + checked + '></td>' +
                 '<td>' + (idx + 1) + '</td>';
-            cols.forEach(function (c) {
+            visibleCols.forEach(function (c) {
                 tr += '<td>' + escHtml(row[c] || '') + '</td>';
             });
-            tr += '<td>' + statusBadge + '</td></tr>';
+            tr += '<td>' + statusBadge + '</td><td>' + errBadge + '</td></tr>';
             body.append(tr);
         });
 
@@ -415,34 +449,15 @@
     }
 
     function _showResults(execResult) {
-        // Update result KPIs
+        // Update result KPIs from execution data
         $('#qmResTotal').text(execResult.total || 0);
         $('#qmResDone').text(execResult.done || 0);
         $('#qmResFailed').text(execResult.failed || 0);
 
-        // Show errors if any
-        var errDiv = $('#qmResultErrors');
-        errDiv.empty();
-        var errors = execResult.errors || [];
-        if (errors.length > 0) {
-            var html = '<div class="alert alert-danger"><strong>Fehler:</strong><ul class="mb-0">';
-            errors.forEach(function (e) {
-                html += '<li>ID ' + e.id + ': ' + escHtml(e.error) + '</li>';
-            });
-            html += '</ul></div>';
-            errDiv.html(html);
-        }
+        // Clear top-level error block (errors are shown inline per row now)
+        $('#qmResultErrors').empty();
 
-        // Reload data from DB and show result table
-        $.getJSON('/api/qm-material/data/' + currentBatchId + '?page=1&per_page=' + perPage, function (resp) {
-            if (resp.ok) {
-                uploadedData = resp.data || [];
-                totalRecords = resp.total || 0;
-                updateKpis();
-                _buildResultTable(resp.data || []);
-            }
-        });
-
+        // setStep(4) will trigger _loadResultsFromDB automatically
         setStep(4);
     }
 
@@ -452,8 +467,8 @@
         head.empty();
         body.empty();
 
-        var cols = ['material', 'vendor', 'cocd', 'plnt', 'source_file', 'target_dokar', 'target_dokvr', 'target_doktl', 'target_description', 'target_doknr', 'qinf_material', 'qinf_zaehl', 'file_uploaded', 'status', 'error_message'];
-        var labels = ['Material', 'Vendor', 'CoCd', 'Plnt', 'Datei', 'Typ', 'Ver.', 'Teil', 'Beschreibung', 'DOKNR (Ziel)', 'QINF Material', 'QINF Zähler', 'Datei hochgeladen', 'Status', 'Fehler'];
+        var cols = ['material', 'vendor', 'cocd', 'plnt', 'source_file', 'target_dokar', 'target_doknr', 'target_dokvr', 'target_doktl', 'target_description', 'qinf_material', 'qinf_zaehl', 'file_uploaded', 'status', 'error_message'];
+        var labels = ['Material', 'Vendor', 'CoCd', 'Plnt', 'Datei', 'Typ', 'DOKNR (Ziel)', 'Ver.', 'Teil', 'Beschreibung', 'QINF Material', 'QINF Zähler', 'Datei hochgeladen', 'Status', 'Fehler'];
 
         var hrow = '<th>#</th>';
         labels.forEach(function (l) { hrow += '<th>' + l + '</th>'; });
@@ -467,7 +482,14 @@
                 var val = row[c] || '';
                 if (c === 'status') val = _statusBadge(val);
                 else if (c === 'file_uploaded') val = (val === '1' || val === 'True' || val === true || val === 1) ? '<span class="badge badge-success">Ja</span>' : '<span class="badge badge-secondary">Nein</span>';
-                else if (c === 'error_message' && val.length > 80) val = '<span title="' + escHtml(val) + '">' + escHtml(val.substring(0, 80)) + '...</span>';
+                else if (c === 'error_message') {
+                    if (val) {
+                        val = '<span class="badge badge-danger" style="cursor:pointer;" onclick="qmShowError(this)" data-error="' + escAttr(val) + '">' +
+                              '<i class="fas fa-exclamation-circle"></i> Detail</span>';
+                    } else {
+                        val = '<span class="badge badge-light">–</span>';
+                    }
+                }
                 else val = escHtml(val);
                 tr += '<td>' + val + '</td>';
             });
@@ -491,6 +513,19 @@
         d.appendChild(document.createTextNode(s));
         return d.innerHTML;
     }
+
+    function escAttr(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    window.qmShowError = function (el) {
+        var msg = $(el).attr('data-error') || '';
+        $('#qmErrorModalBody').html(
+            '<pre class="alert alert-danger mb-0" style="white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;">' +
+            escHtml(msg) + '</pre>'
+        );
+        $('#qmErrorModal').modal('show');
+    };
 
     window.qmSetStep = setStep;
     window.qmStartMigration = window.qmExecuteAll;

@@ -228,6 +228,16 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
                     'X-CSRF-Token': 'fetch',
                     'Accept': 'application/json'
                 }
+                # Add sap-client to CSRF request: DB value > config fallback
+                _csrf_client = None
+                try:
+                    _csrf_client = cfg.get(sap_system, 'client')
+                except Exception:
+                    pass
+                if creds and creds.get('sap_client'):
+                    _csrf_client = creds['sap_client']
+                if _csrf_client:
+                    headers['sap-client'] = str(_csrf_client)
                 base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
                 csrf_resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
             else:
@@ -296,6 +306,9 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
         sap_client = cfg.get(sap_system, 'client')
     except Exception:
         sap_client = None
+    # DB credential sap_client takes priority over config
+    if is_basic and creds and creds.get('sap_client'):
+        sap_client = creds['sap_client']
     if sap_client:
         header_dict['sap-client'] = str(sap_client)
     server_session.headers.update(header_dict)

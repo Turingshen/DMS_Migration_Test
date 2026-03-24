@@ -52,19 +52,19 @@
 
     <!-- Workflow Step Indicator -->
     <div class="workflow-steps">
-        <div class="workflow-step active" id="qmStep1">
+        <div class="workflow-step active" id="qmStep1" onclick="qmSetStep(1)">
             <span class="step-num">1</span> <span data-i18n="qm.wf.step1">Daten hochladen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="qmStep2">
+        <div class="workflow-step" id="qmStep2" onclick="qmSetStep(2)">
             <span class="step-num">2</span> <span data-i18n="qm.wf.step2">Prüfen & Zuordnen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="qmStep3">
+        <div class="workflow-step" id="qmStep3" onclick="qmSetStep(3)">
             <span class="step-num">3</span> <span data-i18n="qm.wf.step3">Migration ausführen</span>
         </div>
         <i class="fas fa-chevron-right workflow-arrow"></i>
-        <div class="workflow-step" id="qmStep4">
+        <div class="workflow-step" id="qmStep4" onclick="qmSetStep(4)">
             <span class="step-num">4</span> <span data-i18n="qm.wf.step4">Ergebnis & Bericht</span>
         </div>
     </div>
@@ -369,6 +369,23 @@
         </div>
     </div>
 
+</div>
+
+<!-- Error Detail Modal -->
+<div class="modal fade" id="qmErrorModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white py-2">
+                <h5 class="modal-title"><i class="fas fa-exclamation-triangle"></i> Fehlerdetails</h5>
+                <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body" id="qmErrorModalBody">
+            </div>
+            <div class="modal-footer py-2">
+                <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">Schließen</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 {% endblock %}

@@ -116,12 +116,16 @@ def pacing_stats():
 def get_credentials_list():
     """List all SAP systems and their credential status."""
     try:
-        from app.credentials import list_all_sap_systems, get_credential_info
+        from app.credentials import list_all_sap_systems, get_credential_info, list_db_only_credentials
         systems = list_all_sap_systems()
         result = []
+        known_ids = [s['system_id'] for s in systems]
         for sys_info in systems:
             sid = sys_info['system_id']
             info = get_credential_info(sid)
+            # Config default for client
+            config_client = cfg.config_env.get(sid, {}).get('client')
+            config_host = cfg.config_env.get(sid, {}).get('host')
             entry = {
                 'system_id': sid,
                 'system_label': sys_info['system_label'],
@@ -131,8 +135,31 @@ def get_credentials_list():
                 'username': info['username'] if info else None,
                 'updated_at': info['updated_at'] if info else None,
                 'updated_by': info['updated_by'] if info else None,
+                'sap_client': info['sap_client'] if info and info.get('sap_client') else config_client,
+                'config_client': config_client,
+                'description': info['description'] if info and info.get('description') else sys_info['system_label'],
+                'host': info['host'] if info and info.get('host') else config_host,
+                'is_custom': False,
             }
             result.append(entry)
+
+        # Include custom systems that exist only in the credentials DB
+        for cust in list_db_only_credentials(known_ids):
+            result.append({
+                'system_id': cust['system_id'],
+                'system_label': cust['description'] or cust['system_id'],
+                'system_type': 'custom',
+                'auth_type': 'basic',
+                'has_credentials': True,
+                'username': cust['username'],
+                'updated_at': cust['updated_at'],
+                'updated_by': cust['updated_by'],
+                'sap_client': cust['sap_client'],
+                'config_client': None,
+                'description': cust['description'] or cust['system_id'],
+                'host': cust['host'],
+                'is_custom': True,
+            })
         return jsonify({'success': True, 'systems': result})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -147,17 +174,29 @@ def save_credentials():
         system_id = data.get('system_id', '').strip()
         username = data.get('username', '').strip()
         password = data.get('password', '')
+        sap_client = (data.get('sap_client') or '').strip() or None
+        description = (data.get('description') or '').strip() or None
+        host = (data.get('host') or '').strip() or None
 
-        if not system_id or not username or not password:
-            return jsonify({'success': False, 'error': 'system_id, username and password are required'}), 400
+        # Validate sap_client: must be 3-digit numeric or empty
+        if sap_client and (len(sap_client) != 3 or not sap_client.isdigit()):
+            return jsonify({'success': False, 'error': 'Mandant muss 3-stellig numerisch sein (z.B. 100, 200)'}), 400
 
-        # Verify system exists in config
-        known_ids = [s['system_id'] for s in list_all_sap_systems()]
-        if system_id not in known_ids:
-            return jsonify({'success': False, 'error': f'{system_id} is not a known SAP system'}), 400
+        if not system_id or not username:
+            return jsonify({'success': False, 'error': 'system_id und username sind erforderlich'}), 400
+
+        # system_id: allow config systems and custom (DB-only) IDs
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]{2,50}$', system_id):
+            return jsonify({'success': False, 'error': 'System-ID darf nur Buchstaben, Ziffern und _ enthalten (2-50 Zeichen)'}), 400
+
+        # Password required for new entries, optional for updates
+        from app.credentials import has_credentials
+        if not password and not has_credentials(system_id):
+            return jsonify({'success': False, 'error': 'Passwort ist für neue Einträge erforderlich'}), 400
 
         updated_by = session.get('fullName', session.get('preferred_username', 'unknown'))
-        _save(system_id, username, password, updated_by)
+        _save(system_id, username, password, updated_by, sap_client=sap_client, description=description, host=host)
 
         return jsonify({'success': True, 'message': f'Credentials for {system_id} saved'})
     except Exception as e:
@@ -182,38 +221,68 @@ def delete_credentials(system_id):
 def test_credentials(system_id):
     """Test credentials by attempting a CSRF token fetch against the ZV system."""
     try:
-        from app.credentials import get_credentials, list_basic_auth_systems
+        from app.credentials import get_credentials, get_credential_info, list_basic_auth_systems, has_credentials
         import requests as req_lib
 
-        if system_id not in list_basic_auth_systems():
-            return jsonify({'success': False, 'error': f'{system_id} is not a Basic Auth system'}), 400
+        is_basic = system_id in list_basic_auth_systems()
+        is_custom = not is_basic and has_credentials(system_id)
+
+        if not is_basic and not is_custom:
+            return jsonify({'success': False, 'error': f'{system_id} ist kein bekanntes System'}), 400
 
         creds = get_credentials(system_id)
         if not creds:
-            return jsonify({'success': False, 'error': 'No credentials stored for this system'}), 404
+            return jsonify({'success': False, 'error': 'Keine Zugangsdaten für dieses System hinterlegt'}), 404
 
-        # Try fetching a CSRF token with Basic Auth
-        base_url = cfg.get(system_id, 'api_list', 'document', 'base_url')
-        verify_ssl = cfg.get(system_id, 'verify_ssl') if 'verify_ssl' in cfg.config_env.get(system_id, {}) else True
+        # Determine base_url and verify_ssl
+        if is_basic:
+            # Config system: read from YAML
+            base_url = cfg.get(system_id, 'api_list', 'document', 'base_url')
+            verify_ssl = cfg.get(system_id, 'verify_ssl') if 'verify_ssl' in cfg.config_env.get(system_id, {}) else True
+        else:
+            # Custom system: derive URL from host stored in DB
+            info = get_credential_info(system_id)
+            host = info.get('host') if info else None
+            if not host:
+                return jsonify({'success': False, 'error': 'Kein Host hinterlegt – bitte Host-Feld ausfüllen'}), 400
+            base_url = f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
+            verify_ssl = False
+
+        test_headers = {'X-CSRF-Token': 'Fetch', 'Accept': 'application/json'}
+        # Add sap-client header: DB value > config fallback
+        sap_client = creds.get('sap_client') or cfg.config_env.get(system_id, {}).get('client')
+        if sap_client:
+            test_headers['sap-client'] = str(sap_client)
 
         resp = req_lib.get(
             base_url,
             auth=(creds['username'], creds['password']),
-            headers={'X-CSRF-Token': 'Fetch', 'Accept': 'application/json'},
+            headers=test_headers,
             verify=verify_ssl,
             timeout=15
         )
+        diag = f"URL: {base_url} | User: {creds['username']}"
+        if sap_client:
+            diag += f" | Mandant: {sap_client}"
         if resp.status_code == 200:
             csrf = resp.headers.get('x-csrf-token', '')
             return jsonify({
                 'success': True,
-                'message': f'Connection successful (HTTP {resp.status_code})',
-                'csrf_token_received': bool(csrf)
+                'message': f'Verbindung erfolgreich (HTTP {resp.status_code})',
+                'csrf_token_received': bool(csrf),
+                'details': diag
             })
         else:
+            body_hint = ''
+            try:
+                body_hint = resp.text[:300] if resp.text else ''
+            except Exception:
+                pass
             return jsonify({
                 'success': False,
-                'error': f'HTTP {resp.status_code} {resp.reason}'
+                'error': f'HTTP {resp.status_code} {resp.reason}',
+                'details': diag,
+                'body': body_hint
             }), 200  # return 200 so frontend gets the JSON
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

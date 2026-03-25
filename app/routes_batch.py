@@ -672,8 +672,8 @@ def refresh_batch_data_stream(batch_id):
                     # Translation was applied - preserve it
                     sanitized, _ = _sanitize_doknr(current_tgt_str)
                     if sanitized and sanitized.strip():
-                        return current_tgt_nr, sanitized
-                    return current_tgt_nr, current_tgt_str[:25]
+                        return sanitized, sanitized
+                    return current_tgt_str[:25], current_tgt_str[:25]
                 
                 # PRIORITY 2: Determine based on VALUE (not document type)
                 # - Numeric source → Internal numbering (SAP generates number)
@@ -687,7 +687,7 @@ def refresh_batch_data_stream(batch_id):
                         tgt_nr = source_nr[:25]
                         sanitized, _ = _sanitize_doknr(tgt_nr)
                         if sanitized and sanitized.strip():
-                            return tgt_nr, sanitized
+                            return sanitized, sanitized
                         return tgt_nr, tgt_nr
                 
                 return None, None

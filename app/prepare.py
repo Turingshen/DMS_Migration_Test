@@ -758,6 +758,12 @@ def enrich_with_metadata(data_df, session_snapshot=None):
                      (data_df['target_documentnumber_sanitized'] != data_df['target_documentnumber'])).sum()
     print(f"[PREPARE] target_documentnumber_sanitized: {changed_count} values changed by sanitization")
     
+    # Overwrite target_documentnumber with sanitized value so the user sees the actual key
+    if changed_count > 0:
+        mask = data_df['target_documentnumber_sanitized'].notna()
+        data_df.loc[mask, 'target_documentnumber'] = data_df.loc[mask, 'target_documentnumber_sanitized']
+        print(f"[PREPARE] Updated target_documentnumber with sanitized values for {changed_count} records")
+    
     # Clean up any duplicate columns (can occur from multiple merges)
     if data_df.columns.duplicated().any():
         # Keep only first occurrence of each column

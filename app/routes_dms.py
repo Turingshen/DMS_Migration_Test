@@ -780,21 +780,23 @@ def create_dms_migration_batch_stream():
             if exclusion_keys:
                 before_count = len(dms_df)
                 
-                # Build mask: keep rows where (dokob, objky) is NOT in exclusion keys
-                def is_excluded(row):
-                    dk = str(row.get('dokob', '')).strip().upper()
-                    ok = str(row.get('objky', '')).strip()
-                    return dk in exclusion_keys and ok in exclusion_keys[dk]
+                # Build a flat set of (DOKOB_upper, OBJKY) tuples for O(1) lookup
+                excl_tuples = set()
+                for dk, keys in exclusion_keys.items():
+                    for k in keys:
+                        excl_tuples.add((dk, k))
                 
-                excl_mask = dms_df.apply(is_excluded, axis=1)
+                # Vectorised: build composite key and check membership
+                dokob_upper = dms_df['dokob'].astype(str).str.strip().str.upper()
+                objky_str = dms_df['objky'].astype(str).str.strip()
+                excl_mask = pd.array([
+                    (d, o) in excl_tuples for d, o in zip(dokob_upper, objky_str)
+                ], dtype='boolean')
                 
                 # Count excluded per DOKOB
                 if excl_mask.any():
-                    excluded_rows = dms_df[excl_mask]
-                    for dk in excluded_rows['dokob'].unique():
-                        dk_upper = str(dk).strip().upper()
-                        cnt = int((excluded_rows['dokob'] == dk).sum())
-                        excluded_per_dokob[dk_upper] = cnt
+                    excluded_dokobs = dokob_upper[excl_mask]
+                    excluded_per_dokob = excluded_dokobs.value_counts().to_dict()
                 
                 dms_df = dms_df[~excl_mask].reset_index(drop=True)
                 excluded_count = before_count - len(dms_df)
@@ -958,23 +960,26 @@ def create_dms_migration_batch_stream():
                 
                 # Persist exclusion keys to DB (for later reference / re-download)
                 if exclusion_keys:
+                    excl_rows = []
                     for dk, keys_set in exclusion_keys.items():
                         descs = excl_descriptions.get(dk, {})
                         for objky_val in keys_set:
-                            try:
-                                con.execute(text("""
-                                    INSERT INTO dbo.migration_exclusion_keys
-                                        (batch_id, dokob, objky, label, excluded_by)
-                                    VALUES (:batch_id, :dokob, :objky, :label, :user)
-                                """), {
-                                    'batch_id': batch_id,
-                                    'dokob': dk,
-                                    'objky': objky_val,
-                                    'label': descs.get(objky_val),
-                                    'user': current_user
-                                })
-                            except Exception:
-                                pass  # Skip duplicate keys silently
+                            excl_rows.append({
+                                'batch_id': batch_id,
+                                'dokob': dk,
+                                'objky': objky_val,
+                                'label': descs.get(objky_val),
+                                'excluded_by': current_user
+                            })
+                    if excl_rows:
+                        excl_df = pd.DataFrame(excl_rows)
+                        excl_df.to_sql(
+                            'migration_exclusion_keys',
+                            con,
+                            schema='dbo',
+                            if_exists='append',
+                            index=False
+                        )
             
             # Clean up temp exclusion file
             if os.path.exists(temp_excl_path):

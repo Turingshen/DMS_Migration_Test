@@ -15,6 +15,7 @@ import requests
 import threading
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote as _url_quote
 from sqlalchemy import text
 from flask import session as http_session
 
@@ -54,12 +55,29 @@ from app.process import (
     read_sap_system,
     write_sap_system,
     get_source_system,
-    get_target_system
+    get_target_system,
+    get_api_base_url
 )
 from app.logger import get_logger
 from app.prepare import load_object_mappings, apply_object_mappings_for_batch
 
 cfg = Config.load()
+
+
+def _odata_doc_key(doc_type, doc_number, doc_version, doc_part):
+    """Build URL-safe OData key predicate for a Document Info Record.
+
+    SAP CHAR(25) DOKNR fields may contain internal spaces (e.g.
+    'CB_EQ_1   000000000000001').  These MUST be percent-encoded
+    when used inside OData URL key predicates.
+    """
+    q = lambda v: _url_quote(str(v), safe='')
+    return (
+        f"DocumentInfoRecordDocType='{q(doc_type)}',"
+        f"DocumentInfoRecordDocNumber='{q(doc_number)}',"
+        f"DocumentInfoRecordDocVersion='{q(doc_version)}',"
+        f"DocumentInfoRecordDocPart='{q(doc_part)}'"
+    )
 
 
 def load_batch_dokob_filter(batch_id):
@@ -769,7 +787,7 @@ def warmup_api(session_snapshot, first_loio_id=None):
             # Try to warm up target API
             try:
                 prepare_session_headers(warmup_session, session_snapshot, target_system)
-                target_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                target_base_url = get_api_base_url(target_system, 'document')
                 if target_base_url:
                     resp = warmup_session.get(target_base_url, timeout=10)
                     results.append({
@@ -964,7 +982,8 @@ def load_approved_records(batch_id):
             target_document_status,
             filename,
             file_size_bytes,
-            skip_migration
+            skip_migration,
+            pers_resp_source
         FROM dbo.migration_staging
         WHERE batch_id = '{batch_id}'
             AND skip_migration = 0
@@ -1005,7 +1024,8 @@ def load_specific_records(batch_id, record_ids):
             filename,
             file_size_bytes,
             skip_migration,
-            ISNULL(container_created, 0) as container_created
+            ISNULL(container_created, 0) as container_created,
+            pers_resp_source
         FROM dbo.migration_staging
         WHERE batch_id = '{batch_id}'
             AND id IN ({ids_str})
@@ -1407,19 +1427,43 @@ def _download_one_file(file_index, document, session_snapshot, source_system, st
     }
 
 
-def _patch_responsible_person(session, create_resp_d, source_user, staging_id, misc_engine, logger):
+def _patch_responsible_person(session, create_resp_d, source_user, staging_id, misc_engine, logger,
+                              doc_type=None, doc_number=None, doc_version=None, doc_part=None, target_system=None):
     """PATCH the created document to set ResponsiblePersonName (SAP ignores it on POST)."""
     if not source_user or not source_user.strip():
+        logger.debug("No pers_resp_source value — skip ResponsiblePersonName PATCH", category="CREATE")
         return
     try:
+        # Prefer entity URI from CREATE response metadata
         entity_uri = create_resp_d.get('__metadata', {}).get('uri', '')
+        # Fallback: build the URI ourselves if __metadata is missing
         if not entity_uri:
-            logger.debug("No entity URI in CREATE response — skip ResponsiblePersonName PATCH", category="CREATE")
+            if doc_type and doc_number and doc_version is not None and doc_part is not None:
+                base_url = get_api_base_url(target_system, 'document') if target_system else None
+                if base_url:
+                    entity_uri = (
+                        f"{base_url}/A_DocumentInfoRecord("
+                        f"DocumentInfoRecordDocType='{doc_type}',"
+                        f"DocumentInfoRecordDocNumber='{_odata_doc_key(doc_number)}',"
+                        f"DocumentInfoRecordDocVersion='{doc_version}',"
+                        f"DocumentInfoRecordDocPart='{doc_part}')"
+                    )
+                    logger.debug(f"Built ResponsiblePerson PATCH URI from doc keys (no __metadata in response)", category="CREATE")
+        if not entity_uri:
+            logger.warning("No entity URI for ResponsiblePersonName PATCH — cannot set responsible person", category="CREATE")
             return
+        # SAP requires If-Match header (ETag) for PATCH on this entity
+        etag = create_resp_d.get('__metadata', {}).get('etag', '')
+        patch_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        if etag:
+            patch_headers['If-Match'] = etag
+        else:
+            # Wildcard: accept any version (some SAP systems require this)
+            patch_headers['If-Match'] = '*'
         patch_resp = session.patch(
             entity_uri,
             json={'ResponsiblePersonName': source_user.strip()},
-            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+            headers=patch_headers,
             timeout=30,
         )
         if patch_resp.status_code in (200, 204):
@@ -1428,9 +1472,9 @@ def _patch_responsible_person(session, create_resp_d, source_user, staging_id, m
                 con.execute(text("UPDATE dbo.migration_staging SET pers_resp_target = :v WHERE id = :sid"),
                             {'v': source_user.strip(), 'sid': staging_id})
         else:
-            logger.warning(f"ResponsiblePersonName PATCH {patch_resp.status_code}: {patch_resp.text[:200]}", category="CREATE")
+            logger.warning(f"ResponsiblePersonName PATCH {patch_resp.status_code}: {patch_resp.text[:300]}", category="CREATE")
     except Exception as e:
-        logger.debug(f"Could not PATCH ResponsiblePersonName: {e}", category="CREATE")
+        logger.warning(f"Could not PATCH ResponsiblePersonName: {e}", category="CREATE")
 
 
 def _patch_url_description(session, upload_resp, file_description, logger):
@@ -1471,17 +1515,15 @@ def _upload_one_file(file_index, content, filename, mime_type,
     ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
 
     try:
-        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+        attachment_base_url = get_api_base_url(target_system, 'attachment')
     except Exception:
-        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+        attachment_base_url = get_api_base_url(target_system, 'document')
 
+    doc_key = _odata_doc_key(doc_type, doc_number, doc_version, doc_part)
     attachment_url = (
         f"{attachment_base_url}/A_DocumentInfoRecordAttch"
-        f"(DocumentInfoRecordDocType='{doc_type}',"
-        f"DocumentInfoRecordDocNumber='{doc_number}',"
-        f"DocumentInfoRecordDocVersion='{doc_version}',"
-        f"DocumentInfoRecordDocPart='{doc_part}'"
-        f")/DocumentInfoRecordToAttachmentNavigation"
+        f"({doc_key})"
+        f"/DocumentInfoRecordToAttachmentNavigation"
     )
 
     upload_content = content or b' '
@@ -2030,7 +2072,7 @@ def execute_single_document(staging_record, session_snapshot):
                     if len(effective_description) > MAX_DESC_LEN:
                         effective_description = effective_description[:MAX_DESC_LEN]
                     
-                    doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    doc_base_url = get_api_base_url(target_system, 'document')
                     create_url = f"{doc_base_url}/A_DocumentInfoRecord"
                     server_session.headers.update({'Content-Type': 'application/json'})
                     
@@ -2111,7 +2153,9 @@ def execute_single_document(staging_record, session_snapshot):
                             con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
                         logger.info(f"WEB document container created: {doc_number}", category="CREATE")
                         
-                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
+                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger,
+                                                  doc_type=doc_type, doc_number=doc_number, doc_version=doc_version,
+                                                  doc_part=doc_part, target_system=target_system)
                     else:
                         error_info = _extract_error_fields(create_resp)
                         error_msg = f"CREATE_FAIL_{create_resp.status_code}"
@@ -2126,17 +2170,15 @@ def execute_single_document(staging_record, session_snapshot):
                     server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
                     
                     try:
-                        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+                        attachment_base_url = get_api_base_url(target_system, 'attachment')
                     except Exception:
-                        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                        attachment_base_url = get_api_base_url(target_system, 'document')
                     
+                    doc_key = _odata_doc_key(doc_type, doc_number, doc_version, doc_part)
                     attachment_url = (
                         f"{attachment_base_url}/A_DocumentInfoRecordAttch"
-                        f"(DocumentInfoRecordDocType='{doc_type}',"
-                        f"DocumentInfoRecordDocNumber='{doc_number}',"
-                        f"DocumentInfoRecordDocVersion='{doc_version}',"
-                        f"DocumentInfoRecordDocPart='{doc_part}'"
-                        f")/DocumentInfoRecordToAttachmentNavigation"
+                        f"({doc_key})"
+                        f"/DocumentInfoRecordToAttachmentNavigation"
                     )
                     
                     logger.info(f"Uploading URL reference: {filename} ({len(url_content)} bytes)", category="UPLOAD")
@@ -2247,7 +2289,7 @@ def execute_single_document(staging_record, session_snapshot):
                     if len(effective_description) > MAX_DESC_LEN:
                         effective_description = effective_description[:MAX_DESC_LEN]
                     
-                    doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    doc_base_url = get_api_base_url(target_system, 'document')
                     create_url = f"{doc_base_url}/A_DocumentInfoRecord"
                     server_session.headers.update({'Content-Type': 'application/json'})
                     
@@ -2327,7 +2369,9 @@ def execute_single_document(staging_record, session_snapshot):
                         with misc_engine.begin() as con:
                             con.execute(text("UPDATE dbo.migration_staging SET container_created = 1 WHERE id = :sid"), {'sid': staging_id})
                         
-                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
+                        _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger,
+                                                  doc_type=doc_type, doc_number=doc_number, doc_version=doc_version,
+                                                  doc_part=doc_part, target_system=target_system)
                         logger.info(f"{link_type} document container created: {doc_number}", category="CREATE")
                     else:
                         error_info = _extract_error_fields(create_resp)
@@ -2343,17 +2387,15 @@ def execute_single_document(staging_record, session_snapshot):
                     server_session.headers.update({'Content-Type': 'application/octet-stream', 'Slug': slug_filename})
                     
                     try:
-                        attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+                        attachment_base_url = get_api_base_url(target_system, 'attachment')
                     except Exception:
-                        attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                        attachment_base_url = get_api_base_url(target_system, 'document')
                     
+                    doc_key = _odata_doc_key(doc_type, doc_number, doc_version, doc_part)
                     attachment_url = (
                         f"{attachment_base_url}/A_DocumentInfoRecordAttch"
-                        f"(DocumentInfoRecordDocType='{doc_type}',"
-                        f"DocumentInfoRecordDocNumber='{doc_number}',"
-                        f"DocumentInfoRecordDocVersion='{doc_version}',"
-                        f"DocumentInfoRecordDocPart='{doc_part}'"
-                        f")/DocumentInfoRecordToAttachmentNavigation"
+                        f"({doc_key})"
+                        f"/DocumentInfoRecordToAttachmentNavigation"
                     )
                     
                     logger.info(f"Uploading {link_type} shortcut: {filename} ({len(url_content)} bytes)", category="UPLOAD")
@@ -2527,7 +2569,7 @@ def execute_single_document(staging_record, session_snapshot):
                     logger.info(f"No description available, using filename: '{effective_description}'", category="CREATE")
                 
                 # Create payload
-                doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                doc_base_url = get_api_base_url(target_system, 'document')
                 create_url = f"{doc_base_url}/A_DocumentInfoRecord"
                 server_session.headers.update({'Content-Type': 'application/json'})
                 
@@ -2706,7 +2748,9 @@ def execute_single_document(staging_record, session_snapshot):
                             WHERE id = :staging_id
                         """), {'staging_id': staging_id})
                     
-                    _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger)
+                    _patch_responsible_person(server_session, resp_d, source_user, staging_id, misc_engine, logger,
+                                              doc_type=doc_type, doc_number=doc_number, doc_version=doc_version,
+                                              doc_part=doc_part, target_system=target_system)
                     
                     # NOTE: Object Link creation is now Phase 2 (execute_linking)
                     # Phase 1 only creates the container and uploads files
@@ -2755,20 +2799,18 @@ def execute_single_document(staging_record, session_snapshot):
                 server_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
                 
                 try:
-                    attachment_base_url = cfg.get(target_system, 'api_list', 'attachment', 'base_url')
+                    attachment_base_url = get_api_base_url(target_system, 'attachment')
                 except Exception:
-                    attachment_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
+                    attachment_base_url = get_api_base_url(target_system, 'document')
                 
                 # Use doc_type/doc_number/doc_version/doc_part set before the file loop
                 # and potentially updated by CREATE response. Never re-read from staging_record!
                 
+                doc_key = _odata_doc_key(doc_type, doc_number, doc_version, doc_part)
                 attachment_url = (
                     f"{attachment_base_url}/A_DocumentInfoRecordAttch"
-                    f"(DocumentInfoRecordDocType='{doc_type}',"
-                    f"DocumentInfoRecordDocNumber='{doc_number}',"
-                    f"DocumentInfoRecordDocVersion='{doc_version}',"
-                    f"DocumentInfoRecordDocPart='{doc_part}'"
-                    f")/DocumentInfoRecordToAttachmentNavigation"
+                    f"({doc_key})"
+                    f"/DocumentInfoRecordToAttachmentNavigation"
                 )
                 
                 content = response_content or b' '  # Pad empty files
@@ -3218,7 +3260,7 @@ def check_token_validity(session_snapshot):
         
         # Use the write API base URL for a quick check
         target_sys = get_target_system(session_snapshot)
-        target_base_url = cfg.get(target_sys, 'api_list', 'document', 'base_url')
+        target_base_url = get_api_base_url(target_sys, 'document')
         if target_base_url:
             # Simple metadata request - very lightweight
             check_url = f"{target_base_url}/$metadata"
@@ -4272,13 +4314,8 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
         server_session.headers.update({'Content-Type': 'application/json'})
         
         # Build base URL for object link POSTs
-        doc_base_url = cfg.get(target_system, 'api_list', 'document', 'base_url')
-        doc_key = (
-            f"DocumentInfoRecordDocType='{doc_type}',"
-            f"DocumentInfoRecordDocVersion='{doc_version}',"
-            f"DocumentInfoRecordDocNumber='{doc_number}',"
-            f"DocumentInfoRecordDocPart='{doc_part}'"
-        )
+        doc_base_url = get_api_base_url(target_system, 'document')
+        doc_key = _odata_doc_key(doc_type, doc_number, doc_version, doc_part)
         post_url = f"{doc_base_url}/A_DocumentInfoRecord({doc_key})/to_ProductObj"
         
         # ── Pre-check: fetch existing object links from SAP ──────────

@@ -28,6 +28,29 @@ MAX_API_WORKERS = 2
 ADD_UP_TO = 5 # each execution should take at least X seconds
 
 MAX_DESC_LEN = 40
+
+
+def get_api_base_url(system_id, api_name='document'):
+    """Get API base URL for any system (config or custom DB).
+    
+    Config systems use api_list from config-env.yml.
+    Custom DB systems derive URLs from the stored host field.
+    """
+    try:
+        url = cfg.get(system_id, 'api_list', api_name, 'base_url')
+        if url:
+            return url
+    except Exception:
+        pass
+    # Fallback: custom DB system — derive from host
+    from app.credentials import get_credential_info
+    info = get_credential_info(system_id)
+    if info and info.get('host'):
+        host = info['host']
+        if api_name == 'attachment':
+            return f'https://{host}/sap/opu/odata/sap/API_CV_ATTACHMENT_SRV'
+        return f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
+    return None
 MAX_FILENAME_LEN = 80  # Maximum length for stored/uploaded filenames (extension preserved when truncating)
 FORBIDDEN_FILENAME_CHARS = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t']  # replaced with '_'
 
@@ -130,22 +153,31 @@ def get_target_system(session_snapshot=None):
 
 
 def get_systems_by_type():
-    """Return dict of source (R3) and target (S4) system lists from config.
+    """Return dict of source (R3) and target (S4) system lists from config + custom DB systems.
     
-    Each system entry contains:
-      - label: human-readable system name
-      - auth_type: 'oauth' (default) or 'basic'
+    Config systems are classified by system_type (R3 → source, S4 → target).
+    Custom DB-only systems (from dbo.sap_credentials) are added as target (S4) systems.
     """
     source_systems = {}  # R3 systems
     target_systems = {}  # S4 systems
     config = cfg.config_env
+    config_ids = set()
     for key, value in config.items():
         if isinstance(value, dict) and 'system_label' in value and 'system_type' in value:
-            auth_type = value.get('auth_type', 'oauth')
+            config_ids.add(key)
             if value['system_type'] == 'R3':
                 source_systems[key] = value['system_label']
             elif value['system_type'] == 'S4':
                 target_systems[key] = value['system_label']
+    # Add custom DB-only systems as target (S4) systems
+    try:
+        from app.credentials import list_db_only_credentials
+        for cust in list_db_only_credentials(list(config_ids)):
+            sid = cust['system_id']
+            label = cust.get('description') or sid.upper()
+            target_systems[sid] = label
+    except Exception:
+        pass
     return source_systems, target_systems
 
 
@@ -155,19 +187,29 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
     
     Supports two auth modes:
     - OAuth/API-Key (default): Bearer token + X-API-Key via BTP API Gateway
-    - Basic Auth: username/password for direct SAP (ZV) systems (auth_type='basic' in config)
+    - Basic Auth: username/password for direct SAP (ZV) systems (auth_type='basic' in config or custom DB systems)
     """
-    auth_type = cfg.config_env.get(sap_system, {}).get('auth_type', 'oauth')
+    sys_cfg = cfg.config_env.get(sap_system, {})
+    is_config_system = isinstance(sys_cfg, dict) and 'system_label' in sys_cfg
+
+    if is_config_system:
+        auth_type = sys_cfg.get('auth_type', 'oauth')
+    else:
+        # Custom DB-only system — always Basic Auth
+        auth_type = 'basic'
     is_basic = auth_type == 'basic'
 
     if is_basic:
         # Load encrypted credentials from DB
-        from app.credentials import get_credentials
+        from app.credentials import get_credentials, get_credential_info
         creds = get_credentials(sap_system)
         if not creds:
             raise Exception(f'No Basic Auth credentials stored for {sap_system}. Configure them in Settings.')
         auth_tuple = (creds['username'], creds['password'])
-        verify_ssl = cfg.config_env.get(sap_system, {}).get('verify_ssl', True)
+        if is_config_system:
+            verify_ssl = sys_cfg.get('verify_ssl', True)
+        else:
+            verify_ssl = False
     else:
         # OAuth mode — requires bearer_token in session
         if 'bearer_token' not in session_snapshot or session_snapshot['bearer_token'] is None:
@@ -230,15 +272,24 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
                 }
                 # Add sap-client to CSRF request: DB value > config fallback
                 _csrf_client = None
-                try:
-                    _csrf_client = cfg.get(sap_system, 'client')
-                except Exception:
-                    pass
+                if is_config_system:
+                    try:
+                        _csrf_client = cfg.get(sap_system, 'client')
+                    except Exception:
+                        pass
                 if creds and creds.get('sap_client'):
                     _csrf_client = creds['sap_client']
                 if _csrf_client:
                     headers['sap-client'] = str(_csrf_client)
-                base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+                if is_config_system:
+                    base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+                else:
+                    # Custom DB system: derive URL from host
+                    info = get_credential_info(sap_system)
+                    host = info.get('host') if info else None
+                    if not host:
+                        raise Exception(f'No host configured for custom system {sap_system}. Set it in Settings.')
+                    base_url = f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
                 csrf_resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
             else:
                 headers = {
@@ -778,6 +829,9 @@ def sanitize_doknr(doknr):
     
     # Remove OData-unsafe characters: ' \ # ( )
     result = ''.join(c for c in result if c not in {"'", '\\', '#', '(', ')'})
+    
+    # Replace internal spaces with underscore (SAP CHAR(25) padding)
+    result = result.replace(' ', '_')
     
     # Collapse multiple dashes/underscores
     while '--' in result:

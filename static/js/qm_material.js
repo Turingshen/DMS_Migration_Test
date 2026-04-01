@@ -21,6 +21,7 @@
     var totalPages = 1;
     var totalRecords = 0;
     var perPage = 500;
+    var _filesScanned = false;  // true after successful scan-files call
 
     // ── Init ───────────────────────────────────────────────────────
     $(document).ready(function () {
@@ -388,12 +389,20 @@
     };
 
     function _startExecution(recordIds) {
+        var dirPath = ($('#qmFilePath').val() || '').trim();
+
+        // Warn if dir_path is set but files were not scanned yet
+        if (dirPath && !_filesScanned) {
+            if (!confirm('⚠️ Der Dateipfad "' + dirPath + '" wurde angegeben, aber die Dateien wurden noch nicht gescannt.\n\nOhne Scan werden keine Dateien hochgeladen – nur Container und Links erstellt.\n\nTrotzdem fortfahren ohne Datei-Upload?')) {
+                return;
+            }
+        }
+
         setStep(3);
         $('#qmExecSpinner').show();
 
         var payload = { batch_id: currentBatchId };
         if (recordIds) payload.record_ids = recordIds;
-        var dirPath = ($('#qmFilePath').val() || '').trim();
         if (dirPath) payload.dir_path = dirPath;
 
         $.ajax({
@@ -573,6 +582,7 @@
         currentBatchId = batchId;
         selectedRecords = {};
         currentPage = 1;
+        _filesScanned = false;  // Reset scan flag for newly loaded batch
         _loadPage(1, function () { setStep(2); });
     };
 
@@ -636,6 +646,7 @@
                         '<span class="text-danger"><strong>' + resp.unmatched + '</strong> ohne Datei</span>' +
                         '</div>';
                     resultDiv.html(html);
+                    _filesScanned = true;
                     // Reload current page to show source_file column
                     _loadPage(currentPage);
                 } else {

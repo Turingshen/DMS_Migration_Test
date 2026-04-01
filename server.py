@@ -162,6 +162,17 @@ try:
 except Exception as e:
     print(f"[STARTUP] Warning: DB schema init failed: {e}")
 
+# Sync SAP systems from DB into in-memory config (replaces YAML as primary source)
+try:
+    from app_config import SapSystemManager
+    _mgr = SapSystemManager()
+    _mgr.update_config_env()
+    _count = len(_mgr.get_merged_systems())
+    print(f"[STARTUP] SAP systems loaded from DB: {_count} systems")
+    del _mgr, _count
+except Exception as e:
+    print(f"[STARTUP] Warning: SAP system DB sync failed: {e}")
+
 # Refresh Werke cache from DIL on startup (fast ~1s query)
 def refresh_werke_cache_on_startup():
     """Query DIL HANA for Werke counts and update the JSON cache."""

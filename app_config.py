@@ -165,11 +165,16 @@ class SapSystemManager:
         return self._misc_engine
     
     def _get_yaml_systems(self):
-        """Extract SAP system definitions from config-env.yml."""
+        """Extract SAP system definitions from config-env.yml (fallback only)."""
         cfg = Config.load()
         systems = {}
         for key, value in cfg.config_env.items():
-            if isinstance(value, dict) and 'system_label' in value and ('X-API-Key' in value or 'auth_type' in value or 'system_type' in value):
+            if not isinstance(value, dict) or 'system_label' not in value:
+                continue
+            # Skip entries dynamically patched by update_config_env() (DB source)
+            if value.get('_from_db'):
+                continue
+            if 'X-API-Key' in value or 'auth_type' in value or 'system_type' in value:
                 apis = {}
                 for api_name, api_data in value.get('api_list', {}).items():
                     if isinstance(api_data, dict) and 'base_url' in api_data:
@@ -186,6 +191,7 @@ class SapSystemManager:
                     'host': value.get('host', ''),
                     'auth_type': value.get('auth_type', 'oauth'),
                     'api_key': value.get('X-API-Key', ''),
+                    'sap_client': value.get('client', ''),
                     'verify_ssl': value.get('verify_ssl', True),
                     'apis': apis,
                     'source': 'yaml',
@@ -205,24 +211,42 @@ class SapSystemManager:
                 if con.execute(check).fetchone()[0] == 0:
                     return {}
                 
+                # Check which optional columns exist (migration compatibility)
+                has_client = con.execute(text(
+                    "SELECT COL_LENGTH('dbo.sap_systems', 'sap_client')"
+                )).fetchone()[0] is not None
+                has_env = con.execute(text(
+                    "SELECT COL_LENGTH('dbo.sap_systems', 'environment')"
+                )).fetchone()[0] is not None
+                
+                cols = ["system_id", "system_label", "system_type", "host",
+                        "auth_type", "api_key"]
+                if has_client:
+                    cols.append("sap_client")
+                if has_env:
+                    cols.append("environment")
+                cols += ["verify_ssl", "active"]
+                
                 rows = con.execute(text(
-                    "SELECT system_id, system_label, system_type, host, auth_type, "
-                    "api_key, verify_ssl, active FROM dbo.sap_systems"
+                    f"SELECT {', '.join(cols)} FROM dbo.sap_systems"
                 )).fetchall()
                 
                 for row in rows:
-                    sid = row[0]
+                    row_dict = dict(zip(cols, row))
+                    sid = row_dict['system_id']
                     systems[sid] = {
                         'system_id': sid,
-                        'system_label': row[1],
-                        'system_type': row[2],
-                        'host': row[3] or '',
-                        'auth_type': row[4] or 'oauth',
-                        'api_key': row[5] or '',
-                        'verify_ssl': bool(row[6]) if row[6] is not None else True,
+                        'system_label': row_dict['system_label'],
+                        'system_type': row_dict['system_type'],
+                        'host': row_dict['host'] or '',
+                        'auth_type': row_dict['auth_type'] or 'oauth',
+                        'api_key': row_dict['api_key'] or '',
+                        'sap_client': row_dict.get('sap_client') or '',
+                        'environment': row_dict.get('environment') or '',
+                        'verify_ssl': bool(row_dict['verify_ssl']) if row_dict['verify_ssl'] is not None else True,
                         'apis': {},
                         'source': 'db',
-                        'active': bool(row[7]) if row[7] is not None else True
+                        'active': bool(row_dict['active']) if row_dict['active'] is not None else True
                     }
                 
                 check_apis = text(
@@ -278,36 +302,48 @@ class SapSystemManager:
         return self.get_merged_systems().get(system_id)
     
     def save_system(self, system_id, system_label, system_type, host='',
-                    auth_type='oauth', api_key='', verify_ssl=True, updated_by='system'):
+                    auth_type='oauth', api_key='', sap_client='', verify_ssl=True,
+                    updated_by='system', environment=''):
         """Save/update a SAP system in DB."""
         with self.engine.begin() as con:
+            # Check if environment column exists
+            has_env = con.execute(text(
+                "SELECT COL_LENGTH('dbo.sap_systems', 'environment')"
+            )).fetchone()[0] is not None
+
             existing = con.execute(text(
                 "SELECT id FROM dbo.sap_systems WHERE system_id = :sid"
             ), {'sid': system_id}).fetchone()
-            
+
+            env_col = ", environment = :env" if has_env else ""
+            env_ins_cols = ", environment" if has_env else ""
+            env_ins_vals = ", :env" if has_env else ""
+
+            params = {
+                'sid': system_id, 'label': system_label, 'stype': system_type,
+                'host': host, 'auth': auth_type, 'key': api_key,
+                'client': sap_client or None,
+                'ssl': 1 if verify_ssl else 0, 'by': updated_by
+            }
+            if has_env:
+                params['env'] = environment or None
+
             if existing:
                 con.execute(text(
                     "UPDATE dbo.sap_systems "
                     "SET system_label = :label, system_type = :stype, host = :host, "
-                    "auth_type = :auth, api_key = :key, verify_ssl = :ssl, "
+                    "auth_type = :auth, api_key = :key, sap_client = :client, verify_ssl = :ssl"
+                    f"{env_col}, "
                     "active = 1, updated_at = GETUTCDATE(), updated_by = :by "
                     "WHERE system_id = :sid"
-                ), {
-                    'sid': system_id, 'label': system_label, 'stype': system_type,
-                    'host': host, 'auth': auth_type, 'key': api_key,
-                    'ssl': 1 if verify_ssl else 0, 'by': updated_by
-                })
+                ), params)
             else:
                 con.execute(text(
                     "INSERT INTO dbo.sap_systems "
                     "(system_id, system_label, system_type, host, auth_type, api_key, "
-                    "verify_ssl, active, created_by, updated_by) "
-                    "VALUES (:sid, :label, :stype, :host, :auth, :key, :ssl, 1, :by, :by)"
-                ), {
-                    'sid': system_id, 'label': system_label, 'stype': system_type,
-                    'host': host, 'auth': auth_type, 'key': api_key,
-                    'ssl': 1 if verify_ssl else 0, 'by': updated_by
-                })
+                    f"sap_client, verify_ssl{env_ins_cols}, active, created_by, updated_by) "
+                    f"VALUES (:sid, :label, :stype, :host, :auth, :key, :client, :ssl{env_ins_vals}, 1, :by, :by)"
+                ), params)
     
     def delete_system(self, system_id):
         """Soft-delete a system (set active=0). Only affects DB entries."""
@@ -374,6 +410,7 @@ class SapSystemManager:
                 'system_label': sys_data['system_label'],
                 'system_type': sys_data['system_type'],
                 'host': sys_data.get('host', ''),
+                '_from_db': True,
             }
             if sys_data.get('auth_type') == 'basic':
                 system_entry['auth_type'] = 'basic'
@@ -381,6 +418,8 @@ class SapSystemManager:
                 system_entry['verify_ssl'] = False
             if sys_data.get('api_key'):
                 system_entry['X-API-Key'] = sys_data['api_key']
+            if sys_data.get('sap_client'):
+                system_entry['client'] = sys_data['sap_client']
             
             api_list = {}
             for api_name, api_data in sys_data.get('apis', {}).items():

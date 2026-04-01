@@ -525,6 +525,30 @@ def execute_selected():
                     AND skip_migration = 0
             """))
             
+            # Reset container_created for records where the target document
+            # no longer exists (CONTAINER_LOST / "existiert nicht").
+            # This ensures a fresh CREATE on retry instead of a permanent
+            # failure loop.
+            con.execute(text(f"""
+                UPDATE dbo.migration_staging
+                SET container_created = 0
+                WHERE batch_id = '{batch_id}'
+                    AND id IN ({record_ids_str})
+                    AND (execution_error LIKE '%existiert nicht%'
+                         OR execution_error LIKE '%CONTAINER_LOST%'
+                         OR execution_error LIKE '%does not exist%')
+            """))
+            # Clean stale file_details for those same records so they get
+            # a full fresh upload.
+            con.execute(text(f"""
+                DELETE fd
+                FROM dbo.migration_file_details fd
+                INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
+                WHERE ms.batch_id = '{batch_id}'
+                    AND ms.id IN ({record_ids_str})
+                    AND ISNULL(ms.container_created, 0) = 0
+            """))
+            
             # Also immediately reset the batch counters so the frontend
             # sees correct values from the very first poll (no race condition
             # with the background thread which resets them later again).

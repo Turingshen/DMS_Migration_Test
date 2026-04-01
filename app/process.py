@@ -33,17 +33,33 @@ MAX_DESC_LEN = 40
 def get_api_base_url(system_id, api_name='document'):
     """Get API base URL for any system (config or custom DB).
     
-    Config systems use api_list from config-env.yml.
-    Custom DB systems derive URLs from the stored host field.
+    For Basic Auth systems the credential host (direct backend) takes priority
+    over the api_list base_url (which may point to an API gateway that cannot
+    proxy to the backend).  For OAuth systems the api_list URL is used first.
     """
+    from app.credentials import get_credential_info
+
+    sys_cfg = cfg.config_env.get(system_id, {})
+    is_basic = isinstance(sys_cfg, dict) and sys_cfg.get('auth_type') == 'basic'
+
+    # For Basic Auth: credential host has priority (direct backend connection)
+    if is_basic:
+        info = get_credential_info(system_id)
+        if info and info.get('host'):
+            host = info['host']
+            if api_name == 'attachment':
+                return f'https://{host}/sap/opu/odata/sap/API_CV_ATTACHMENT_SRV'
+            return f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
+
+    # Config / OAuth systems: use api_list from config
     try:
         url = cfg.get(system_id, 'api_list', api_name, 'base_url')
         if url:
             return url
     except Exception:
         pass
-    # Fallback: custom DB system — derive from host
-    from app.credentials import get_credential_info
+
+    # Final fallback: derive from credential host (custom DB-only systems)
     info = get_credential_info(system_id)
     if info and info.get('host'):
         host = info['host']
@@ -281,15 +297,9 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
                     _csrf_client = creds['sap_client']
                 if _csrf_client:
                     headers['sap-client'] = str(_csrf_client)
-                if is_config_system:
-                    base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
-                else:
-                    # Custom DB system: derive URL from host
-                    info = get_credential_info(sap_system)
-                    host = info.get('host') if info else None
-                    if not host:
-                        raise Exception(f'No host configured for custom system {sap_system}. Set it in Settings.')
-                    base_url = f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
+                base_url = get_api_base_url(sap_system, 'document')
+                if not base_url:
+                    raise Exception(f'No API URL configured for {sap_system}. Set host in Settings → Credentials.')
                 csrf_resp = server_session.get(base_url, headers=headers, auth=auth_tuple, verify=verify_ssl)
             else:
                 headers = {
@@ -298,7 +308,9 @@ def prepare_session_headers(server_session, session_snapshot, sap_system):
                     'X-CSRF-Token': 'fetch',
                     'Accept': 'application/json'
                 }
-                base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
+                base_url = get_api_base_url(sap_system, 'document')
+                if not base_url:
+                    base_url = cfg.get(sap_system, 'api_list', 'document', 'base_url')
                 csrf_resp = server_session.get(base_url, headers=headers)
             if csrf_resp.status_code == 200:
                 break  # Success

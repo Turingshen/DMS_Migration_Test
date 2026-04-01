@@ -285,6 +285,7 @@ CREATE TABLE dbo.sap_systems (
     host VARCHAR(255),                         -- e.g. 'qa-sap.api.basf.com:443'
     auth_type VARCHAR(20) DEFAULT 'oauth',     -- 'oauth' or 'basic'
     api_key VARCHAR(255),                      -- X-API-Key (for oauth systems)
+    sap_client VARCHAR(3),                     -- SAP Mandant (e.g. '100', '200')
     verify_ssl BIT DEFAULT 1,                  -- SSL certificate verification
     active BIT DEFAULT 1,
     created_at DATETIME2 DEFAULT GETUTCDATE(),
@@ -456,6 +457,77 @@ CREATE TABLE dbo.qm_material_staging (
     INDEX idx_qm_status (status)
 );
 """
+
+def _seed_sap_systems_from_yaml(con):
+    """One-time seed: migrate SAP system blocks from config-env.yml into DB.
+    
+    Only inserts systems that don't already exist in dbo.sap_systems.
+    After seeding, the YAML blocks can be removed from config-env.yml.
+    """
+    try:
+        from app_config import Config
+        cfg = Config.load()
+        
+        for key, value in cfg.config_env.items():
+            if not isinstance(value, dict):
+                continue
+            if 'system_label' not in value:
+                continue
+            if not ('X-API-Key' in value or 'auth_type' in value or 'system_type' in value):
+                continue
+            
+            # Check if already in DB
+            existing = con.execute(text(
+                "SELECT id FROM dbo.sap_systems WHERE system_id = :sid"
+            ), {'sid': key}).fetchone()
+            if existing:
+                continue
+            
+            # Insert system
+            auth_type = value.get('auth_type', 'oauth')
+            api_key = value.get('X-API-Key', '')
+            sap_client = value.get('client', '')
+            verify_ssl = 1 if value.get('verify_ssl', True) else 0
+            
+            con.execute(text(
+                "INSERT INTO dbo.sap_systems "
+                "(system_id, system_label, system_type, host, auth_type, api_key, sap_client, "
+                "verify_ssl, active, created_by, updated_by) "
+                "VALUES (:sid, :label, :stype, :host, :auth, :key, :client, :ssl, 1, 'yaml_seed', 'yaml_seed')"
+            ), {
+                'sid': key,
+                'label': value.get('system_label', key),
+                'stype': value.get('system_type', 'R3'),
+                'host': value.get('host', ''),
+                'auth': auth_type,
+                'key': api_key,
+                'client': sap_client or None,
+                'ssl': verify_ssl
+            })
+            print(f"[DB_SEED] Seeded system '{key}' from YAML")
+            
+            # Insert APIs
+            for api_name, api_data in value.get('api_list', {}).items():
+                if not isinstance(api_data, dict) or 'base_url' not in api_data:
+                    continue
+                existing_api = con.execute(text(
+                    "SELECT id FROM dbo.sap_system_apis WHERE system_id = :sid AND api_name = :name"
+                ), {'sid': key, 'name': api_name}).fetchone()
+                if existing_api:
+                    continue
+                con.execute(text(
+                    "INSERT INTO dbo.sap_system_apis (system_id, api_name, api_label, base_url, active) "
+                    "VALUES (:sid, :name, :label, :url, 1)"
+                ), {
+                    'sid': key,
+                    'name': api_name,
+                    'label': api_data.get('label', api_name),
+                    'url': api_data['base_url']
+                })
+            
+    except Exception as e:
+        print(f"[DB_SEED_WARN] Could not seed SAP systems from YAML: {e}")
+
 
 def init_staging_tables(engine):
     """Initialize migration staging tables if they don't exist."""
@@ -840,6 +912,29 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created sap_system_apis table")
         else:
             print("[DB_INIT] sap_system_apis table already exists")
+
+        # Ensure sap_client column exists on sap_systems (for SAP Mandant)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.sap_systems', 'sap_client') IS NULL
+                    ALTER TABLE dbo.sap_systems ADD sap_client VARCHAR(3) NULL;
+            """))
+            print("[DB_INIT] Ensured sap_systems has sap_client column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add sap_client column to sap_systems: {e}")
+
+        # Ensure environment column exists on sap_systems (DEV/QUAL/PROD grouping)
+        try:
+            con.execute(text("""
+                IF COL_LENGTH('dbo.sap_systems', 'environment') IS NULL
+                    ALTER TABLE dbo.sap_systems ADD environment VARCHAR(10) NULL;
+            """))
+            print("[DB_INIT] Ensured sap_systems has environment column")
+        except Exception as e:
+            print(f"[DB_INIT_WARN] Could not add environment column to sap_systems: {e}")
+
+        # Seed DB from config-env.yml SAP blocks (one-time migration)
+        _seed_sap_systems_from_yaml(con)
 
         # Add estimated_duration_h to migration_batch if not present
         try:

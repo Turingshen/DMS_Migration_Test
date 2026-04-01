@@ -11,6 +11,30 @@
         </div>
     </div>
 
+    <!-- Health Status Overview -->
+    <div class="row mt-3" id="healthStatusRow">
+        <div class="col-12">
+            <div class="card border-secondary">
+                <div class="card-header py-2 d-flex justify-content-between align-items-center" id="healthCardHeader" style="background:#f8f9fa">
+                    <span>
+                        <i class="fas fa-heartbeat"></i>
+                        <strong data-i18n="set.health.title">System-Status</strong>
+                        <span id="healthSummaryBadges" class="ml-2"></span>
+                    </span>
+                    <span>
+                        <small class="text-muted mr-2" id="healthTimestamp"></small>
+                        <button class="btn btn-xs btn-outline-secondary" onclick="runHealthCheck()" id="healthCheckBtn" title="Alle Systeme prüfen">
+                            <i class="fas fa-sync-alt" id="healthCheckIcon"></i> <span data-i18n="set.health.check">Prüfen</span>
+                        </button>
+                    </span>
+                </div>
+                <div class="card-body py-2" id="healthStatusBody" style="display:none">
+                    <div id="healthDetails"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row mt-4">
         <div class="col-md-6">
             <div class="card">
@@ -127,6 +151,190 @@
         </div>
     </div>
 
+    <!-- SAP System Management -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-server"></i> <span data-i18n="set.sys.title">Systeme & API-Endpunkte</span>
+                        <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
+                            <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
+                        </button>
+                        <button class="btn btn-sm btn-light float-right" onclick="showAddSystemForm()">
+                            <i class="fas fa-plus"></i> <span data-i18n="set.sys.new">Neues System</span>
+                        </button>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted" data-i18n="set.sys.info">
+                        API-Endpunkte konfigurieren. 
+                        <strong>YAML</strong> liefert die Defaults, <strong>DB-Einträge</strong> haben Vorrang.
+                        Neue Systeme werden in der Datenbank gespeichert.
+                    </p>
+
+                    <!-- Add/Edit System Form (hidden by default) -->
+                    <div id="systemFormCard" class="card mb-3 border-success" style="display: none;">
+                        <div class="card-header bg-light">
+                            <h6 class="mb-0" id="systemFormTitle"><i class="fas fa-plus"></i> <span data-i18n="set.sys.create">Neues System anlegen</span></h6>
+                        </div>
+                        <div class="card-body">
+                            <form id="systemForm" onsubmit="saveSapSystem(event)">
+                                <div class="form-row">
+                                    <div class="col-md-2">
+                                        <div class="form-group">
+                                            <label data-i18n="set.sys.id">System-ID</label>
+                                            <input type="text" class="form-control" id="sysId" placeholder="z.B. zhl" data-i18n-placeholder="set.sys.ph_id"
+                                                   pattern="[a-z0-9_]+" title="Nur Kleinbuchstaben, Zahlen, Unterstrich" data-i18n-title="set.sys.id_title" required>
+                                            <small class="form-text text-muted" data-i18n="set.sys.unique_lc">Eindeutig, lowercase</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-group">
+                                            <label>Label</label>
+                                            <input type="text" class="form-control" id="sysLabel" 
+                                                   placeholder="z.B. ZHL Testsystem Ludwigshafen" data-i18n-placeholder="set.sys.ph_name" required>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>Typ</label>
+                                            <select class="form-control" id="sysType" required>
+                                                <option value="R3">R/3</option>
+                                                <option value="S4">S/4</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-group">
+                                            <label>Host</label>
+                                            <input type="text" class="form-control" id="sysHost" 
+                                                   placeholder="z.B. qa-sap.api.basf.com:443" data-i18n-placeholder="set.sys.ph_host">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>Auth</label>
+                                            <select class="form-control" id="sysAuth">
+                                                <option value="oauth">OAuth</option>
+                                                <option value="basic">Basic</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>Mandant</label>
+                                            <input type="text" class="form-control" id="sysClient" placeholder="z.B. 200" maxlength="3"
+                                                   pattern="[0-9]{0,3}" title="3-stellige SAP Mandantennummer">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label>API-Key</label>
+                                            <input type="text" class="form-control" id="sysApiKey" placeholder="Optional">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <div class="form-group">
+                                            <label data-i18n="set.sys.env">Umgebung</label>
+                                            <select class="form-control" id="sysEnv">
+                                                <option value="">–</option>
+                                                <option value="DEV">DEV</option>
+                                                <option value="QUAL">QUAL</option>
+                                                <option value="PROD">PROD</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="form-row mb-2">
+                                    <div class="col-md-2">
+                                        <div class="form-check mt-1">
+                                            <input type="checkbox" class="form-check-input" id="sysVerifySsl" checked>
+                                            <label class="form-check-label" for="sysVerifySsl">SSL verifizieren</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- APIs for this system -->
+                                <div class="mb-3">
+                                    <label><strong><i class="fas fa-plug"></i> <span data-i18n="set.sys.endpoints">API-Endpunkte</span></strong></label>
+                                    <div id="systemApisEditor">
+                                        <!-- Dynamic API rows added here -->
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addApiRow()">
+                                        <i class="fas fa-plus"></i> <span data-i18n="set.sys.add_api">API hinzufügen</span>
+                                    </button>
+                                </div>
+
+                                <div class="form-group mb-0">
+                                    <button type="submit" class="btn btn-success mr-1">
+                                        <i class="fas fa-save"></i> <span data-i18n="save">Speichern</span>
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="hideSystemForm()">
+                                        <span data-i18n="cancel">Abbrechen</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div id="sapSystemsLoading" class="text-center py-3">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p class="mt-2" data-i18n="set.sys.loading">Lade SAP-Systeme...</p>
+                    </div>
+                    
+                    <div class="mb-2" id="sysSortWrapper" style="display:none;">
+                        <small class="text-muted mr-2" data-i18n="set.sort.label">Sortierung:</small>
+                        <span id="sysSortControls"></span>
+                    </div>
+
+                    <!-- Environment Tabs -->
+                    <ul class="nav nav-tabs mb-3" id="envTabs" role="tablist" style="display:none;">
+                        <li class="nav-item">
+                            <a class="nav-link active" id="env-all-tab" data-toggle="tab" href="#env-all" role="tab">
+                                <i class="fas fa-globe"></i> <span data-i18n="set.env.all">Alle</span>
+                                <span class="badge badge-secondary ml-1" id="envCountAll">0</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="env-dev-tab" data-toggle="tab" href="#env-dev" role="tab">
+                                <i class="fas fa-code"></i> DEV
+                                <span class="badge badge-info ml-1" id="envCountDev">0</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="env-qual-tab" data-toggle="tab" href="#env-qual" role="tab">
+                                <i class="fas fa-vial"></i> QUAL
+                                <span class="badge badge-warning ml-1" id="envCountQual">0</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="env-prod-tab" data-toggle="tab" href="#env-prod" role="tab">
+                                <i class="fas fa-industry"></i> PROD
+                                <span class="badge badge-danger ml-1" id="envCountProd">0</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="env-none-tab" data-toggle="tab" href="#env-none" role="tab">
+                                <i class="fas fa-question-circle"></i> <span data-i18n="set.env.unassigned">Ohne</span>
+                                <span class="badge badge-light ml-1" id="envCountNone">0</span>
+                            </a>
+                        </li>
+                    </ul>
+                    <div class="tab-content" id="envTabContent">
+                        <div class="tab-pane fade show active" id="env-all" role="tabpanel"></div>
+                        <div class="tab-pane fade" id="env-dev" role="tabpanel"></div>
+                        <div class="tab-pane fade" id="env-qual" role="tabpanel"></div>
+                        <div class="tab-pane fade" id="env-prod" role="tabpanel"></div>
+                        <div class="tab-pane fade" id="env-none" role="tabpanel"></div>
+                    </div>
+
+                    <div id="sapSystemsList" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- SAP System Credentials -->
     <div class="row mt-4">
         <div class="col-12">
@@ -220,124 +428,16 @@
                     </div>
                     
                     <div id="credentialsContent" style="display: none;">
+                        <div class="mb-2">
+                            <small class="text-muted mr-2" data-i18n="set.sort.label">Sortierung:</small>
+                            <span id="credSortControls"></span>
+                        </div>
                         <div id="credentialsNoSystems" class="alert alert-info" style="display: none;">
                             <i class="fas fa-info-circle"></i> <span data-i18n="set.cred.no_systems">Keine SAP-Systeme in der Konfiguration vorhanden.</span>
                         </div>
                         
                         <div id="credentialsList"></div>
                     </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- SAP System Management -->
-    <div class="row mt-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header bg-success text-white">
-                    <h5 class="mb-0">
-                        <i class="fas fa-server"></i> <span data-i18n="set.sys.title">API-Endpunkte konfigurieren</span>
-                        <button class="btn btn-sm btn-light float-right ml-2" onclick="loadSapSystems()">
-                            <i class="fas fa-sync-alt"></i> <span data-i18n="refresh">Aktualisieren</span>
-                        </button>
-                        <button class="btn btn-sm btn-light float-right" onclick="showAddSystemForm()">
-                            <i class="fas fa-plus"></i> <span data-i18n="set.sys.new">Neues System</span>
-                        </button>
-                    </h5>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted" data-i18n="set.sys.info">
-                        API-Endpunkte konfigurieren. 
-                        <strong>YAML</strong> liefert die Defaults, <strong>DB-Einträge</strong> haben Vorrang.
-                        Neue Systeme werden in der Datenbank gespeichert.
-                    </p>
-
-                    <!-- Add/Edit System Form (hidden by default) -->
-                    <div id="systemFormCard" class="card mb-3 border-success" style="display: none;">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0" id="systemFormTitle"><i class="fas fa-plus"></i> <span data-i18n="set.sys.create">Neues System anlegen</span></h6>
-                        </div>
-                        <div class="card-body">
-                            <form id="systemForm" onsubmit="saveSapSystem(event)">
-                                <div class="form-row">
-                                    <div class="col-md-2">
-                                        <div class="form-group">
-                                            <label data-i18n="set.sys.id">System-ID</label>
-                                            <input type="text" class="form-control" id="sysId" placeholder="z.B. zhl" data-i18n-placeholder="set.sys.ph_id"
-                                                   pattern="[a-z0-9_]+" title="Nur Kleinbuchstaben, Zahlen, Unterstrich" data-i18n-title="set.sys.id_title" required>
-                                            <small class="form-text text-muted" data-i18n="set.sys.unique_lc">Eindeutig, lowercase</small>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <div class="form-group">
-                                            <label>Label</label>
-                                            <input type="text" class="form-control" id="sysLabel" 
-                                                   placeholder="z.B. ZHL Testsystem Ludwigshafen" data-i18n-placeholder="set.sys.ph_name" required>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-1">
-                                        <div class="form-group">
-                                            <label>Typ</label>
-                                            <select class="form-control" id="sysType" required>
-                                                <option value="R3">R/3</option>
-                                                <option value="S4">S/4</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <div class="form-group">
-                                            <label>Host</label>
-                                            <input type="text" class="form-control" id="sysHost" 
-                                                   placeholder="z.B. qa-sap.api.basf.com:443" data-i18n-placeholder="set.sys.ph_host">
-                                        </div>
-                                    </div>
-                                    <div class="col-md-1">
-                                        <div class="form-group">
-                                            <label>Auth</label>
-                                            <select class="form-control" id="sysAuth">
-                                                <option value="oauth">OAuth</option>
-                                                <option value="basic">Basic</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-2">
-                                        <div class="form-group">
-                                            <label>API-Key</label>
-                                            <input type="text" class="form-control" id="sysApiKey" placeholder="Optional">
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <!-- APIs for this system -->
-                                <div class="mb-3">
-                                    <label><strong><i class="fas fa-plug"></i> <span data-i18n="set.sys.endpoints">API-Endpunkte</span></strong></label>
-                                    <div id="systemApisEditor">
-                                        <!-- Dynamic API rows added here -->
-                                    </div>
-                                    <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addApiRow()">
-                                        <i class="fas fa-plus"></i> <span data-i18n="set.sys.add_api">API hinzufügen</span>
-                                    </button>
-                                </div>
-
-                                <div class="form-group mb-0">
-                                    <button type="submit" class="btn btn-success mr-1">
-                                        <i class="fas fa-save"></i> <span data-i18n="save">Speichern</span>
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary" onclick="hideSystemForm()">
-                                        <span data-i18n="cancel">Abbrechen</span>
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-
-                    <div id="sapSystemsLoading" class="text-center py-3">
-                        <i class="fas fa-spinner fa-spin fa-2x"></i>
-                        <p class="mt-2" data-i18n="set.sys.loading">Lade SAP-Systeme...</p>
-                    </div>
-                    
-                    <div id="sapSystemsList" style="display: none;"></div>
                 </div>
             </div>
         </div>

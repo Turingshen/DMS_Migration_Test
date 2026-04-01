@@ -773,7 +773,7 @@ def warmup_api(session_snapshot, first_loio_id=None):
             # Try to warm up source API using prepare_session_headers (handles OAuth + Basic Auth)
             try:
                 prepare_session_headers(warmup_session, session_snapshot, source_system)
-                source_base_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+                source_base_url = get_api_base_url(source_system, 'document')
                 if source_base_url:
                     resp = warmup_session.get(source_base_url, timeout=10)
                     results.append({
@@ -1384,27 +1384,65 @@ def _download_one_file(file_index, document, session_snapshot, source_system, st
     selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
     document_args = {k: document[k] for k in selected_keys}
     formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
-    base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+    base_read_url = get_api_base_url(source_system, 'document')
     request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
 
     download_start = time.time()
     fallback_name = _resolve_filename(document, staging_record, file_index)
-    try:
-        response = dl_session.get(request_url, timeout=300)
-    except Exception as ex:
+
+    # Retry for transient source errors (400 "Multiple Documents not allowed", connection errors)
+    _max_dl_retries = 2
+    _dl_retry_delays = [3, 8]
+    _last_response = None
+    _last_ex = None
+
+    for _dl_attempt in range(_max_dl_retries + 1):
+        if _dl_attempt > 0:
+            _delay = _dl_retry_delays[min(_dl_attempt - 1, len(_dl_retry_delays) - 1)]
+            logger.warning(f"Download retry {_dl_attempt}/{_max_dl_retries} for file {file_index} "
+                           f"after {_delay}s delay", category="READ")
+            time.sleep(_delay)
+            # Fresh session for retry
+            dl_session = requests.Session()
+            prepare_session_headers(dl_session, session_snapshot, source_system)
+            dl_session.headers.pop('Slug', None)
+        try:
+            response = dl_session.get(request_url, timeout=300)
+            _last_ex = None
+        except Exception as ex:
+            _last_ex = ex
+            logger.warning(f"Download error (attempt {_dl_attempt + 1}) file {file_index}: {ex}", category="READ")
+            continue
+
+        if response.status_code == 200:
+            _last_response = response
+            break  # success
+
+        _last_response = response
+        # Retry on 400/500 transient errors
+        if response.status_code in (400, 500, 502, 503):
+            logger.warning(f"Download got {response.status_code} (attempt {_dl_attempt + 1}) file {file_index}",
+                           category="READ")
+            continue
+        break  # non-retryable status
+
+    if _last_ex is not None:
         elapsed = time.time() - download_start
-        logger.error(f"Download error file {file_index} after {elapsed:.1f}s: {ex}", category="READ")
+        logger.error(f"Download error file {file_index} after {elapsed:.1f}s ({_max_dl_retries + 1} attempts): {_last_ex}",
+                     category="READ")
         return {
             'file_index': file_index, 'success': False,
-            'error_msg': f'READ_TIMEOUT: {str(ex)}',
-            'error_detail': {'status_code': 0, 'detail': str(ex), 'elapsed_seconds': round(elapsed, 1)},
+            'error_msg': f'READ_TIMEOUT: {str(_last_ex)}',
+            'error_detail': {'status_code': 0, 'detail': str(_last_ex), 'elapsed_seconds': round(elapsed, 1)},
             'error_category': 'TIMEOUT', 'filename': fallback_name, 'elapsed': elapsed,
         }
 
+    response = _last_response
     elapsed = time.time() - download_start
     if response.status_code != 200:
         error_info = _extract_error_fields(response)
-        logger.error(f"Download failed file {file_index}: {response.status_code}", category="READ", details=error_info)
+        logger.error(f"Download failed file {file_index}: {response.status_code} ({_max_dl_retries + 1} attempts)",
+                     category="READ", details=error_info)
         return {
             'file_index': file_index, 'success': False,
             'error_msg': f'READ_FAIL_{response.status_code}',
@@ -1531,37 +1569,73 @@ def _upload_one_file(file_index, content, filename, mime_type,
     file_size_mb = file_size / 1024 / 1024
     upload_timeout = max(60, 60 + int(file_size_mb * 10))
 
+    # Retry config for connection/SSL errors
+    _max_upload_retries = 2
+    _upload_retry_delays = [5, 15]  # seconds between retries
+
     upload_start = time.time()
-    try:
-        upload_resp = ul_session.post(attachment_url, data=upload_content, timeout=upload_timeout)
-        if is_csrf_error(upload_resp):
-            logger.warning(f"CSRF expired during UPLOAD file {file_index} — refreshing", category="UPLOAD")
-            force_csrf_renewal(session_snapshot, target_system)
-            prepare_session_headers(ul_session, session_snapshot, target_system)
-            ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
+    _last_conn_ex = None
+    for _attempt in range(_max_upload_retries + 1):
+        try:
+            if _attempt > 0:
+                # Re-create session for retry (fresh SSL handshake)
+                ul_session = requests.Session()
+                prepare_session_headers(ul_session, session_snapshot, target_system)
+                ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
+                _delay = _upload_retry_delays[min(_attempt - 1, len(_upload_retry_delays) - 1)]
+                logger.warning(f"Upload retry {_attempt}/{_max_upload_retries} for file {file_index} "
+                               f"({file_size_mb:.1f} MB) after {_delay}s delay", category="UPLOAD")
+                time.sleep(_delay)
+
             upload_resp = ul_session.post(attachment_url, data=upload_content, timeout=upload_timeout)
-    except requests.exceptions.ConnectionError as ex:
+            if is_csrf_error(upload_resp):
+                logger.warning(f"CSRF expired during UPLOAD file {file_index} — refreshing", category="UPLOAD")
+                force_csrf_renewal(session_snapshot, target_system)
+                prepare_session_headers(ul_session, session_snapshot, target_system)
+                ul_session.headers.update({'Content-Type': mime_type, 'Slug': slug_filename})
+                upload_resp = ul_session.post(attachment_url, data=upload_content, timeout=upload_timeout)
+            _last_conn_ex = None
+            break  # success — exit retry loop
+        except requests.exceptions.ConnectionError as ex:
+            _last_conn_ex = ex
+            upload_elapsed = time.time() - upload_start
+            logger.warning(f"Upload connection error (attempt {_attempt + 1}/{_max_upload_retries + 1}) "
+                           f"file {file_index} ({file_size_mb:.1f} MB) after {upload_elapsed:.1f}s: "
+                           f"{str(ex)[:200]}", category="UPLOAD")
+            continue  # try next attempt
+        except requests.exceptions.Timeout as ex:
+            upload_elapsed = time.time() - upload_start
+            return {
+                'file_index': file_index, 'success': False,
+                'file_result': {
+                    'file': filename, 'status': f'UPLOAD_TIMEOUT after {upload_elapsed:.1f}s',
+                    'error_detail': {'status_code': 0, 'detail': str(ex)},
+                    'error_category': 'TIMEOUT',
+                    'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
+                    'mime_type': mime_type, 'actual_time_seconds': round(upload_elapsed, 2),
+                },
+            }
+
+    # All retries exhausted for ConnectionError
+    if _last_conn_ex is not None:
         upload_elapsed = time.time() - upload_start
+        _err_str = str(_last_conn_ex)[:500]
+        _is_ssl = 'SSL' in _err_str or 'ssl' in _err_str
+        _is_size_suspect = _is_ssl and file_size_mb > 50 and upload_elapsed < 10
+        _status = ('SSL_UPLOAD_REJECTED — file may exceed SAP upload size limit'
+                   if _is_size_suspect
+                   else f'UPLOAD_CONNECTION_ERROR after {upload_elapsed:.1f}s ({_max_upload_retries + 1} attempts)')
         return {
             'file_index': file_index, 'success': False,
             'file_result': {
-                'file': filename, 'status': f'UPLOAD_CONNECTION_ERROR after {upload_elapsed:.1f}s',
-                'error_detail': {'status_code': 0, 'detail': str(ex)[:500]},
-                'error_category': 'CONNECTION_ERROR',
+                'file': filename, 'status': _status,
+                'error_detail': {'status_code': 0, 'detail': _err_str,
+                                 'file_size_mb': round(file_size_mb, 2),
+                                 'elapsed_seconds': round(upload_elapsed, 2)},
+                'error_category': 'SIZE_LIMIT' if _is_size_suspect else 'CONNECTION_ERROR',
                 'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
-                'mime_type': mime_type, 'actual_time_seconds': round(upload_elapsed, 2),
-            },
-        }
-    except requests.exceptions.Timeout as ex:
-        upload_elapsed = time.time() - upload_start
-        return {
-            'file_index': file_index, 'success': False,
-            'file_result': {
-                'file': filename, 'status': f'UPLOAD_TIMEOUT after {upload_elapsed:.1f}s',
-                'error_detail': {'status_code': 0, 'detail': str(ex)},
-                'error_category': 'TIMEOUT',
-                'file_size': file_size, 'file_size_mb': round(file_size_mb, 2),
-                'mime_type': mime_type, 'actual_time_seconds': round(upload_elapsed, 2),
+                'mime_type': mime_type, 'is_size_error': _is_size_suspect,
+                'actual_time_seconds': round(upload_elapsed, 2),
             },
         }
 
@@ -1601,7 +1675,7 @@ def _upload_one_file(file_index, content, filename, mime_type,
         }
 
 
-def execute_single_document(staging_record, session_snapshot):
+def execute_single_document(staging_record, session_snapshot, _container_lost_retry=False):
     """Execute migration for a single staging record.
     
     Each worker creates its own requests.Session for optimal connection pooling.
@@ -2469,7 +2543,7 @@ def execute_single_document(staging_record, session_snapshot):
                 selected_keys = ['Documentnumber', 'Documentpart', 'Documenttype', 'Documentversion', 'LOIOID']
                 document_args = {k: document[k] for k in selected_keys}
                 formatted_args = ",".join(f"{k}='{v}'" for k, v in document_args.items())
-                base_read_url = cfg.get(source_system, 'api_list', 'document', 'base_url')
+                base_read_url = get_api_base_url(source_system, 'document')
                 request_url = f"{base_read_url}/DocumentfilesSet({formatted_args})/$value"
                 
                 download_start = time.time()
@@ -2963,7 +3037,7 @@ def execute_single_document(staging_record, session_snapshot):
                     f"Parallel upload: {len(_ok_uploads)} remaining files to {doc_number}",
                     category="UPLOAD"
                 )
-                _ul_workers = min(len(_ok_uploads), 5)
+                _ul_workers = min(len(_ok_uploads), 2)  # max 2 parallel to avoid SAP 500 errors
                 with ThreadPoolExecutor(max_workers=_ul_workers) as _ul_pool:
                     _ul_futures = {
                         _ul_pool.submit(
@@ -2995,6 +3069,65 @@ def execute_single_document(staging_record, session_snapshot):
         # Calculate timing and size statistics
         execution_time = time.time() - start_time
         total_bytes = sum(r.get('file_size', 0) for r in results)
+        
+        # ── CONTAINER_LOST detection ──────────────────────────────────
+        # If we trusted container_created=1 (retry mode) but SAP says the
+        # target document no longer exists, reset the flag and immediately
+        # re-run the migration to CREATE a fresh container in the same execution.
+        if container_already_created and not _container_lost_retry:
+            _not_exist_errors = [
+                r for r in results
+                if not r.get('skipped', False)
+                and r['status'] not in ('SUCCESS', 'SUCCESS_SKIPPED')
+                and any(
+                    phrase in str(r.get('error_detail', '')).lower()
+                    for phrase in ['existiert nicht', 'does not exist', 'not found']
+                )
+            ]
+            if _not_exist_errors:
+                logger.warning(
+                    f"CONTAINER_LOST: {len(_not_exist_errors)} upload(s) failed with "
+                    f"'document does not exist' — resetting and re-creating NOW.",
+                    category="CREATE"
+                )
+                try:
+                    with misc_engine.begin() as con:
+                        con.execute(text("""
+                            UPDATE dbo.migration_staging
+                            SET container_created = 0,
+                                execution_status = 'pending',
+                                execution_error = NULL,
+                                execution_started_at = NULL,
+                                execution_completed_at = NULL
+                            WHERE id = :sid
+                        """), {'sid': staging_id})
+                        con.execute(text("""
+                            DELETE FROM dbo.migration_file_details
+                            WHERE staging_id = :sid
+                        """), {'sid': staging_id})
+                except Exception as _rst_ex:
+                    logger.error(f"CONTAINER_LOST reset failed: {_rst_ex}", category="CREATE")
+                    # Fall through to normal partial/failed handling below
+
+                # Re-read the staging record with the reset state
+                try:
+                    with misc_engine.begin() as con:
+                        _row = con.execute(text("""
+                            SELECT * FROM dbo.migration_staging WHERE id = :sid
+                        """), {'sid': staging_id}).fetchone()
+                    if _row:
+                        _fresh_record = dict(_row._mapping)
+                        logger.info(
+                            f"CONTAINER_LOST: Retrying with fresh container creation for staging_id={staging_id}",
+                            category="CREATE"
+                        )
+                        return execute_single_document(
+                            _fresh_record, session_snapshot,
+                            _container_lost_retry=True
+                        )
+                except Exception as _reread_ex:
+                    logger.error(f"CONTAINER_LOST re-read failed: {_reread_ex}", category="CREATE")
+        # ── end CONTAINER_LOST ────────────────────────────────────────
         
         # Determine overall status
         # Count SUCCESS and SUCCESS_SKIPPED as successful

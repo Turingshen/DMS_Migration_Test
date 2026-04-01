@@ -1,8 +1,209 @@
+// ─── Custom Badges & Sorting (localStorage) ────────────────────────
+
+const BADGE_COLORS = [
+    'badge-primary', 'badge-secondary', 'badge-success', 'badge-danger',
+    'badge-warning', 'badge-info', 'badge-dark', 'badge-light'
+];
+const BADGE_COLOR_LABELS = {
+    'badge-primary': 'Blau', 'badge-secondary': 'Grau', 'badge-success': 'Grün',
+    'badge-danger': 'Rot', 'badge-warning': 'Gelb', 'badge-info': 'Cyan',
+    'badge-dark': 'Dunkel', 'badge-light': 'Hell'
+};
+
+function _badgeStoreKey(section) { return 'dms_badges_' + section; }
+function _sortStoreKey(section) { return 'dms_sort_' + section; }
+
+function loadBadges(section) {
+    try { return JSON.parse(localStorage.getItem(_badgeStoreKey(section))) || {}; } catch(e) { return {}; }
+}
+function saveBadges(section, data) {
+    localStorage.setItem(_badgeStoreKey(section), JSON.stringify(data));
+}
+function getBadgesFor(section, systemId) {
+    return (loadBadges(section)[systemId] || []);
+}
+function setBadgesFor(section, systemId, badges) {
+    const all = loadBadges(section);
+    all[systemId] = badges;
+    saveBadges(section, all);
+}
+
+function loadSortPref(section) {
+    try { return JSON.parse(localStorage.getItem(_sortStoreKey(section))) || { field: 'name', dir: 'asc' }; } catch(e) { return { field: 'name', dir: 'asc' }; }
+}
+function saveSortPref(section, pref) {
+    localStorage.setItem(_sortStoreKey(section), JSON.stringify(pref));
+}
+
+function renderCustomBadges(section, systemId) {
+    const badges = getBadgesFor(section, systemId);
+    return badges.map(b =>
+        `<span class="badge ${escapeHtml(b.color)} ml-1" style="cursor:pointer;" title="${t('set.badge.click_edit')}" onclick="openBadgeEditor('${section}','${systemId}')">${escapeHtml(b.text)}</span>`
+    ).join('');
+}
+
+function openBadgeEditor(section, systemId) {
+    // Remove any existing editor
+    const existingEditor = document.getElementById('badge-editor-overlay');
+    if (existingEditor) existingEditor.remove();
+
+    const badges = getBadgesFor(section, systemId);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'badge-editor-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+    let badgeRows = '';
+    badges.forEach((b, i) => {
+        const colorOptions = BADGE_COLORS.map(c =>
+            `<option value="${c}" ${b.color === c ? 'selected' : ''}>${BADGE_COLOR_LABELS[c]}</option>`
+        ).join('');
+        badgeRows += `
+            <div class="form-row mb-2 badge-edit-row" data-idx="${i}">
+                <div class="col-md-5">
+                    <input type="text" class="form-control form-control-sm badge-edit-text" value="${escapeHtml(b.text)}" maxlength="30" placeholder="${t('set.badge.text_ph')}">
+                </div>
+                <div class="col-md-4">
+                    <select class="form-control form-control-sm badge-edit-color">${colorOptions}</select>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.badge-edit-row').remove()"><i class="fas fa-trash"></i></button>
+                    <span class="badge badge-preview ml-1"></span>
+                </div>
+            </div>`;
+    });
+
+    overlay.innerHTML = `
+        <div class="card" style="min-width:450px;max-width:550px;">
+            <div class="card-header bg-dark text-white py-2">
+                <strong><i class="fas fa-tags"></i> ${t('set.badge.edit_title')} – ${systemId.toUpperCase()}</strong>
+                <button class="btn btn-sm btn-outline-light float-right" onclick="document.getElementById('badge-editor-overlay').remove()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="card-body" id="badgeEditorBody">
+                <div id="badgeEditorRows">${badgeRows}</div>
+                <button class="btn btn-sm btn-outline-success mt-2" id="badgeAddBtn">
+                    <i class="fas fa-plus"></i> ${t('set.badge.add')}
+                </button>
+            </div>
+            <div class="card-footer text-right py-2">
+                <button class="btn btn-primary btn-sm" id="badgeSaveBtn"><i class="fas fa-save"></i> ${t('save')}</button>
+                <button class="btn btn-outline-secondary btn-sm ml-1" onclick="document.getElementById('badge-editor-overlay').remove()">${t('cancel')}</button>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    // Add badge button
+    document.getElementById('badgeAddBtn').addEventListener('click', function() {
+        const colorOptions = BADGE_COLORS.map(c =>
+            `<option value="${c}">${BADGE_COLOR_LABELS[c]}</option>`
+        ).join('');
+        const row = document.createElement('div');
+        row.className = 'form-row mb-2 badge-edit-row';
+        row.innerHTML = `
+            <div class="col-md-5">
+                <input type="text" class="form-control form-control-sm badge-edit-text" value="" maxlength="30" placeholder="${t('set.badge.text_ph')}">
+            </div>
+            <div class="col-md-4">
+                <select class="form-control form-control-sm badge-edit-color">${colorOptions}</select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.badge-edit-row').remove()"><i class="fas fa-trash"></i></button>
+            </div>`;
+        document.getElementById('badgeEditorRows').appendChild(row);
+        row.querySelector('.badge-edit-text').focus();
+    });
+
+    // Save badges
+    document.getElementById('badgeSaveBtn').addEventListener('click', function() {
+        const rows = document.querySelectorAll('#badgeEditorRows .badge-edit-row');
+        const newBadges = [];
+        rows.forEach(r => {
+            const txt = r.querySelector('.badge-edit-text').value.trim();
+            const col = r.querySelector('.badge-edit-color').value;
+            if (txt) newBadges.push({ text: txt, color: col });
+        });
+        setBadgesFor(section, systemId, newBadges);
+        overlay.remove();
+        // Refresh the section
+        if (section === 'cred') loadCredentials();
+        else loadSapSystems();
+    });
+}
+
+function sortSystems(systems, section) {
+    const pref = loadSortPref(section);
+    const dir = pref.dir === 'desc' ? -1 : 1;
+    return systems.slice().sort((a, b) => {
+        let va, vb;
+        switch (pref.field) {
+            case 'type':
+                va = a.system_type || ''; vb = b.system_type || '';
+                break;
+            case 'env':
+                // Order: DEV < QUAL < PROD < empty
+                const envOrder = { 'DEV': 0, 'QUAL': 1, 'PROD': 2 };
+                va = envOrder[(a.environment || '').toUpperCase()] ?? 3;
+                vb = envOrder[(b.environment || '').toUpperCase()] ?? 3;
+                break;
+            case 'status':
+                // For credentials: configured first
+                va = a.has_credentials ? 0 : 1; vb = b.has_credentials ? 0 : 1;
+                break;
+            case 'source':
+                va = a.source || ''; vb = b.source || '';
+                break;
+            case 'auth':
+                va = a.auth_type || ''; vb = b.auth_type || '';
+                break;
+            case 'badges':
+                // Systems with custom badges first
+                va = getBadgesFor(section, a.system_id).length > 0 ? 0 : 1;
+                vb = getBadgesFor(section, b.system_id).length > 0 ? 0 : 1;
+                break;
+            default: // 'name'
+                va = a.system_id || ''; vb = b.system_id || '';
+        }
+        if (typeof va === 'string') return va.localeCompare(vb) * dir;
+        return (va - vb) * dir;
+    });
+}
+
+function renderSortControls(section, containerId) {
+    const pref = loadSortPref(section);
+    const fields = section === 'cred'
+        ? [['name', t('set.sort.name')], ['type', t('set.sort.type')], ['status', t('set.sort.status')], ['auth', 'Auth'], ['badges', t('set.sort.badges')]]
+        : [['name', t('set.sort.name')], ['type', t('set.sort.type')], ['env', t('set.sort.env')], ['source', t('set.sort.source')], ['auth', 'Auth'], ['badges', t('set.sort.badges')]];
+
+    const btns = fields.map(([f, label]) => {
+        const isActive = pref.field === f;
+        const arrow = isActive ? (pref.dir === 'asc' ? ' ↑' : ' ↓') : '';
+        return `<button class="btn btn-xs ${isActive ? 'btn-primary' : 'btn-outline-secondary'} mr-1" onclick="toggleSort('${section}','${f}')">${label}${arrow}</button>`;
+    }).join('');
+
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = btns;
+}
+
+function toggleSort(section, field) {
+    const pref = loadSortPref(section);
+    if (pref.field === field) {
+        pref.dir = pref.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+        pref.field = field;
+        pref.dir = 'asc';
+    }
+    saveSortPref(section, pref);
+    if (section === 'cred') loadCredentials();
+    else loadSapSystems();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    updateThroughput();
-    loadPacingStats();
-    loadCredentials();
-    loadSapSystems();
+    try { updateThroughput(); } catch(e) { console.error('[settings] updateThroughput failed:', e); }
+    try { loadPacingStats(); } catch(e) { console.error('[settings] loadPacingStats failed:', e); }
+    try { loadCredentials(); } catch(e) { console.error('[settings] loadCredentials failed:', e); }
+    try { loadSapSystems(); } catch(e) { console.error('[settings] loadSapSystems failed:', e); }
+    try { runHealthCheck(); } catch(e) { console.error('[settings] runHealthCheck failed:', e); }
     
     document.getElementById('maxWorkers').addEventListener('input', updateThroughput);
     document.getElementById('pacingSeconds').addEventListener('input', updateThroughput);
@@ -178,8 +379,14 @@ function loadCredentials() {
             document.getElementById('credentialsNoSystems').style.display = 'none';
             const container = document.getElementById('credentialsList');
             container.innerHTML = '';
+
+            // Render sort controls
+            renderSortControls('cred', 'credSortControls');
+
+            // Sort systems
+            const sortedSystems = sortSystems(data.systems, 'cred');
             
-            data.systems.forEach(sys => {
+            sortedSystems.forEach(sys => {
                 const card = document.createElement('div');
                 card.className = 'card mb-3';
                 card.id = 'cred-card-' + sys.system_id;
@@ -211,6 +418,8 @@ function loadCredentials() {
                         <span>
                             <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
                             ${typeBadge}${authBadge}
+                            ${renderCustomBadges('cred', sys.system_id)}
+                            <button class="btn btn-xs btn-outline-secondary ml-1" onclick="openBadgeEditor('cred','${sys.system_id}')" title="${t('set.badge.edit_title')}"><i class="fas fa-tags"></i></button>
                             <small class="text-muted ml-2">${sys.description || sys.system_label}</small>
                         </span>
                         ${statusBadge}
@@ -220,7 +429,7 @@ function loadCredentials() {
                         
                         <div id="cred-form-${sys.system_id}" style="display: none;">
                             <div class="form-row mb-2">
-                                <div class="${sys.is_custom ? 'col-md-6' : 'col-md-12'}">
+                                <div class="col-md-6">
                                     <div class="form-group mb-1">
                                         <label><i class="fas fa-tag"></i> Beschreibung</label>
                                         <input type="text" class="form-control" id="cred-desc-${sys.system_id}" 
@@ -228,7 +437,6 @@ function loadCredentials() {
                                                maxlength="200" placeholder="${sys.system_label}">
                                     </div>
                                 </div>
-                                ${sys.is_custom ? `
                                 <div class="col-md-6">
                                     <div class="form-group mb-1">
                                         <label><i class="fas fa-globe"></i> Host</label>
@@ -237,7 +445,6 @@ function loadCredentials() {
                                                placeholder="z.B. zvfr3.basf.net">
                                     </div>
                                 </div>
-                                ` : ''}
                             </div>
                             <div class="form-row">
                                 <div class="col-md-3">
@@ -260,10 +467,9 @@ function loadCredentials() {
                                     <div class="form-group">
                                         <label><i class="fas fa-building"></i> Mandant</label>
                                         <input type="text" class="form-control" id="cred-client-${sys.system_id}" 
-                                               value="${sys.sap_client || sys.config_client || '100'}" 
+                                               value="${sys.sap_client || sys.config_client || ''}" 
                                                maxlength="3" pattern="[0-9]{3}"
-                                               placeholder="100"
-                                               ${sys.system_type === 'R3' ? 'disabled' : ''}>
+                                               placeholder="100">
                                     </div>
                                 </div>
                                 <div class="col-md-4 d-flex align-items-end">
@@ -484,123 +690,82 @@ let editingSystemId = null;
 function loadSapSystems() {
     document.getElementById('sapSystemsLoading').style.display = 'block';
     document.getElementById('sapSystemsList').style.display = 'none';
+    document.getElementById('envTabs').style.display = 'none';
     
     fetch('/sap-systems')
         .then(r => r.json())
         .then(data => {
             document.getElementById('sapSystemsLoading').style.display = 'none';
-            document.getElementById('sapSystemsList').style.display = 'block';
             
             if (!data.success || !data.systems || data.systems.length === 0) {
+                document.getElementById('sapSystemsList').style.display = 'block';
                 document.getElementById('sapSystemsList').innerHTML = 
                     '<div class="alert alert-info"><i class="fas fa-info-circle"></i> ' + t('set.sys.no_systems') + '</div>';
+                document.getElementById('sysSortWrapper').style.display = 'none';
                 return;
             }
 
-            const container = document.getElementById('sapSystemsList');
-            container.innerHTML = '';
-            
-            data.systems.forEach(sys => {
-                const card = document.createElement('div');
-                card.className = 'card mb-3';
-                
-                const typeBadge = sys.system_type === 'R3'
-                    ? '<span class="badge badge-info">R/3 Source</span>'
-                    : '<span class="badge badge-primary">S/4 Target</span>';
-                
-                const sourceBadge = sys.source === 'yaml' 
-                    ? '<span class="badge badge-secondary ml-1" title="' + t('set.sys.source_yaml') + '">YAML</span>'
-                    : sys.source === 'db+yaml'
-                    ? '<span class="badge badge-warning ml-1" title="YAML + DB Override">DB+YAML</span>'
-                    : '<span class="badge badge-success ml-1" title="' + t('set.sys.source_db') + '">DB</span>';
-                
-                const authBadge = sys.auth_type === 'basic'
-                    ? '<span class="badge badge-dark ml-1">Basic</span>'
-                    : '<span class="badge badge-secondary ml-1">OAuth</span>';
+            // Render sort controls
+            document.getElementById('sysSortWrapper').style.display = 'block';
+            renderSortControls('sys', 'sysSortControls');
 
-                // Build APIs table
-                let apisHtml = '';
-                if (sys.apis && sys.apis.length > 0) {
-                    apisHtml = '<table class="table table-sm table-bordered mt-2 mb-0"><thead class="thead-light"><tr>' +
-                        '<th>API</th><th>Label</th><th>Base URL</th><th>' + t('set.sys.source_col') + '</th><th></th></tr></thead><tbody>';
-                    sys.apis.forEach(api => {
-                        const apiSourceBadge = api.source === 'db' 
-                            ? '<span class="badge badge-success">DB</span>' 
-                            : '<span class="badge badge-secondary">YAML</span>';
-                        apisHtml += `<tr>
-                            <td><code>${api.api_name}</code></td>
-                            <td>${api.api_label || ''}</td>
-                            <td><small class="text-monospace">${api.base_url}</small></td>
-                            <td>${apiSourceBadge}</td>
-                            <td>
-                                <button class="btn btn-xs btn-outline-danger" title="${t('set.sys.remove_api')}"
-                                        onclick="deleteSapApi('${sys.system_id}', '${api.api_name}')">
-                                    <i class="fas fa-times"></i>
-                                </button>
-                            </td>
-                        </tr>`;
-                    });
-                    apisHtml += '</tbody></table>';
+            // Sort systems
+            const sortedSystems = sortSystems(data.systems, 'sys');
+
+            // Group by environment
+            const envGroups = { DEV: [], QUAL: [], PROD: [], '': [] };
+            sortedSystems.forEach(sys => {
+                const env = (sys.environment || '').toUpperCase();
+                if (envGroups[env] !== undefined) {
+                    envGroups[env].push(sys);
                 } else {
-                    apisHtml = '<small class="text-muted">' + t('set.sys.no_apis') + '</small>';
+                    envGroups[''].push(sys);
                 }
-
-                // Add API inline form
-                const addApiFormId = 'add-api-' + sys.system_id;
-                const addApiHtml = `
-                    <div id="${addApiFormId}" class="form-row mt-2" style="display:none;">
-                        <div class="col-md-2">
-                            <input type="text" class="form-control form-control-sm" id="new-api-name-${sys.system_id}" placeholder="API Name">
-                        </div>
-                        <div class="col-md-2">
-                            <input type="text" class="form-control form-control-sm" id="new-api-label-${sys.system_id}" placeholder="Label">
-                        </div>
-                        <div class="col-md-5">
-                            <input type="text" class="form-control form-control-sm" id="new-api-url-${sys.system_id}" placeholder="Base URL">
-                        </div>
-                        <div class="col-md-3">
-                            <button class="btn btn-sm btn-success mr-1" onclick="saveNewApi('${sys.system_id}')">
-                                <i class="fas fa-check"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('${addApiFormId}').style.display='none'">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    </div>`;
-
-                card.innerHTML = `
-                    <div class="card-header d-flex justify-content-between align-items-center py-2">
-                        <span>
-                            <strong><i class="fas fa-server"></i> ${sys.system_id.toUpperCase()}</strong>
-                            ${typeBadge}${authBadge}${sourceBadge}
-                            <small class="text-muted ml-2">${sys.system_label}</small>
-                        </span>
-                        <span>
-                            <small class="text-muted mr-2">${sys.host || ''}</small>
-                            <button class="btn btn-xs btn-outline-primary" onclick="editSystem('${sys.system_id}')" title="${t('set.sys.edit')}">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            ${sys.source !== 'yaml' ? `
-                                <button class="btn btn-xs btn-outline-danger ml-1" onclick="deleteSapSystem('${sys.system_id}')" title="${t('set.sys.deactivate')}">
-                                    <i class="fas fa-trash"></i>
-                                </button>
-                            ` : ''}
-                        </span>
-                    </div>
-                    <div class="card-body py-2">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <small><strong>${t('set.sys.endpoints')}:</strong></small>
-                            <button class="btn btn-xs btn-outline-success" onclick="document.getElementById('${addApiFormId}').style.display='flex'">
-                                <i class="fas fa-plus"></i> API
-                            </button>
-                        </div>
-                        ${apisHtml}
-                        ${addApiHtml}
-                        ${sys.api_key_masked ? `<small class="text-muted mt-1 d-block">API-Key: <code>${sys.api_key_masked}</code></small>` : ''}
-                    </div>
-                `;
-                container.appendChild(card);
             });
+
+            // Update tab counts
+            const total = sortedSystems.length;
+            document.getElementById('envCountAll').textContent = total;
+            document.getElementById('envCountDev').textContent = envGroups.DEV.length;
+            document.getElementById('envCountQual').textContent = envGroups.QUAL.length;
+            document.getElementById('envCountProd').textContent = envGroups.PROD.length;
+            document.getElementById('envCountNone').textContent = envGroups[''].length;
+
+            // Show/hide tabs based on content
+            document.getElementById('envTabs').style.display = 'flex';
+            document.getElementById('env-dev-tab').parentElement.style.display = envGroups.DEV.length ? '' : 'none';
+            document.getElementById('env-qual-tab').parentElement.style.display = envGroups.QUAL.length ? '' : 'none';
+            document.getElementById('env-prod-tab').parentElement.style.display = envGroups.PROD.length ? '' : 'none';
+            document.getElementById('env-none-tab').parentElement.style.display = envGroups[''].length ? '' : 'none';
+
+            // Render "All" tab (ungrouped flat list)
+            document.getElementById('env-all').innerHTML = _renderSystemCards(sortedSystems);
+
+            // Render each environment tab with OAuth / Direct sub-groups
+            ['DEV', 'QUAL', 'PROD', ''].forEach(env => {
+                const tabId = env ? 'env-' + env.toLowerCase() : 'env-none';
+                const systems = envGroups[env];
+                if (systems.length === 0) {
+                    document.getElementById(tabId).innerHTML = '';
+                    return;
+                }
+                const oauth = systems.filter(s => s.auth_type !== 'basic');
+                const direct = systems.filter(s => s.auth_type === 'basic');
+
+                let html = '';
+                if (oauth.length > 0) {
+                    html += `<h6 class="mt-2 mb-2 text-muted"><i class="fas fa-cloud"></i> OAuth / API Gateway <span class="badge badge-secondary">${oauth.length}</span></h6>`;
+                    html += _renderSystemCards(oauth);
+                }
+                if (direct.length > 0) {
+                    html += `<h6 class="mt-3 mb-2 text-muted"><i class="fas fa-link"></i> Direct / Basic Auth <span class="badge badge-dark">${direct.length}</span></h6>`;
+                    html += _renderSystemCards(direct);
+                }
+                document.getElementById(tabId).innerHTML = html;
+            });
+
+            // sapSystemsList is no longer needed for card display (tabs take over)
+            document.getElementById('sapSystemsList').style.display = 'none';
         })
         .catch(error => {
             console.error('Error loading SAP systems:', error);
@@ -609,6 +774,124 @@ function loadSapSystems() {
             document.getElementById('sapSystemsList').innerHTML = 
                 '<div class="alert alert-danger"><i class="fas fa-exclamation-circle"></i> ' + error + '</div>';
         });
+}
+
+/**
+ * Render an array of system objects as Bootstrap cards HTML.
+ */
+function _renderSystemCards(systems) {
+    let html = '';
+    systems.forEach(sys => {
+        const typeBadge = sys.system_type === 'R3'
+            ? '<span class="badge badge-info">R/3 Source</span>'
+            : '<span class="badge badge-primary">S/4 Target</span>';
+        
+        const sourceBadge = sys.source === 'yaml' 
+            ? '<span class="badge badge-secondary ml-1" title="' + t('set.sys.source_yaml') + '">YAML</span>'
+            : sys.source === 'db+yaml'
+            ? '<span class="badge badge-warning ml-1" title="YAML + DB Override">DB+YAML</span>'
+            : '<span class="badge badge-success ml-1" title="' + t('set.sys.source_db') + '">DB</span>';
+        
+        const authBadge = sys.auth_type === 'basic'
+            ? '<span class="badge badge-dark ml-1">Basic</span>'
+            : '<span class="badge badge-secondary ml-1">OAuth</span>';
+        
+        const clientBadge = sys.sap_client
+            ? `<span class="badge badge-light ml-1" title="SAP Mandant">Mdt ${escapeHtml(sys.sap_client)}</span>`
+            : '';
+        const sslBadge = sys.verify_ssl === false
+            ? '<span class="badge badge-warning ml-1" title="SSL nicht verifiziert"><i class="fas fa-unlock"></i></span>'
+            : '';
+
+        const envBadge = sys.environment
+            ? `<span class="badge ${sys.environment === 'PROD' ? 'badge-danger' : sys.environment === 'QUAL' ? 'badge-warning' : 'badge-info'} ml-1">${escapeHtml(sys.environment)}</span>`
+            : '';
+
+        // Build APIs table
+        let apisHtml = '';
+        if (sys.apis && sys.apis.length > 0) {
+            apisHtml = '<table class="table table-sm table-bordered mt-2 mb-0"><thead class="thead-light"><tr>' +
+                '<th>API</th><th>Label</th><th>Base URL</th><th>' + t('set.sys.source_col') + '</th><th></th></tr></thead><tbody>';
+            sys.apis.forEach(api => {
+                const apiSourceBadge = api.source === 'db' 
+                    ? '<span class="badge badge-success">DB</span>' 
+                    : '<span class="badge badge-secondary">YAML</span>';
+                apisHtml += `<tr>
+                    <td><code>${escapeHtml(api.api_name)}</code></td>
+                    <td>${escapeHtml(api.api_label || '')}</td>
+                    <td><small class="text-monospace">${escapeHtml(api.base_url)}</small></td>
+                    <td>${apiSourceBadge}</td>
+                    <td>
+                        <button class="btn btn-xs btn-outline-danger" title="${t('set.sys.remove_api')}"
+                                onclick="deleteSapApi('${escapeHtml(sys.system_id)}', '${escapeHtml(api.api_name)}')">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </td>
+                </tr>`;
+            });
+            apisHtml += '</tbody></table>';
+        } else {
+            apisHtml = '<small class="text-muted">' + t('set.sys.no_apis') + '</small>';
+        }
+
+        // Add API inline form
+        const addApiFormId = 'add-api-' + sys.system_id;
+        const addApiHtml = `
+            <div id="${addApiFormId}" class="form-row mt-2" style="display:none;">
+                <div class="col-md-2">
+                    <input type="text" class="form-control form-control-sm" id="new-api-name-${sys.system_id}" placeholder="API Name">
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control form-control-sm" id="new-api-label-${sys.system_id}" placeholder="Label">
+                </div>
+                <div class="col-md-5">
+                    <input type="text" class="form-control form-control-sm" id="new-api-url-${sys.system_id}" placeholder="Base URL">
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-success mr-1" onclick="saveNewApi('${escapeHtml(sys.system_id)}')">
+                        <i class="fas fa-check"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('${addApiFormId}').style.display='none'">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>`;
+
+        html += `
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <span>
+                        <span id="health-badge-${sys.system_id}" class="mr-1"></span>
+                        <strong><i class="fas fa-server"></i> ${escapeHtml(sys.system_id.toUpperCase())}</strong>
+                        ${typeBadge}${authBadge}${clientBadge}${sslBadge}${envBadge}${sourceBadge}
+                        ${renderCustomBadges('sys', sys.system_id)}
+                        <button class="btn btn-xs btn-outline-secondary ml-1" onclick="openBadgeEditor('sys','${escapeHtml(sys.system_id)}')" title="${t('set.badge.edit_title')}"><i class="fas fa-tags"></i></button>
+                        <small class="text-muted ml-2">${escapeHtml(sys.system_label)}</small>
+                    </span>
+                    <span>
+                        <small class="text-muted mr-2">${escapeHtml(sys.host || '')}</small>
+                        <button class="btn btn-xs btn-outline-primary" onclick="editSystem('${escapeHtml(sys.system_id)}')" title="${t('set.sys.edit')}">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-xs btn-outline-danger ml-1" onclick="deleteSapSystem('${escapeHtml(sys.system_id)}')" title="${t('set.sys.deactivate')}">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </span>
+                </div>
+                <div class="card-body py-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small><strong>${t('set.sys.endpoints')}:</strong></small>
+                        <button class="btn btn-xs btn-outline-success" onclick="document.getElementById('${addApiFormId}').style.display='flex'">
+                            <i class="fas fa-plus"></i> API
+                        </button>
+                    </div>
+                    ${apisHtml}
+                    ${addApiHtml}
+                    ${sys.api_key_masked ? `<small class="text-muted mt-1 d-block">API-Key: <code>${escapeHtml(sys.api_key_masked)}</code></small>` : ''}
+                </div>
+            </div>`;
+    });
+    return html;
 }
 
 function showAddSystemForm() {
@@ -620,9 +903,13 @@ function showAddSystemForm() {
     document.getElementById('sysType').value = 'R3';
     document.getElementById('sysHost').value = '';
     document.getElementById('sysAuth').value = 'oauth';
+    document.getElementById('sysClient').value = '';
     document.getElementById('sysApiKey').value = '';
+    document.getElementById('sysEnv').value = '';
+    document.getElementById('sysVerifySsl').checked = true;
     document.getElementById('systemApisEditor').innerHTML = '';
     document.getElementById('systemFormCard').style.display = 'block';
+    document.getElementById('systemFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
     document.getElementById('sysId').focus();
 }
 
@@ -642,7 +929,10 @@ function editSystem(systemId) {
             document.getElementById('sysType').value = sys.system_type;
             document.getElementById('sysHost').value = sys.host || '';
             document.getElementById('sysAuth').value = sys.auth_type || 'oauth';
+            document.getElementById('sysClient').value = sys.sap_client || '';
             document.getElementById('sysApiKey').value = sys.api_key || '';
+            document.getElementById('sysEnv').value = sys.environment || '';
+            document.getElementById('sysVerifySsl').checked = sys.verify_ssl !== false;
             
             // Populate APIs
             const apisDiv = document.getElementById('systemApisEditor');
@@ -652,6 +942,7 @@ function editSystem(systemId) {
             });
             
             document.getElementById('systemFormCard').style.display = 'block';
+            document.getElementById('systemFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
 }
 
@@ -692,7 +983,10 @@ function saveSapSystem(event) {
     const systemType = document.getElementById('sysType').value;
     const host = document.getElementById('sysHost').value.trim();
     const authType = document.getElementById('sysAuth').value;
+    const sapClient = document.getElementById('sysClient').value.trim();
     const apiKey = document.getElementById('sysApiKey').value.trim();
+    const verifySsl = document.getElementById('sysVerifySsl').checked;
+    const environment = document.getElementById('sysEnv').value;
     
     if (!systemId || !systemLabel) {
         alert(t('set.sys.id_label_required'));
@@ -715,7 +1009,8 @@ function saveSapSystem(event) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             system_id: systemId, system_label: systemLabel, system_type: systemType,
-            host: host, auth_type: authType, api_key: apiKey, verify_ssl: true, apis: apis
+            host: host, auth_type: authType, sap_client: sapClient, api_key: apiKey,
+            verify_ssl: verifySsl, environment: environment, apis: apis
         })
     })
     .then(r => r.json())
@@ -785,4 +1080,118 @@ function deleteSapApi(systemId, apiName) {
             }
         })
         .catch(error => alert(t('error_prefix') + error));
+}
+
+
+// ─── Health Check (Ampel) ───────────────────────────────────────────
+
+let _healthCache = null;
+
+function runHealthCheck() {
+    const btn = document.getElementById('healthCheckBtn');
+    const icon = document.getElementById('healthCheckIcon');
+    const body = document.getElementById('healthStatusBody');
+    const details = document.getElementById('healthDetails');
+    const summaryEl = document.getElementById('healthSummaryBadges');
+    const tsEl = document.getElementById('healthTimestamp');
+    const header = document.getElementById('healthCardHeader');
+
+    // Spinning icon
+    if (icon) icon.className = 'fas fa-sync-alt fa-spin';
+    if (btn) btn.disabled = true;
+    summaryEl.innerHTML = '<span class="badge badge-secondary"><i class="fas fa-spinner fa-spin"></i> ' + t('set.health.checking') + '</span>';
+
+    fetch('/api/health-check', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (icon) icon.className = 'fas fa-sync-alt';
+            if (btn) btn.disabled = false;
+
+            if (!data.success) {
+                summaryEl.innerHTML = '<span class="badge badge-danger">Error</span>';
+                return;
+            }
+
+            _healthCache = data.results;
+            const s = data.summary;
+
+            // Summary badges in header
+            let sumHtml = '';
+            if (s.ok > 0) sumHtml += `<span class="badge badge-success mr-1"><i class="fas fa-check-circle"></i> ${s.ok}</span>`;
+            if (s.error > 0) sumHtml += `<span class="badge badge-danger mr-1"><i class="fas fa-times-circle"></i> ${s.error}</span>`;
+            const warnCount = s.total - s.ok - s.error;
+            if (warnCount > 0) sumHtml += `<span class="badge badge-warning mr-1"><i class="fas fa-exclamation-triangle"></i> ${warnCount}</span>`;
+            sumHtml += `<small class="text-muted">${data.total_ms}ms</small>`;
+            summaryEl.innerHTML = sumHtml;
+
+            // Header color
+            if (s.error === 0 && warnCount === 0) {
+                header.style.background = '#d4edda'; // green
+            } else if (s.error > 0) {
+                header.style.background = '#f8d7da'; // red
+            } else {
+                header.style.background = '#fff3cd'; // yellow
+            }
+
+            // Timestamp
+            tsEl.textContent = new Date().toLocaleTimeString();
+
+            // Detailed results table
+            let tbl = '<table class="table table-sm table-bordered mb-0"><thead class="thead-light"><tr>' +
+                '<th>' + t('set.health.system') + '</th><th>CSRF</th><th>APIs</th><th>Status</th><th>ms</th></tr></thead><tbody>';
+            const sortedIds = Object.keys(data.results).sort();
+            sortedIds.forEach(sid => {
+                const r = data.results[sid];
+                const statusIcon = r.status === 'ok' ? '<span class="text-success"><i class="fas fa-check-circle"></i></span>'
+                    : r.status === 'error' ? '<span class="text-danger"><i class="fas fa-times-circle"></i></span>'
+                    : r.status === 'warn' ? '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i></span>'
+                    : '<span class="text-muted"><i class="fas fa-minus-circle"></i></span>';
+                const csrfIcon = r.csrf === true ? '<span class="text-success"><i class="fas fa-check"></i></span>'
+                    : r.csrf === false ? '<span class="text-danger"><i class="fas fa-times"></i></span>'
+                    : '<span class="text-muted">\u2013</span>';
+
+                let apiIcons = '';
+                if (r.apis && Object.keys(r.apis).length > 0) {
+                    Object.entries(r.apis).forEach(([name, info]) => {
+                        const color = info.reachable ? 'text-success' : 'text-danger';
+                        const ic = info.reachable ? 'fa-check' : 'fa-times';
+                        apiIcons += `<span class="${color}" title="${escapeHtml(name)}: HTTP ${info.status_code || 'err'}"><i class="fas ${ic}"></i> <small>${escapeHtml(name)}</small></span> `;
+                    });
+                } else {
+                    apiIcons = '<span class="text-muted">\u2013</span>';
+                }
+
+                const msgHint = r.message ? ` title="${escapeHtml(r.message)}"` : '';
+                tbl += `<tr><td><strong>${escapeHtml(sid.toUpperCase())}</strong></td><td>${csrfIcon}</td><td>${apiIcons}</td><td${msgHint}>${statusIcon}</td><td>${r.ms}</td></tr>`;
+            });
+            tbl += '</tbody></table>';
+            details.innerHTML = tbl;
+            body.style.display = 'block';
+
+            // Apply ampel badges to system cards
+            _applyHealthBadges(data.results);
+        })
+        .catch(err => {
+            console.error('[health-check]', err);
+            if (icon) icon.className = 'fas fa-sync-alt';
+            if (btn) btn.disabled = false;
+            summaryEl.innerHTML = '<span class="badge badge-danger">Fehler</span>';
+        });
+}
+
+function _applyHealthBadges(results) {
+    if (!results) return;
+    Object.entries(results).forEach(([sid, r]) => {
+        const el = document.getElementById('health-badge-' + sid);
+        if (!el) return;
+        if (r.status === 'ok') {
+            el.innerHTML = '<span class="badge badge-success" title="' + t('set.health.ok') + '"><i class="fas fa-check-circle"></i></span>';
+        } else if (r.status === 'error') {
+            el.innerHTML = '<span class="badge badge-danger" title="' + escapeHtml(r.message || t('set.health.error')) + '"><i class="fas fa-times-circle"></i></span>';
+        } else if (r.status === 'warn') {
+            el.innerHTML = '<span class="badge badge-warning" title="' + escapeHtml(r.message || t('set.health.warn')) + '"><i class="fas fa-exclamation-triangle"></i></span>';
+        } else {
+            el.innerHTML = '<span class="badge badge-secondary" title="' + escapeHtml(r.message || t('set.health.skip')) + '"><i class="fas fa-minus-circle"></i></span>';
+        }
+    });
 }

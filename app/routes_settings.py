@@ -198,6 +198,28 @@ def save_credentials():
         updated_by = session.get('fullName', session.get('preferred_username', 'unknown'))
         _save(system_id, username, password, updated_by, sap_client=sap_client, description=description, host=host)
 
+        # Sync host change to sap_systems table (single source of truth)
+        if host:
+            try:
+                from app_config import SapSystemManager
+                mgr = SapSystemManager()
+                existing = mgr.get_system(system_id)
+                if existing and existing.get('host') != host:
+                    mgr.save_system(
+                        system_id,
+                        existing['system_label'],
+                        existing['system_type'],
+                        host=host,
+                        auth_type=existing.get('auth_type', 'oauth'),
+                        api_key=existing.get('api_key', ''),
+                        sap_client=existing.get('sap_client', ''),
+                        verify_ssl=existing.get('verify_ssl', True),
+                        updated_by=updated_by
+                    )
+                    mgr.update_config_env()
+            except Exception:
+                pass  # non-critical: next restart will sync
+
         return jsonify({'success': True, 'message': f'Credentials for {system_id} saved'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -219,9 +241,10 @@ def delete_credentials(system_id):
 
 @migrate_bp.route('/credentials/test/<system_id>', methods=['POST'])
 def test_credentials(system_id):
-    """Test credentials by attempting a CSRF token fetch against the ZV system."""
+    """Test credentials by attempting a CSRF token fetch against the SAP system."""
     try:
-        from app.credentials import get_credentials, get_credential_info, list_basic_auth_systems, has_credentials
+        from app.credentials import get_credentials, list_basic_auth_systems, has_credentials
+        from app_config import SapSystemManager
         import requests as req_lib
 
         is_basic = system_id in list_basic_auth_systems()
@@ -234,23 +257,24 @@ def test_credentials(system_id):
         if not creds:
             return jsonify({'success': False, 'error': 'Keine Zugangsdaten für dieses System hinterlegt'}), 404
 
-        # Determine base_url and verify_ssl
-        if is_basic:
-            # Config system: read from YAML
-            base_url = cfg.get(system_id, 'api_list', 'document', 'base_url')
-            verify_ssl = cfg.get(system_id, 'verify_ssl') if 'verify_ssl' in cfg.config_env.get(system_id, {}) else True
+        # Determine base_url and verify_ssl from DB (sap_systems + sap_system_apis)
+        mgr = SapSystemManager()
+        sys_data = mgr.get_system(system_id)
+
+        if sys_data and sys_data.get('apis'):
+            # Use first configured API base_url from DB
+            first_api = next(iter(sys_data['apis'].values()), None)
+            base_url = first_api['base_url'] if first_api else None
+            verify_ssl = sys_data.get('verify_ssl', True)
         else:
-            # Custom system: derive URL from host stored in DB
-            info = get_credential_info(system_id)
-            host = info.get('host') if info else None
-            if not host:
-                return jsonify({'success': False, 'error': 'Kein Host hinterlegt – bitte Host-Feld ausfüllen'}), 400
-            base_url = f'https://{host}/sap/opu/odata/sap/API_DMS_PROCESS_SRV'
-            verify_ssl = False
+            return jsonify({'success': False, 'error': 'Keine API-URL in der DB konfiguriert – bitte API-Endpunkt unter Systems & APIs anlegen'}), 400
+
+        if not base_url:
+            return jsonify({'success': False, 'error': 'Keine Test-URL ermittelbar – bitte API-Endpunkt konfigurieren'}), 400
 
         test_headers = {'X-CSRF-Token': 'Fetch', 'Accept': 'application/json'}
-        # Add sap-client header: DB value > config fallback
-        sap_client = creds.get('sap_client') or cfg.config_env.get(system_id, {}).get('client')
+        # Add sap-client header: credential DB > system config > YAML fallback
+        sap_client = creds.get('sap_client') or (sys_data.get('sap_client') if sys_data else None) or cfg.config_env.get(system_id, {}).get('client')
         if sap_client:
             test_headers['sap-client'] = str(sap_client)
 
@@ -325,14 +349,18 @@ def save_sap_system():
         host = (data.get('host') or '').strip()
         auth_type = (data.get('auth_type') or 'oauth').strip().lower()
         api_key = (data.get('api_key') or '').strip()
+        sap_client = (data.get('sap_client') or '').strip()
         verify_ssl = data.get('verify_ssl', True)
+        environment = (data.get('environment') or '').strip().upper()
+        if environment not in ('DEV', 'QUAL', 'PROD', ''):
+            environment = ''
 
         if not system_id or not system_label or system_type not in ('R3', 'S4'):
             return jsonify({'success': False, 'error': 'system_id, system_label und system_type (R3/S4) sind erforderlich'}), 400
 
         updated_by = session.get('fullName', session.get('preferred_username', 'system'))
         mgr = SapSystemManager()
-        mgr.save_system(system_id, system_label, system_type, host, auth_type, api_key, verify_ssl, updated_by)
+        mgr.save_system(system_id, system_label, system_type, host, auth_type, api_key, sap_client, verify_ssl, updated_by, environment)
 
         # Also save APIs if provided
         apis = data.get('apis', [])
@@ -362,7 +390,7 @@ def delete_sap_system(system_id):
             mgr.update_config_env()
             return jsonify({'success': True, 'message': f'System {system_id} deaktiviert'})
         else:
-            return jsonify({'success': False, 'error': f'{system_id} ist kein DB-Eintrag (nur YAML-Systeme können nicht gelöscht werden)'}), 400
+            return jsonify({'success': False, 'error': f'{system_id} ist kein DB-Eintrag'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -400,5 +428,142 @@ def delete_sap_api(system_id, api_name):
         return jsonify({'success': True, 'message': f'API {api_name} von {system_id} deaktiviert'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# --- Health Check (parallel system ping) --------------------------------------
+
+@migrate_bp.route('/api/health-check', methods=['POST'])
+def health_check():
+    """Ping all SAP systems in parallel: CSRF token fetch + API endpoint reachability."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from app.credentials import get_credentials, list_basic_auth_systems, has_credentials
+    from app_config import SapSystemManager
+    import requests as req_lib
+    import time as _time
+
+    mgr = SapSystemManager()
+    merged = mgr.get_merged_systems()
+    basic_systems = list_basic_auth_systems()
+    bearer_token = session.get('bearer_token')
+
+    def _check_system(system_id, sys_data):
+        """Check a single system. Returns dict with status info."""
+        result = {
+            'system_id': system_id,
+            'status': 'unknown',      # ok | warn | error | skip
+            'csrf': None,             # True/False/None
+            'apis': {},               # api_name -> {reachable, status_code}
+            'message': '',
+            'ms': 0,
+        }
+        t0 = _time.time()
+        is_basic = system_id in basic_systems
+        is_custom = not is_basic and has_credentials(system_id)
+        verify_ssl = sys_data.get('verify_ssl', True)
+
+        # --- 1) CSRF token check (only for systems with credentials) ---
+        if is_basic or is_custom:
+            try:
+                creds = get_credentials(system_id)
+                if creds:
+                    # Use first configured API URL from DB for CSRF fetch
+                    apis = sys_data.get('apis', {})
+                    first_api = next(iter(apis.values()), None) if apis else None
+                    csrf_url = first_api['base_url'] if first_api else None
+                    ssl = sys_data.get('verify_ssl', False)
+
+                    if csrf_url:
+                        hdrs = {'X-CSRF-Token': 'Fetch', 'Accept': 'application/json'}
+                        sap_client = creds.get('sap_client') or sys_data.get('sap_client') or cfg.config_env.get(system_id, {}).get('client')
+                        if sap_client:
+                            hdrs['sap-client'] = str(sap_client)
+                        resp = req_lib.get(csrf_url, auth=(creds['username'], creds['password']),
+                                           headers=hdrs, verify=ssl, timeout=10)
+                        if resp.status_code == 200:
+                            result['csrf'] = bool(resp.headers.get('x-csrf-token', ''))
+                        else:
+                            result['csrf'] = False
+                            result['message'] = f'CSRF HTTP {resp.status_code}'
+            except Exception as e:
+                result['csrf'] = False
+                result['message'] = str(e)[:120]
+
+        # --- 2) API endpoint reachability (HEAD with bearer or basic) ---
+        apis = sys_data.get('apis', {})
+        for api_name, api_info in apis.items():
+            base_url = api_info.get('base_url', '')
+            if not base_url:
+                result['apis'][api_name] = {'reachable': False, 'status_code': 0, 'error': 'No URL'}
+                continue
+            try:
+                hdrs = {'Accept': 'application/json'}
+                auth = None
+                if is_basic or is_custom:
+                    creds = get_credentials(system_id)
+                    if creds:
+                        auth = (creds['username'], creds['password'])
+                        sap_client = creds.get('sap_client') or sys_data.get('sap_client') or cfg.config_env.get(system_id, {}).get('client')
+                        if sap_client:
+                            hdrs['sap-client'] = str(sap_client)
+                elif bearer_token:
+                    hdrs['Authorization'] = 'Bearer ' + bearer_token
+                    api_key = sys_data.get('api_key', '')
+                    if api_key:
+                        hdrs['APIKey'] = api_key
+
+                resp = req_lib.get(base_url, headers=hdrs, auth=auth,
+                                   verify=verify_ssl, timeout=10)
+                result['apis'][api_name] = {
+                    'reachable': resp.status_code < 500,
+                    'status_code': resp.status_code,
+                }
+            except Exception as e:
+                result['apis'][api_name] = {
+                    'reachable': False,
+                    'status_code': 0,
+                    'error': str(e)[:80],
+                }
+
+        # --- Derive overall status ---
+        result['ms'] = int((_time.time() - t0) * 1000)
+        api_results = list(result['apis'].values())
+        all_reachable = all(a['reachable'] for a in api_results) if api_results else None
+
+        if result['csrf'] is True and all_reachable in (True, None):
+            result['status'] = 'ok'
+        elif result['csrf'] is False or all_reachable is False:
+            result['status'] = 'error'
+        elif result['csrf'] is None and all_reachable is True:
+            result['status'] = 'ok'
+        elif result['csrf'] is None and all_reachable is None:
+            result['status'] = 'skip'
+            result['message'] = result['message'] or 'Keine Credentials / APIs'
+        else:
+            result['status'] = 'warn'
+
+        return result
+
+    results = {}
+    t_start = _time.time()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_check_system, sid, sdata): sid
+                   for sid, sdata in merged.items()}
+        for future in as_completed(futures):
+            sid = futures[future]
+            try:
+                results[sid] = future.result()
+            except Exception as e:
+                results[sid] = {'system_id': sid, 'status': 'error', 'message': str(e)[:120], 'csrf': None, 'apis': {}, 'ms': 0}
+
+    total_ms = int((_time.time() - t_start) * 1000)
+    ok_count = sum(1 for r in results.values() if r['status'] == 'ok')
+    err_count = sum(1 for r in results.values() if r['status'] == 'error')
+
+    return jsonify({
+        'success': True,
+        'total_ms': total_ms,
+        'summary': {'ok': ok_count, 'error': err_count, 'total': len(results)},
+        'results': results,
+    })
 
 

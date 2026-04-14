@@ -455,7 +455,6 @@
     function startLinkProgressPolling() {
         if (linkProgressInterval) clearInterval(linkProgressInterval);
         const btn = document.getElementById('linkAllBtn');
-        const selBtn = document.getElementById('linkSelectedBtn');
         const cancelBtn = document.getElementById('cancelLinkBtn');
 
         linkProgressInterval = setInterval(() => {
@@ -490,7 +489,6 @@
                         }
                         // Reset UI
                         if (btn) { btn.disabled = false; btn.textContent = t('map.link_all'); }
-                        if (selBtn) { selBtn.disabled = false; }
                         loadStats();
                     }
                 })
@@ -542,11 +540,6 @@
             btn.textContent = t('map.link_all');
             cancelBtn.style.display = 'none';
         });
-    }
-
-    function linkSelected() {
-        // For now, link-selected not applicable on mapping page (no record selection here)
-        alert(t('map.link_use_all'));
     }
 
     function cancelLinking() {

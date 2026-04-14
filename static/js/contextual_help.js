@@ -66,7 +66,7 @@
                 },
                 {
                     title: 'Status-Badges (Farben & Bedeutung)',
-                    content: 'Das Badge oben rechts auf jeder Karte zeigt den genauen Status:\n\n<span class="badge badge-secondary">Vorbereitet</span> — Batch erstellt, noch nicht gestartet\n<span class="badge badge-warning">Upload...</span> — Upload läuft gerade\n<span class="badge badge-success">Hochgeladen</span> — Alle Dokumente erfolgreich hochgeladen\n<span class="badge badge-warning">Upload (Fehler)</span> — Upload fertig, aber mit Fehlern\n<span class="badge badge-danger">Fehlgeschlagen</span> — Upload fehlgeschlagen\n<span class="badge badge-info">Verlinke...</span> — Verlinkung läuft\n<span class="badge badge-success">Fertig</span> — Alles erledigt ✓\n<span class="badge badge-warning">Verlinkt (Fehler)</span> — Verlinkung mit Fehlern\n<span class="badge badge-danger">Link-Fehler</span> — Verlinkungsfehler\n<span class="badge badge-secondary">Abgebrochen</span> — Verlinkung abgebrochen'
+                    content: 'Das Badge oben rechts auf jeder Karte zeigt den genauen Status:\n\n<span class="badge badge-secondary">Vorbereitet</span> — Batch erstellt, noch nicht gestartet\n<span class="badge badge-warning">Upload...</span> — Upload läuft gerade\n<span class="badge badge-success">Hochgeladen</span> — Alle Dokumente erfolgreich hochgeladen\n<span class="badge badge-warning">Upload (Fehler)</span> — Upload fertig, aber mit Fehlern\n<span class="badge badge-danger">Fehlgeschlagen</span> — Upload fehlgeschlagen\n<span class="badge badge-info">Verlinke...</span> — Verlinkung läuft\n<span class="badge badge-success">Fertig</span> — Alles erledigt ✓\n<span class="badge badge-warning">Teilw. verlinkt</span> — Verlinkung abgeschlossen, aber Datensätze übersprungen (fehlendes Mapping)\n<span class="badge badge-warning">Verlinkt (Fehler)</span> — Verlinkung mit Fehlern\n<span class="badge badge-danger">Link-Fehler</span> — Verlinkungsfehler\n<span class="badge badge-secondary">Abgebrochen</span> — Verlinkung abgebrochen'
                 },
                 {
                     title: 'Neuen Batch erstellen',
@@ -123,6 +123,10 @@
                 {
                     title: 'Überschreibungsregeln (Overwrite)',
                     content: 'Setzen ein Feld auf einen festen Wert — unabhängig vom Quellwert.\n\n<b>Beispiel</b>: Alle Dokumente bekommen target_documenttype = „IY1"\n• Optionale <b>Bedingung</b>: Nur anwenden, wenn ein bestimmtes Feld einen bestimmten Wert hat'
+                },
+                {
+                    title: 'Präfix-Ersetzungsregeln (Replace Prefix)',
+                    content: 'Ersetzt den Anfang eines Feldwertes durch einen anderen Präfix.\n\n<b>Beispiel</b>: Quellwert beginnt mit „CB" → wird zu „SIT" (z.B. CB-L525 → SIT-L525)\n• <b>Quellspalte</b>: Das Feld, das geprüft wird (z.B. target_documentnumber)\n• <b>Quellwert</b>: Der zu suchende Präfix (z.B. „CB")\n• <b>Zielspalte</b>: Das Feld, das geändert wird\n• <b>Zielwert</b>: Der neue Präfix (z.B. „SIT")\n\nNur der Anfang wird ersetzt, der Rest des Wertes bleibt erhalten.'
                 },
                 {
                     title: 'Bedingungen (Conditions)',
@@ -217,11 +221,11 @@
             sections: [
                 {
                     title: '1. Zuordnungen verwalten',
-                    content: 'Jedes Quellsystem-Objekt (z.B. Equipmentnummer im R/3) muss einem Zielsystem-Objekt (z.B. Equipmentnummer im S/4) zugeordnet werden.\n\nDie Zuordnung besteht aus:\n• <b>Quell-DOKOB</b> + <b>Quell-OBJKY</b> → <b>Ziel-DOKOB</b> + <b>Ziel-OBJKY</b>\n\n In vielen Fällen bleiben DOKOB und OBJKY gleich (z.B. Equipment behält seine Nummer).'
+                    content: 'Jedes Quellsystem-Objekt muss einem Zielsystem-Objekt zugeordnet werden.\n\nDie Zuordnung besteht aus:\n• <b>Quell-DOKOB</b> + <b>Quell-OBJKY</b> → <b>Ziel-DOKOB</b> + <b>Ziel-OBJKY</b>\n\n<b>Wichtig — SAP-Schlüsselformat:</b>\nDie OBJKY-Werte müssen im SAP-internen Format angegeben werden:\n• <b>EQUI</b>: 18-stellig, führende Nullen (z.B. <code>000000000010045127</code>)\n• <b>IFLOT</b> (Techn. Platz): SAP-interner Schlüssel, NICHT die Anzeige-Darstellung (z.B. <code>CB-L525-SIT-01</code> statt <code>CB-L525/SIT/01</code>)\n• <b>PMAUFK</b>: 12-stellig, führende Nullen (z.B. <code>000004001234</code>)\n• <b>MPLA</b>: Wartungsplannummer + Wartungspositionsnummer\n• <b>STPO_DOC/STKO_DOC</b>: Stücklistennummer\n\nIn vielen Fällen bleiben DOKOB und OBJKY gleich (z.B. Equipment behält seine Nummer). Bei Standort-Umbenennungen (z.B. CB → SIT) müssen die Ziel-OBJKY entsprechend angepasst werden.'
                 },
                 {
                     title: '2. Excel-Mapping-Template',
-                    content: '<b>Empfohlener Weg:</b>\n1. Klicken Sie <b>„Template herunterladen"</b>\n2. Die Excel-Datei enthält Tabellenblätter:\n   • <b>Mappings</b>: Bestehende Zuordnungen\n   • <b>Batch Objects</b>: Alle Quell-Objekte des Batches\n   • <b>Unmapped</b>: Objekte ohne Zuordnung\n   • <b>Info</b>: Erklärungen\n3. Füllen Sie die Ziel-Spalten aus\n4. Laden Sie die Datei über <b>„Template hochladen"</b> wieder hoch'
+                    content: '<b>Empfohlener Weg:</b>\n1. Klicken Sie <b>„Template herunterladen"</b>\n2. Die Excel-Datei enthält Tabellenblätter:\n   • <b>Mappings</b>: Bestehende Zuordnungen\n   • <b>Batch Objects</b>: Alle Quell-Objekte des Batches\n   • <b>Unmapped</b>: Objekte ohne Zuordnung\n   • <b>Info</b>: Erklärungen\n3. Füllen Sie die Ziel-Spalten aus\n4. Laden Sie die Datei über <b>„Template hochladen"</b> wieder hoch\n\n⚠️ <b>OBJKY-Format beachten</b>: Verwenden Sie immer das SAP-interne Schlüsselformat (siehe oben).'
                 },
                 {
                     title: '3. Zuordnungen anwenden',
@@ -229,13 +233,14 @@
                 },
                 {
                     title: '4. Verlinkung starten',
-                    content: 'Nach erfolgreichem Upload (Schritt 2) klicken Sie <b>„Verlinkung starten"</b>:\n• Das System erstellt Objekt-Verknüpfungen im Zielsystem\n• Jedes Dokument wird mit seinem Ziel-Geschäftsobjekt verlinkt\n• Der Fortschritt wird live angezeigt\n\n<b>Link-Status pro Datensatz:</b>\n• <b>linked</b> — Erfolgreich verknüpft\n• <b>link_exists</b> — Verknüpfung existierte bereits\n• <b>link_failed</b> — Fehler bei der Verlinkung'
+                    content: 'Nach erfolgreichem Upload (Schritt 2) klicken Sie <b>„Zuordnungen verlinken"</b>:\n• Datensätze ohne passendes Mapping werden automatisch als <b>übersprungen</b> markiert (kein API-Aufruf)\n• Datensätze mit Mapping werden im Zielsystem verlinkt\n• Der Fortschritt wird live aktualisiert\n\n<b>Link-Status pro Datensatz:</b>\n• <b>linked</b> — Erfolgreich verknüpft\n• <b>link_exists</b> — Verknüpfung existierte bereits\n• <b>link_failed</b> — Fehler bei der Verlinkung\n• <b>link_skipped</b> — Kein Mapping vorhanden, übersprungen\n\n<b>Fortschrittsanzeige:</b>\nDer Fortschritt zeigt <b>Verlinkt / Gesamt</b>, wobei „Gesamt" auch die übersprungenen umfasst. So ist der echte Fortschritt erkennbar (z.B. 64% = nur IFLOT gemappt, EQUI fehlt noch).'
                 }
             ],
             warnings: [
                 'Die Verlinkung kann nur für Datensätze mit Status „success" und erstelltem Container durchgeführt werden.',
-                'Ohne Objekt-Zuordnung kann keine Verlinkung im Zielsystem erstellt werden.',
-                'Prüfen Sie die „Unmapped"-Liste im Excel-Template — nicht zugeordnete Objekte werden nicht verlinkt.'
+                'Ohne Objekt-Zuordnung werden Datensätze automatisch übersprungen (link_skipped).',
+                'Prüfen Sie die „Unmapped"-Liste im Excel-Template — nicht zugeordnete Objekte werden nicht verlinkt.',
+                'OBJKY muss im SAP-internen Format sein, nicht in der Anzeige-Darstellung!'
             ]
         },
 
@@ -245,24 +250,24 @@
             intro: 'Prüfen Sie Dateien, Objektlinks und Fehler. Vergleichen Sie Quell- und Zieldaten mit farblicher Hervorhebung.',
             sections: [
                 {
-                    title: 'Zusammenfassung',
-                    content: 'Die Übersichtskarte zeigt:\n• <b>Erfolgreiche</b> Datensätze (grün)\n• <b>Fehlgeschlagene</b> Datensätze (rot)\n• <b>Teilweise</b> (Container erstellt, aber nicht alle Dateien) (orange)\n• <b>Ausstehende</b> Datensätze (grau)'
+                    title: 'KPI-Karten & Fortschritt',
+                    content: 'Oben sehen Sie 6 Kennzahlen:\n• <b>Gesamt</b> — Alle Datensätze im Batch\n• <b>Verlinkt</b> (grün) — Erfolgreich verlinkte Datensätze\n• <b>Fehler</b> (rot) — Fehlgeschlagene Verlinkungen\n• <b>Ausstehend</b> (gelb) — Noch nicht verlinkte Datensätze\n• <b>Übersprungen</b> (grau) — Kein Mapping vorhanden\n• <b>Abdeckung</b> (blau) — Prozent der verlinkten Datensätze\n\nDarunter zwei Fortschrittsbalken für Upload und Verlinkung.'
                 },
                 {
-                    title: 'Fehler-Kategorien',
-                    content: 'Filter Sie nach Fehlerarten:\n• <b>AUTH_ERROR</b> — Authentifizierungsproblem\n• <b>RATE_LIMIT</b> — API-Ratenlimit erreicht\n• <b>UPLOAD_FAIL</b> — Upload-Fehler\n• <b>PAYLOAD_TOO_LARGE</b> — Datei zu groß\n• <b>CONTAINER_CREATE_FAIL</b> — Container-Erstellung fehlgeschlagen'
+                    title: 'Tab 1: Dateien',
+                    content: 'Vergleicht Quell- und Zieldaten pro Datei mit 12 Spalten:\n\n<b>Spalten:</b>\n• Quell-Dok / Quell-Typ,Ver.,Teil\n• Ziel-Dok / Ziel-Typ,Ver.,Teil\n• <b>Quell-Beschreibung</b> — Original aus DIL/DRAT (SAP-Quelle)\n• <b>Ziel-Beschreibung</b> — was ins Zielsystem übertragen wurde\n• <b>Quell-Dateiname</b> — Original-Dateiname (aus DRAW)\n• <b>Ziel-Dateiname</b> — Hochgeladener Dateiname\n• Typ, Größe, Status, Fehler\n\n<b>Farbliche Hervorhebung:</b>\n• <span style="background:#fff3cd;padding:2px 6px">Gelb</span> = Quell- und Zielwert unterscheiden sich\n\n<b>Filter-Buttons:</b>\n• <b>Alle</b> — Alle Dateien\n• <b>Erfolgreich</b> — Nur erfolgreiche Uploads\n• <b>Fehler</b> — Nur fehlgeschlagene\n• <b>Beschreibung ≠</b> — Nur Zeilen mit abweichender Beschreibung\n• <b>Dateiname ≠</b> — Nur Zeilen mit abweichendem Dateinamen\n• <b>Alle Unterschiede</b> — Zeilen mit irgendeiner Abweichung'
                 },
                 {
-                    title: 'Datei-Details',
-                    content: 'Klicken Sie auf einen Datensatz, um die <b>einzelnen Dateien</b> und deren Upload-Status zu sehen. Bei mehrteiligen Dokumenten kann eine Datei erfolgreich sein, während eine andere fehlschlägt (= „Partial").'
+                    title: 'Tab 2: Objektlinks',
+                    content: 'Zeigt die aufgelösten Objekt-Verknüpfungen pro Datensatz. Jeder Quell-Link (aus source_object_links) wird einzeln als Zeile dargestellt.\n\n<b>Spalten:</b>\n• Quell-/Ziel-Dokumentennummer + Typ/Ver./Teil\n• Quell-DOKOB → Ziel-DOKOB (farbig markiert)\n• Quell-OBJKY → Ziel-OBJKY (farbig markiert)\n• Link-Status, Fehler\n\n<b>Farben:</b>\n• <span style="background:#d4edda;padding:2px 6px">Grün</span> = Quell=Ziel (identisch)\n• <span style="background:#fff3cd;padding:2px 6px">Gelb</span> = Mapping vorhanden, Wert geändert\n• <span style="background:#f8d7da;padding:2px 6px">Rot</span> = Kein Zielwert (nicht gemappt)\n\n<b>Filter:</b> Alle, Linked, Fehler, Pending, Übersprungen'
                 },
                 {
-                    title: 'CSV-Export',
-                    content: 'Klicken Sie <b>„CSV Export"</b> um alle Datei-Details als CSV-Datei herunterzuladen. Nützlich für externe Analyse oder Berichterstellung.'
+                    title: 'Tab 3: Fehleranalyse',
+                    content: 'Enthält vier Analyse-Tabellen:\n• <b>DAPPL/Extension-Analyse</b> (per Button ladbar)\n• <b>DOKOB Mapping Coverage</b> — Zeigt pro Objekttyp wie viele gemappt/ungemappt sind\n• <b>Link-Fehler</b> — Fehlermuster mit Häufigkeit\n• <b>Upload-Fehler</b> — Fehlermuster mit Häufigkeit'
                 },
                 {
-                    title: 'Fehlgeschlagene erneut versuchen',
-                    content: '<b>Nach Kategorie</b>: Klicken Sie den „Retry"-Button neben einer Fehlerkategorie, um alle Datensätze dieser Kategorie zurückzusetzen.\n\n<b>Alle Fehler</b>: „Alle Fehler zurücksetzen" setzt alle Failed/Partial-Datensätze zurück. Gehen Sie dann zurück zur Vorschau und starten Sie die Migration erneut.'
+                    title: 'Excel-Export',
+                    content: 'Klicken Sie <b>„Export"</b> um alle Datei-Details als formatierte Excel-Datei herunterzuladen:\n• Gleiche 12 Spalten wie die Web-Ansicht\n• Farbliche Hervorhebung bei Unterschieden (gelb)\n• Grün/Rot für Status\n• Autofilter, fixierte Kopfzeile, automatische Spaltenbreite'
                 }
             ]
         },
@@ -320,7 +325,7 @@
                 { num: '2',  label: 'Preview & Refresh Data',         page: 'preview',     desc: 'Review batch, refresh data (LOIO, file size, apply rules), skip records' },
                 { num: '3a', label: 'Run Migration',                  page: 'preview',     desc: 'Upload documents to target system — create containers and transfer files' },
                 { num: '3b', label: 'Object Mapping & Linking',       page: 'mapping',     desc: 'Map source objects to target objects, then create links in target system' },
-                { num: '4',  label: 'Analysis',                       page: 'details',     desc: 'Analyze results, investigate errors, retry failed records' },
+                { num: '4',  label: 'Analysis',                       page: 'details',     desc: 'Review files, object links and errors. Compare source/target data with diff highlighting' },
             ]
         },
 
@@ -345,7 +350,7 @@
                 },
                 {
                     title: 'Status Badges (Colors & Meaning)',
-                    content: 'The badge at the top right of each card shows the exact status:\n\n<span class="badge badge-secondary">Prepared</span> — Batch created, not yet started\n<span class="badge badge-warning">Uploading...</span> — Upload in progress\n<span class="badge badge-success">Uploaded</span> — All documents successfully uploaded\n<span class="badge badge-warning">Upload (Errors)</span> — Upload finished, but with errors\n<span class="badge badge-danger">Failed</span> — Upload failed\n<span class="badge badge-info">Linking...</span> — Linking in progress\n<span class="badge badge-success">Done</span> — All done ✓\n<span class="badge badge-warning">Linked (Errors)</span> — Linking with errors\n<span class="badge badge-danger">Link Error</span> — Linking error\n<span class="badge badge-secondary">Cancelled</span> — Linking cancelled'
+                    content: 'The badge at the top right of each card shows the exact status:\n\n<span class="badge badge-secondary">Prepared</span> — Batch created, not yet started\n<span class="badge badge-warning">Uploading...</span> — Upload in progress\n<span class="badge badge-success">Uploaded</span> — All documents successfully uploaded\n<span class="badge badge-warning">Upload (Errors)</span> — Upload finished, but with errors\n<span class="badge badge-danger">Failed</span> — Upload failed\n<span class="badge badge-info">Linking...</span> — Linking in progress\n<span class="badge badge-success">Done</span> — All done ✓\n<span class="badge badge-warning">Partially Linked</span> — Linking finished, but records skipped (missing mapping)\n<span class="badge badge-warning">Linked (Errors)</span> — Linking with errors\n<span class="badge badge-danger">Link Error</span> — Linking error\n<span class="badge badge-secondary">Cancelled</span> — Linking cancelled'
                 },
                 {
                     title: 'Create New Batch',
@@ -402,6 +407,10 @@
                 {
                     title: 'Overwrite Rules',
                     content: 'Set a field to a fixed value — regardless of the source value.\n\n<b>Example</b>: All documents get target_documenttype = "IY1"\n• Optional <b>Condition</b>: Only apply when a specific field has a specific value'
+                },
+                {
+                    title: 'Replace Prefix Rules',
+                    content: 'Replaces the beginning of a field value with a different prefix.\n\n<b>Example</b>: Source value starts with "CB" → becomes "SIT" (e.g. CB-L525 → SIT-L525)\n• <b>Source column</b>: The field to check (e.g. target_documentnumber)\n• <b>Source value</b>: The prefix to look for (e.g. "CB")\n• <b>Target column</b>: The field to modify\n• <b>Target value</b>: The new prefix (e.g. "SIT")\n\nOnly the beginning is replaced, the rest of the value is preserved.'
                 },
                 {
                     title: 'Conditions',
@@ -496,11 +505,11 @@
             sections: [
                 {
                     title: '1. Manage Mappings',
-                    content: 'Each source system object (e.g. Equipment number in R/3) must be mapped to a target system object (e.g. Equipment number in S/4).\n\nThe mapping consists of:\n• <b>Source DOKOB</b> + <b>Source OBJKY</b> → <b>Target DOKOB</b> + <b>Target OBJKY</b>\n\nIn many cases DOKOB and OBJKY stay the same (e.g. Equipment keeps its number).'
+                    content: 'Each source system object must be mapped to a target system object.\n\nThe mapping consists of:\n• <b>Source DOKOB</b> + <b>Source OBJKY</b> → <b>Target DOKOB</b> + <b>Target OBJKY</b>\n\n<b>Important — SAP Key Format:</b>\nOBJKY values must use the SAP internal format:\n• <b>EQUI</b>: 18-digit, leading zeros (e.g. <code>000000000010045127</code>)\n• <b>IFLOT</b> (Func. Location): SAP internal key, NOT the display format (e.g. <code>CB-L525-SIT-01</code> not <code>CB-L525/SIT/01</code>)\n• <b>PMAUFK</b>: 12-digit, leading zeros (e.g. <code>000004001234</code>)\n• <b>MPLA</b>: Maintenance plan number + position\n• <b>STPO_DOC/STKO_DOC</b>: BOM number\n\nIn many cases DOKOB and OBJKY stay the same (e.g. Equipment keeps its number). For site renames (e.g. CB → SIT) the target OBJKY must be adjusted accordingly.'
                 },
                 {
                     title: '2. Excel Mapping Template',
-                    content: '<b>Recommended approach:</b>\n1. Click <b>"Download Template"</b>\n2. The Excel file contains worksheets:\n   • <b>Mappings</b>: Existing mappings\n   • <b>Batch Objects</b>: All source objects of the batch\n   • <b>Unmapped</b>: Objects without mapping\n   • <b>Info</b>: Explanations\n3. Fill in the target columns\n4. Upload the file via <b>"Upload Template"</b>'
+                    content: '<b>Recommended approach:</b>\n1. Click <b>"Download Template"</b>\n2. The Excel file contains worksheets:\n   • <b>Mappings</b>: Existing mappings\n   • <b>Batch Objects</b>: All source objects of the batch\n   • <b>Unmapped</b>: Objects without mapping\n   • <b>Info</b>: Explanations\n3. Fill in the target columns\n4. Upload the file via <b>"Upload Template"</b>\n\n⚠️ <b>OBJKY format</b>: Always use the SAP internal key format (see above).'
                 },
                 {
                     title: '3. Apply Mappings',
@@ -508,40 +517,41 @@
                 },
                 {
                     title: '4. Start Linking',
-                    content: 'After successful upload (Step 2) click <b>"Start Linking"</b>:\n• The system creates object links in the target system\n• Each document is linked to its target business object\n• Progress is shown live\n\n<b>Link status per record:</b>\n• <b>linked</b> — Successfully linked\n• <b>link_exists</b> — Link already existed\n• <b>link_failed</b> — Linking error'
+                    content: 'After successful upload (Step 2) click <b>"Link Mappings"</b>:\n• Records without a matching mapping are automatically <b>skipped</b> (no API call)\n• Records with mapping are linked in the target system\n• Progress is updated live\n\n<b>Link status per record:</b>\n• <b>linked</b> — Successfully linked\n• <b>link_exists</b> — Link already existed\n• <b>link_failed</b> — Linking error\n• <b>link_skipped</b> — No mapping found, skipped\n\n<b>Progress display:</b>\nProgress shows <b>Linked / Total</b>, where "Total" includes skipped records. This shows real progress (e.g. 64% = only IFLOT mapped, EQUI still missing).'
                 }
             ],
             warnings: [
                 'Linking can only be performed for records with status "success" and a created container.',
-                'Without object mappings, no links can be created in the target system.',
-                'Check the "Unmapped" list in the Excel template — unmapped objects will not be linked.'
+                'Without object mappings, records are automatically skipped (link_skipped).',
+                'Check the "Unmapped" list in the Excel template — unmapped objects will not be linked.',
+                'OBJKY must be in SAP internal format, not the display format!'
             ]
         },
 
         details: {
-            title: 'Step 4 — Analysis & Results',
-            icon: 'fas fa-chart-bar',
-            intro: 'Analyze the migration results, investigate errors and retry failed records.',
+            title: 'Step 4 — Validation & Review',
+            icon: 'fas fa-check-double',
+            intro: 'Review files, object links and errors. Compare source and target data with color highlighting.',
             sections: [
                 {
-                    title: 'Summary',
-                    content: 'The overview card shows:\n• <b>Successful</b> records (green)\n• <b>Failed</b> records (red)\n• <b>Partial</b> (container created, but not all files) (orange)\n• <b>Pending</b> records (gray)'
+                    title: 'KPI Cards & Progress',
+                    content: 'At the top you see 6 metrics:\n• <b>Total</b> — All records in the batch\n• <b>Linked</b> (green) — Successfully linked records\n• <b>Failed</b> (red) — Failed linkings\n• <b>Pending</b> (yellow) — Not yet linked records\n• <b>Skipped</b> (gray) — No mapping available\n• <b>Coverage</b> (blue) — Percentage of linked records\n\nBelow that, two progress bars for Upload and Linking.'
                 },
                 {
-                    title: 'Error Categories',
-                    content: 'Filter by error type:\n• <b>AUTH_ERROR</b> — Authentication problem\n• <b>RATE_LIMIT</b> — API rate limit reached\n• <b>UPLOAD_FAIL</b> — Upload error\n• <b>PAYLOAD_TOO_LARGE</b> — File too large\n• <b>CONTAINER_CREATE_FAIL</b> — Container creation failed'
+                    title: 'Tab 1: Files',
+                    content: 'Compares source and target data per file with 12 columns:\n\n<b>Columns:</b>\n• Source Doc / Source Type,Ver.,Part\n• Target Doc / Target Type,Ver.,Part\n• <b>Source Description</b> — Original from DIL/DRAT (SAP source)\n• <b>Target Description</b> — What was sent to the target system\n• <b>Source Filename</b> — Original filename (from DRAW)\n• <b>Target Filename</b> — Uploaded filename\n• Type, Size, Status, Error\n\n<b>Color highlighting:</b>\n• <span style="background:#fff3cd;padding:2px 6px">Yellow</span> = Source and target values differ\n\n<b>Filter buttons:</b>\n• <b>All</b> — All files\n• <b>Success</b> — Only successful uploads\n• <b>Errors</b> — Only failed\n• <b>Description ≠</b> — Only rows with different description\n• <b>Filename ≠</b> — Only rows with different filename\n• <b>All diffs</b> — Rows with any difference'
                 },
                 {
-                    title: 'File Details',
-                    content: 'Click on a record to see the <b>individual files</b> and their upload status. For multi-part documents, one file may succeed while another fails (= "Partial").'
+                    title: 'Tab 2: Object Links',
+                    content: 'Shows the resolved object links per record. Each source link (from source_object_links) is displayed as a separate row.\n\n<b>Columns:</b>\n• Source/Target document number + Type/Ver./Part\n• Source DOKOB → Target DOKOB (color-coded)\n• Source OBJKY → Target OBJKY (color-coded)\n• Link Status, Error\n\n<b>Colors:</b>\n• <span style="background:#d4edda;padding:2px 6px">Green</span> = Source=Target (identical)\n• <span style="background:#fff3cd;padding:2px 6px">Yellow</span> = Mapping exists, value changed\n• <span style="background:#f8d7da;padding:2px 6px">Red</span> = No target value (not mapped)\n\n<b>Filters:</b> All, Linked, Failed, Pending, Skipped'
                 },
                 {
-                    title: 'CSV Export',
-                    content: 'Click <b>"CSV Export"</b> to download all file details as a CSV file. Useful for external analysis or reporting.'
+                    title: 'Tab 3: Error Analysis',
+                    content: 'Contains four analysis tables:\n• <b>DAPPL/Extension Analysis</b> (loadable via button)\n• <b>DOKOB Mapping Coverage</b> — Shows per object type how many are mapped/unmapped\n• <b>Link Errors</b> — Error patterns with frequency\n• <b>Upload Errors</b> — Error patterns with frequency'
                 },
                 {
-                    title: 'Retry Failed',
-                    content: '<b>By category</b>: Click the "Retry" button next to an error category to reset all records of that category.\n\n<b>All errors</b>: "Reset All Errors" resets all Failed/Partial records. Then go back to the preview and start the migration again.'
+                    title: 'Excel Export',
+                    content: 'Click <b>"Export"</b> to download all file details as a formatted Excel file:\n• Same 12 columns as the web view\n• Color highlighting for differences (yellow)\n• Green/Red for status\n• Autofilter, frozen header row, auto-width columns'
                 }
             ]
         },
@@ -581,6 +591,7 @@
                                                               return 'preview';
         if (path.includes('/object-mapping'))                 return 'mapping';
         if (path.includes('/details') || path === '/details') return 'details';
+        if (path.includes('/validation'))                     return 'details';
         if (path.includes('/wave-overview'))                  return 'waves';
 
         return 'dashboard'; // fallback

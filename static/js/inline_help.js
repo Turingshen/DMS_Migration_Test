@@ -74,7 +74,7 @@
             },
             {
                 selector: '#btnStartLinking',
-                text: 'Erstellt Objekt-Verknüpfungen im Zielsystem. Nur für Datensätze mit Status "success" und erstelltem Container.',
+                text: 'Erstellt Objekt-Verknüpfungen im Zielsystem. Datensätze ohne Mapping werden automatisch übersprungen (link_skipped). OBJKY muss im SAP-internen Schlüsselformat vorliegen.',
                 position: 'bottom'
             }
         ],
@@ -145,7 +145,7 @@
             },
             {
                 selector: '#btnStartLinking',
-                text: 'Creates object links in the target system. Only for records with status "success" and created container.',
+                text: 'Creates object links in the target system. Records without mapping are automatically skipped (link_skipped). OBJKY must be in SAP internal key format.',
                 position: 'bottom'
             }
         ],

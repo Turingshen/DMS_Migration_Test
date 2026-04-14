@@ -426,20 +426,17 @@
         </div>
         <div class="btn-group">
             <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
-                💾 Zuordnungen exportieren
+                1. 💾 Zuordnung exportieren
             </button>
             <button class="btn btn-primary" onclick="showUploadModal()" data-i18n="map.upload_excel">
-                📤 Excel hochladen
+                2. 📤 Zuordnung importieren
             </button>
             <button class="btn btn-apply" onclick="applyMappings()" data-i18n="map.apply">
-                ✨ Auf Staging anwenden
+                3. ✨ Zuordnung → Staging
             </button>
             <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
             <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Nur zugeordnete Objektlinks verlinken" data-i18n-title="map.link_all_title" style="background: #28a745;" data-i18n="map.link_all">
-                🔗 Zuordnungen verlinken
-            </button>
-            <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" data-i18n-title="map.link_selected_title" style="background: #28a745;" data-i18n="map.link_selected">
-                🔗 Ausgewählte verlinken
+                4. 🔗 Zuordnung verlinken
             </button>
             <button class="btn btn-danger" onclick="cancelLinking()" id="cancelLinkBtn" style="display: none;" data-i18n="map.cancel_linking">
                 ⛔ Verlinkung abbrechen
@@ -492,7 +489,7 @@
         <div class="card">
             <div class="card-header">
                 <h3 data-i18n="map.unmapped.title">Nicht zugeordnete Objekte in diesem Batch</h3>
-                <button class="btn btn-primary" onclick="refreshUnmapped()">🔄 <span data-i18n="map.unmapped.refresh">Aktualisieren</span></button>
+                <button class="btn btn-primary" onclick="refreshUnmapped()" data-i18n="map.unmapped.refresh">🔄 Aktualisieren</button>
             </div>
             <div class="card-body">
                 <div class="alert alert-info" data-i18n="map.unmapped.info">

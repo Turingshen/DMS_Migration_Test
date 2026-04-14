@@ -49,6 +49,7 @@ function getStatusBadgeClass(status) {
         'failed': 'badge-danger',
         'linking': 'badge-info',
         'link_completed': 'badge-success',
+        'link_completed_partial': 'badge-warning',
         'link_completed_with_errors': 'badge-warning',
         'link_cancelled': 'badge-secondary',
         'link_error': 'badge-danger'
@@ -74,6 +75,7 @@ function getStatusLabel(status) {
         'failed': 'Fehlgeschlagen',
         'linking': 'Verlinke...',
         'link_completed': 'Fertig',
+        'link_completed_partial': 'Teilw. verlinkt',
         'link_completed_with_errors': 'Verlinkt (Fehler)',
         'link_cancelled': 'Abgebrochen',
         'link_error': 'Link-Fehler'
@@ -97,6 +99,7 @@ function renderBatchCard(batch, options) {
     const linkLinked = (batch.link_linked || 0) + (batch.link_exists || 0);
     const linkTotal = batch.link_total || 0;
     const linkFailed = batch.link_failed || 0;
+    const linkSkipped = batch.link_skipped || 0;
     const uploadPct = total > 0 ? Math.round(success / total * 100) : 0;
     const linkPct = linkTotal > 0 ? Math.round(linkLinked / linkTotal * 100) : 0;
     const phaseSteps = getPhaseSteps(phase, batch.status);
@@ -136,7 +139,7 @@ function renderBatchCard(batch, options) {
                 <div class="mt-1">
                     <div class="d-flex justify-content-between wave-stats">
                         <span><i class="fas fa-link"></i> ${linkLinked}/${linkTotal}</span>
-                        <span>${linkPct}%${linkFailed > 0 ? ' <span class="text-danger">(' + linkFailed + ' err)</span>' : ''}</span>
+                        <span>${linkPct}%${linkFailed > 0 ? ' <span class="text-danger">(' + linkFailed + ' err)</span>' : ''}${linkSkipped > 0 ? ' <span class="text-muted">(' + linkSkipped + ' skip)</span>' : ''}</span>
                     </div>
                     <div class="progress" style="height: 4px;">
                         <div class="progress-bar bg-info" style="width: ${linkPct}%"></div>

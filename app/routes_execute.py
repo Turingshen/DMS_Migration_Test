@@ -746,7 +746,9 @@ def get_link_progress(batch_id):
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
                     SUM(CASE WHEN link_status = 'linking' THEN 1 ELSE 0 END) as linking_now,
                     SUM(CASE WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
-                    SUM(CASE WHEN execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total,
+                    SUM(CASE WHEN link_status IN ('linked', 'link_exists', 'link_failed', 'link_skipped') THEN 1
+                         WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1
+                         ELSE 0 END) as link_total,
                     SUM(CASE WHEN link_status = 'link_skipped' THEN 1 ELSE 0 END) as link_skipped
                 FROM dbo.migration_staging
                 WHERE batch_id = '{batch_id}'
@@ -760,7 +762,7 @@ def get_link_progress(batch_id):
         link_total = link_stats[5] or 0
         link_skipped = link_stats[6] or 0
 
-        completed = linked + link_exists + link_failed + link_skipped
+        completed = linked + link_exists + link_failed
         progress_pct = (completed / link_total * 100) if link_total > 0 else 0
 
         is_linking = is_linking_running(batch_id)[0]

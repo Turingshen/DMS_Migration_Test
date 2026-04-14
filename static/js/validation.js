@@ -134,6 +134,25 @@
             filtered = filtered.filter(f => {
                 if (filesFilter === 'SUCCESS') return f.upload_status === 'SUCCESS';
                 if (filesFilter === 'ERROR') return f.upload_status !== 'SUCCESS';
+                if (filesFilter === 'DIFF_DESC') {
+                    const src = (f.source_description || f.dil_description || '').trim();
+                    const tgt = (f.source_description || '').trim();
+                    return src && tgt && src !== tgt;
+                }
+                if (filesFilter === 'DIFF_FN') {
+                    const src = (f.original_filename || '').trim();
+                    const tgt = (f.filename || '').trim();
+                    return src && tgt && src !== tgt;
+                }
+                if (filesFilter === 'DIFF_ANY') {
+                    const srcDesc = (f.source_description || f.dil_description || '').trim();
+                    const tgtDesc = (f.source_description || '').trim();
+                    const descDiff = srcDesc && tgtDesc && srcDesc !== tgtDesc;
+                    const srcFn = (f.original_filename || '').trim();
+                    const tgtFn = (f.filename || '').trim();
+                    const fnDiff = srcFn && tgtFn && srcFn !== tgtFn;
+                    return descDiff || fnDiff;
+                }
                 return true;
             });
         }
@@ -151,7 +170,7 @@
         const displayed = filtered.slice(0, displayLimit);
 
         if (!displayed.length) {
-            tbody.innerHTML = `<tr><td colspan="11" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" class="text-center text-muted py-3">${t('val.no_data')}</td></tr>`;
         } else {
             tbody.innerHTML = displayed.map(f => {
                 const statusCls = f.upload_status === 'SUCCESS' ? 'diff-match' : 'diff-changed';
@@ -165,14 +184,25 @@
                 const dapplMismatch = headerDappl && fileDappl && headerDappl !== fileDappl;
                 const dapplCls = dapplMismatch ? 'class="table-info"' : '';
                 const dapplIcon = dapplMismatch ? ' <i class="fas fa-exchange-alt text-info" title="DAPPL mismatch"></i>' : '';
+                // Description comparison: source_description (staging) vs dil_description (DIL/DRAT)
+                const srcDesc = f.source_description || f.dil_description || '';
+                const tgtDesc = f.source_description || '';  // Target = what was sent to SAP
+                const descMatch = !srcDesc || !tgtDesc || srcDesc.trim() === tgtDesc.trim();
+                const descCls = descMatch ? '' : 'style="background:#fff3cd"';
+                // Filename comparison: original_filename (DIL source) vs filename (uploaded target)
+                const srcFn = f.original_filename || '';
+                const tgtFn = f.filename || '';
+                const fnMatch = !srcFn || !tgtFn || srcFn.trim() === tgtFn.trim();
+                const fnCls = fnMatch ? '' : 'style="background:#fff3cd"';
                 return `<tr>
                     <td title="${esc(f.source_documentnumber || '')}">${esc(truncate(f.source_documentnumber || '\u2014', 25))}</td>
                     <td>${esc(srcTvt || '\u2014')}</td>
                     <td title="${esc(f.target_documentnumber || '')}">${esc(truncate(f.target_documentnumber || '\u2014', 25))}</td>
                     <td>${esc(tgtTvt || '\u2014')}</td>
-                    <td ${dapplCls}><strong>${esc(headerDappl || '\u2014')}</strong>${dapplIcon}</td>
-                    <td ${dapplCls}><strong>${esc(fileDappl || '\u2014')}</strong></td>
-                    <td title="${esc(f.filename || '')}">${esc(truncate(f.filename || '\u2014', 35))}</td>
+                    <td ${descCls} title="${esc(srcDesc)}">${esc(truncate(srcDesc || '\u2014', 30))}</td>
+                    <td ${descCls} title="${esc(tgtDesc)}">${esc(truncate(tgtDesc || '\u2014', 30))}</td>
+                    <td ${fnCls} title="${esc(srcFn)}">${esc(truncate(srcFn || '\u2014', 30))}</td>
+                    <td ${fnCls} title="${esc(tgtFn)}">${esc(truncate(tgtFn || '\u2014', 30))}</td>
                     <td>${esc(f.mime_type || '\u2014')}</td>
                     <td>${formatSize(f.file_size_bytes)}</td>
                     <td class="${statusCls}">${statusBadge(f.upload_status)}</td>
@@ -409,48 +439,10 @@
         });
     }
 
-    // ── CSV export ────────────────────────────────────────────────
+    // ── Excel export ────────────────────────────────────────────
     window.exportCSV = function () {
-        // Export active tab data
-        const activeTab = document.querySelector('#valTabs .nav-link.active');
-        const tabHref = activeTab ? activeTab.getAttribute('href') : '#tabFiles';
-
-        let headers, rows, filename;
-
-        if (tabHref === '#tabFiles') {
-            headers = ['source_documentnumber', 'source_documenttype', 'source_documentversion', 'source_documentpart',
-                       'target_documentnumber', 'target_documenttype', 'target_documentversion', 'target_documentpart',
-                       'filename', 'mime_type', 'file_size_bytes', 'upload_status', 'error_category', 'error_detail'];
-            rows = allFiles;
-            filename = `validation_files_${BATCH_ID}.csv`;
-        } else if (tabHref === '#tabLinks') {
-            headers = ['source_documentnumber', 'src_tvt', 'target_documentnumber', 'tgt_tvt',
-                       'src_dokob', 'src_objky', 'tgt_dokob', 'tgt_objky', 'link_status', 'link_error'];
-            rows = allLinks;
-            filename = `validation_links_${BATCH_ID}.csv`;
-        } else {
-            headers = ['id', 'source_documentnumber', 'target_documentnumber', 'source_dokob',
-                       'source_objky', 'target_dokob', 'target_objky', 'execution_status',
-                       'link_status', 'link_error'];
-            rows = allComparison;
-            filename = `validation_errors_${BATCH_ID}.csv`;
-        }
-
-        if (!rows.length) return;
-        const csvRows = [headers.join(';')];
-        rows.forEach(r => {
-            csvRows.push(headers.map(h => {
-                let v = r[h];
-                if (v == null) v = '';
-                v = String(v).replace(/"/g, '""');
-                return `"${v}"`;
-            }).join(';'));
-        });
-        const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
+        // Redirect to server-side Excel export with diff highlighting
+        window.location.href = `/batch/${BATCH_ID}/validation/export`;
     };
 
     // ── Error categorization ──────────────────────────────────────

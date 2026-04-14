@@ -4981,12 +4981,21 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         duration = time.time() - batch_start_time
         
         # Determine final phase
+        # Count skipped records from DB (includes bulk-skipped by load_linkable_records)
+        with misc_engine.begin() as con:
+            skipped_in_db = con.execute(text(f"""
+                SELECT COUNT(*) FROM dbo.migration_staging
+                WHERE batch_id = '{batch_id}' AND link_status = 'link_skipped'
+            """)).scalar() or 0
         if cancel_reason:
             final_phase = 'link_cancelled'
             final_status = 'link_cancelled'
         elif failed_count > 0:
             final_phase = 'completed'
             final_status = 'link_completed_with_errors'
+        elif skipped_in_db > 0:
+            final_phase = 'completed'
+            final_status = 'link_completed_partial'
         else:
             final_phase = 'completed'
             final_status = 'link_completed'

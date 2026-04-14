@@ -184,6 +184,9 @@
                             <button class="btn btn-sm btn-outline-secondary active" data-filter="all" data-i18n="val.comp.all">Alle</button>
                             <button class="btn btn-sm btn-outline-success" data-filter="SUCCESS" data-i18n="val.filter.success">Erfolgreich</button>
                             <button class="btn btn-sm btn-outline-danger" data-filter="ERROR" data-i18n="val.filter.error">Fehler</button>
+                            <button class="btn btn-sm btn-outline-warning" data-filter="DIFF_DESC" data-i18n="val.filter.diff_desc">Beschreibung ≠</button>
+                            <button class="btn btn-sm btn-outline-warning" data-filter="DIFF_FN" data-i18n="val.filter.diff_fn">Dateiname ≠</button>
+                            <button class="btn btn-sm btn-outline-info" data-filter="DIFF_ANY" data-i18n="val.filter.diff_any">Alle Unterschiede</button>
                         </div>
                         <input type="text" class="form-control form-control-sm" id="filesSearch"
                                placeholder="Suchen..." style="width:180px;" data-i18n-placeholder="val.comp.search">
@@ -197,9 +200,10 @@
                                         <th data-i18n="val.files.src_tvt">Quell-Typ/Ver./Teil</th>
                                         <th data-i18n="val.files.target_doc">Ziel-Dok</th>
                                         <th data-i18n="val.files.tgt_tvt">Ziel-Typ/Ver./Teil</th>
-                                        <th data-i18n="val.files.header_dappl">Header DAPPL</th>
-                                        <th data-i18n="val.files.file_dappl">File DAPPL</th>
-                                        <th data-i18n="val.files.filename">Dateiname</th>
+                                        <th data-i18n="val.files.src_desc">Quell-Beschreibung</th>
+                                        <th data-i18n="val.files.tgt_desc">Ziel-Beschreibung</th>
+                                        <th data-i18n="val.files.src_filename">Quell-Dateiname</th>
+                                        <th data-i18n="val.files.tgt_filename">Ziel-Dateiname</th>
                                         <th data-i18n="val.files.type">Typ</th>
                                         <th data-i18n="val.files.size">Größe</th>
                                         <th data-i18n="val.files.status">Status</th>

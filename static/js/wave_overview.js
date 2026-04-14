@@ -74,15 +74,17 @@ function renderKanban(batches) {
         const isUnassigned = waveName === 'Nicht zugeordnet';
 
         // Wave-level aggregation
-        let wTotal = 0, wUploaded = 0, wLinked = 0, wFailed = 0;
+        let wTotal = 0, wUploaded = 0, wLinked = 0, wFailed = 0, wLinkTotal = 0, wLinkSkipped = 0;
         waveBatches.forEach(b => {
             wTotal += (b.total_records || 0);
             wUploaded += (b.successful_records || 0);
             wLinked += (b.link_linked || 0) + (b.link_exists || 0);
             wFailed += (b.failed_records || 0);
+            wLinkTotal += (b.link_total || 0);
+            wLinkSkipped += (b.link_skipped || 0);
         });
         const wPct = wTotal > 0 ? Math.round(wUploaded / wTotal * 100) : 0;
-        const lPct = wTotal > 0 ? Math.round(wLinked / wTotal * 100) : 0;
+        const lPct = wLinkTotal > 0 ? Math.round(wLinked / wLinkTotal * 100) : 0;
 
         return `
             <div class="wave-column flex-shrink-0">
@@ -105,7 +107,8 @@ function renderKanban(batches) {
                                 <div class="progress-bar bg-info" style="width: ${lPct}%"></div>
                             </div>
                             <div class="wave-stats text-right mt-1">
-                                ${wUploaded}/${wTotal} Docs | ${wLinked} verlinkt
+                                ${wUploaded}/${wTotal} Docs | ${wLinked}/${wLinkTotal} verlinkt
+                                ${wLinkSkipped > 0 ? `| <span class="text-muted">${wLinkSkipped} skip</span>` : ''}
                                 ${wFailed > 0 ? `| <span class="text-danger">${wFailed} Fehler</span>` : ''}
                             </div>
                         </div>

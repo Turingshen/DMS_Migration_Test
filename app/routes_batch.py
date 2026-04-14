@@ -60,6 +60,7 @@ def get_batches():
                 COALESCE(s.link_linked, 0) as link_linked,
                 COALESCE(s.link_exists, 0) as link_exists,
                 COALESCE(s.link_failed, 0) as link_failed,
+                COALESCE(s.link_skipped, 0) as link_skipped,
                 COALESCE(s.link_total, 0) as link_total
             FROM dbo.migration_batch b
             LEFT JOIN (
@@ -74,7 +75,9 @@ def get_batches():
                     SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
                     SUM(CASE WHEN link_status = 'link_skipped' THEN 1 ELSE 0 END) as link_skipped,
-                    SUM(CASE WHEN ISNULL(link_status, 'pending') IN ('linked', 'link_exists', 'link_failed', 'link_skipped', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
+                    SUM(CASE WHEN link_status IN ('linked', 'link_exists', 'link_failed', 'link_skipped') THEN 1
+                         WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1
+                         ELSE 0 END) as link_total
                 FROM dbo.migration_staging
                 GROUP BY batch_id
             ) s ON b.batch_id = s.batch_id

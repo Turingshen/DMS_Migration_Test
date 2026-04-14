@@ -1,6 +1,6 @@
 """Validation dashboard routes — post-linking verification."""
 
-from flask import render_template, request, jsonify
+from flask import render_template, request, jsonify, Response
 from sqlalchemy import text
 
 from app.blueprint import migrate_bp, misc_engine, get_template_context
@@ -183,6 +183,7 @@ def validation_data(batch_id):
                         fd.error_category, fd.error_detail,
                         ms.source_documentnumber, ms.source_documenttype,
                         ms.source_documentversion, ms.source_documentpart,
+                        ms.source_description,
                         CASE WHEN ms.container_created = 1 THEN ms.target_documentnumber ELSE NULL END AS target_documentnumber,
                         ms.target_documenttype, ms.target_documentversion, ms.target_documentpart,
                         ms.execution_status, ms.container_created,
@@ -199,6 +200,7 @@ def validation_data(batch_id):
                        error_category, error_detail,
                        source_documentnumber, source_documenttype,
                        source_documentversion, source_documentpart,
+                       source_description,
                        target_documentnumber, target_documenttype,
                        target_documentversion, target_documentpart,
                        execution_status, container_created
@@ -238,7 +240,8 @@ def validation_data(batch_id):
                                     d.DOKNR, d.DOKAR, d.DOKVR, d.DOKTL,
                                     COALESCE(NULLIF(TRIM(d.DAPPL), ''), '') as HEADER_DAPPL,
                                     COALESCE(NULLIF(TRIM(f.DAPPL), ''), '') as FILE_DAPPL,
-                                    COALESCE(f.FILENAME, '') as FILENAME
+                                    COALESCE(f.FILENAME, '') as FILENAME,
+                                    COALESCE(t.DKTXT, '') as DESCRIPTION
                                 FROM DIL.DRAW d
                                 LEFT JOIN DIL.DMS_DOC_FILES f 
                                     ON f.DOKNR = d.DOKNR 
@@ -246,6 +249,12 @@ def validation_data(batch_id):
                                     AND f.DOKVR = d.DOKVR 
                                     AND f.DOKTL = d.DOKTL
                                     AND f.FILE_IDX = 1
+                                LEFT JOIN DIL.DRAT t
+                                    ON t.DOKNR = d.DOKNR
+                                    AND t.DOKAR = d.DOKAR
+                                    AND t.DOKVR = d.DOKVR
+                                    AND t.DOKTL = d.DOKTL
+                                    AND t.LANGU = 'D'
                                 WHERE d.DOKNR IN ({placeholders})
                             """)).fetchall()
 
@@ -254,7 +263,8 @@ def validation_data(batch_id):
                                 dappl_map[key] = {
                                     'header_dappl': r[4] or '',
                                     'file_dappl': r[5] or '',
-                                    'original_filename': r[6] or ''
+                                    'original_filename': r[6] or '',
+                                    'dil_description': r[7] or ''
                                 }
                 except Exception as dil_err:
                     # Don't fail validation if DIL query fails
@@ -268,6 +278,7 @@ def validation_data(batch_id):
                     fd['header_dappl'] = dappl_info.get('header_dappl', '')
                     fd['file_dappl'] = dappl_info.get('file_dappl', '')
                     fd['original_filename'] = dappl_info.get('original_filename', '')
+                    fd['dil_description'] = dappl_info.get('dil_description', '')
 
             # ── 12. Object mappings (source→target per link) ─────
             obj_map_rows = con.execute(text("""
@@ -291,6 +302,187 @@ def validation_data(batch_id):
             'file_details': file_details,
             'obj_mappings': obj_mappings,
         })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@migrate_bp.route('/batch/<batch_id>/validation/export')
+def validation_export_excel(batch_id):
+    """Export validation file details as Excel with diff highlighting."""
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    import json as _json
+
+    yellow_fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
+    green_fill = PatternFill(start_color='D4EDDA', end_color='D4EDDA', fill_type='solid')
+    red_fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
+    header_fill = PatternFill(start_color='6F42C1', end_color='6F42C1', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+
+    try:
+        # Reuse the same query logic as validation_data
+        with misc_engine.connect() as con:
+            file_rows = con.execute(text("""
+                WITH ranked AS (
+                    SELECT
+                        fd.id, fd.staging_id, fd.file_index,
+                        fd.filename, fd.mime_type,
+                        fd.file_size_bytes, fd.file_size_mb,
+                        fd.upload_status, fd.http_status_code,
+                        fd.error_category, fd.error_detail,
+                        ms.source_documentnumber, ms.source_documenttype,
+                        ms.source_documentversion, ms.source_documentpart,
+                        ms.source_description,
+                        CASE WHEN ms.container_created = 1 THEN ms.target_documentnumber ELSE NULL END AS target_documentnumber,
+                        ms.target_documenttype, ms.target_documentversion, ms.target_documentpart,
+                        ms.execution_status, ms.container_created,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY fd.staging_id, fd.file_index
+                            ORDER BY fd.id DESC
+                        ) AS rn
+                    FROM dbo.migration_file_details fd
+                    JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
+                    WHERE fd.batch_id = :bid AND ms.skip_migration = 0
+                )
+                SELECT * FROM ranked WHERE rn = 1
+                ORDER BY staging_id, file_index
+            """), {'bid': batch_id}).fetchall()
+            file_details = [dict(r._mapping) for r in file_rows]
+
+        # DIL enrichment (description + original filename)
+        doc_keys = set()
+        for fd in file_details:
+            doknr = fd.get('source_documentnumber')
+            if doknr:
+                doc_keys.add(doknr)
+
+        dappl_map = {}
+        if doc_keys:
+            try:
+                dil_db = DilEngine.load()
+                CHUNK_SIZE = 500
+                doknr_list = list(doc_keys)
+                with dil_db.engine.connect() as dil_con:
+                    for i in range(0, len(doknr_list), CHUNK_SIZE):
+                        chunk = doknr_list[i:i + CHUNK_SIZE]
+                        placeholders = ','.join([f"'{d}'" for d in chunk])
+                        rows = dil_con.execute(text(f"""
+                            SELECT
+                                d.DOKNR, d.DOKAR, d.DOKVR, d.DOKTL,
+                                COALESCE(f.FILENAME, '') as FILENAME,
+                                COALESCE(t.DKTXT, '') as DESCRIPTION
+                            FROM DIL.DRAW d
+                            LEFT JOIN DIL.DMS_DOC_FILES f
+                                ON f.DOKNR = d.DOKNR AND f.DOKAR = d.DOKAR
+                                AND f.DOKVR = d.DOKVR AND f.DOKTL = d.DOKTL
+                                AND f.FILE_IDX = 1
+                            LEFT JOIN DIL.DRAT t
+                                ON t.DOKNR = d.DOKNR AND t.DOKAR = d.DOKAR
+                                AND t.DOKVR = d.DOKVR AND t.DOKTL = d.DOKTL
+                                AND t.LANGU = 'D'
+                            WHERE d.DOKNR IN ({placeholders})
+                        """)).fetchall()
+                        for r in rows:
+                            key = f"{r[0]}|{r[1]}|{r[2]}|{r[3]}"
+                            dappl_map[key] = {
+                                'original_filename': r[4] or '',
+                                'dil_description': r[5] or ''
+                            }
+            except Exception:
+                pass
+
+        # Build Excel
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Validierung'
+
+        headers = [
+            'Quell-Dok', 'Quell-Typ/Ver./Teil',
+            'Ziel-Dok', 'Ziel-Typ/Ver./Teil',
+            'Quell-Beschreibung', 'Ziel-Beschreibung',
+            'Quell-Dateiname', 'Ziel-Dateiname',
+            'Typ', 'Größe (Bytes)', 'Status', 'Fehler'
+        ]
+        ws.append(headers)
+        for col_idx, _ in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        for fd in file_details:
+            dil_key = f"{fd.get('source_documentnumber')}|{fd.get('source_documenttype')}|{fd.get('source_documentversion')}|{fd.get('source_documentpart')}"
+            dil_info = dappl_map.get(dil_key, {})
+
+            src_tvt = '/'.join(filter(None, [fd.get('source_documenttype'), fd.get('source_documentversion'), fd.get('source_documentpart')]))
+            tgt_tvt = '/'.join(filter(None, [fd.get('target_documenttype'), fd.get('target_documentversion'), fd.get('target_documentpart')])) if fd.get('container_created') else ''
+
+            src_desc = fd.get('source_description') or dil_info.get('dil_description', '')
+            tgt_desc = fd.get('source_description') or ''
+            src_fn = dil_info.get('original_filename', '')
+            tgt_fn = fd.get('filename') or ''
+
+            row_data = [
+                fd.get('source_documentnumber') or '',
+                src_tvt,
+                fd.get('target_documentnumber') or '',
+                tgt_tvt,
+                src_desc,
+                tgt_desc,
+                src_fn,
+                tgt_fn,
+                fd.get('mime_type') or '',
+                fd.get('file_size_bytes') or '',
+                'Erfolgreich' if fd.get('upload_status') == 'SUCCESS' else (fd.get('upload_status') or ''),
+                fd.get('error_detail') or fd.get('error_category') or ''
+            ]
+            ws.append(row_data)
+            row_num = ws.max_row
+
+            # Diff highlighting: description
+            desc_match = not src_desc or not tgt_desc or src_desc.strip() == tgt_desc.strip()
+            if not desc_match:
+                ws.cell(row=row_num, column=5).fill = yellow_fill
+                ws.cell(row=row_num, column=6).fill = yellow_fill
+
+            # Diff highlighting: filename
+            fn_match = not src_fn or not tgt_fn or src_fn.strip() == tgt_fn.strip()
+            if not fn_match:
+                ws.cell(row=row_num, column=7).fill = yellow_fill
+                ws.cell(row=row_num, column=8).fill = yellow_fill
+
+            # Status coloring
+            status_cell = ws.cell(row=row_num, column=11)
+            if fd.get('upload_status') == 'SUCCESS':
+                status_cell.fill = green_fill
+            elif fd.get('upload_status'):
+                status_cell.fill = red_fill
+
+        # Auto-width
+        for col_idx, _ in enumerate(headers, 1):
+            max_len = len(headers[col_idx - 1])
+            for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    if cell.value:
+                        max_len = max(max_len, min(len(str(cell.value)), 40))
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = max_len + 2
+
+        ws.auto_filter.ref = ws.dimensions
+        ws.freeze_panes = 'A2'
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        return Response(
+            buf.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': f'attachment; filename=Validierung_{batch_id}.xlsx'}
+        )
 
     except Exception as e:
         import traceback

@@ -5,7 +5,7 @@ import os
 import threading
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import render_template, request, jsonify, session, Response
 from sqlalchemy import text
 from werkzeug.utils import secure_filename
@@ -186,7 +186,7 @@ def qm_material_save():
 
         columns, records = _parse_sap_alv_xls(raw)
 
-        ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         batch_id = f'QM_{ts}'
         created_by = session.get('au_name', 'unknown')
 
@@ -784,7 +784,7 @@ def qinf_mapping_download(batch_id):
         return jsonify({'ok': False, 'error': 'Keine Daten für diesen Batch'}), 404
 
     # Rename columns for the Excel template
-    df.rename(columns={
+    df = df.rename(columns={
         'id': 'ID',
         'material': 'Material',
         'vendor': 'Vendor',
@@ -793,7 +793,7 @@ def qinf_mapping_download(batch_id):
         'sloc': 'SLoc',
         'qinf_material': 'Map to Material',
         'qinf_zaehl': 'Zähler',
-    }, inplace=True)
+    })
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -843,7 +843,7 @@ def qinf_mapping_upload(batch_id):
             col_map[c] = 'qinf_material'
         elif cl in ('zähler', 'zaehler', 'zaehl', 'qinf_zaehl', 'counter'):
             col_map[c] = 'qinf_zaehl'
-    df.rename(columns=col_map, inplace=True)
+    df = df.rename(columns=col_map)
 
     if 'id' not in df.columns:
         return jsonify({'ok': False, 'error': 'Spalte "ID" fehlt in der Datei'}), 400
@@ -890,6 +890,34 @@ def qinf_mapping_upload(batch_id):
 TECH_EXPECTED_COLS = ['DOKAR', 'DOKNR', 'DOKVR', 'DOKTL', 'DOKOB', 'OBZAE', 'OBJKY']
 
 tech_logger = get_logger('tech_material')
+
+
+@migrate_bp.route('/api/tech-material/template', methods=['GET'])
+def tech_material_template():
+    """Download empty Excel template for TECH Material upload."""
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'TECH Material'
+    ws.append(TECH_EXPECTED_COLS)
+    ws.append(['TN1', '10000012345', '00', '000', 'IFLOT', '000001', 'ES11-10700-V1-0700'])
+    widths = [8, 16, 8, 8, 10, 10, 30]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        buf.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename=TECH_Material_Template.xlsx'}
+    )
 
 
 @migrate_bp.route('/api/tech-material/upload', methods=['POST'])
@@ -980,7 +1008,7 @@ def tech_material_save():
         for c in TECH_EXPECTED_COLS:
             df[c] = df[c].fillna('').astype(str).str.strip()
 
-        ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         batch_id = f'TECH_{ts}'
         created_by = session.get('au_name', 'unknown')
 
@@ -1159,7 +1187,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 WHERE MANDT = '100' AND ({' OR '.join(chunk)})
             """
             with dil_engine.begin() as con:
-                all_descs.append(pd.read_sql(q, con))
+                all_descs.append(pd.read_sql(text(q), con))
 
         if all_descs:
             drat_df = pd.concat(all_descs, ignore_index=True)
@@ -1188,7 +1216,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 WHERE MANDT = '100' AND ({' OR '.join(chunk)})
             """
             with dil_engine.begin() as con:
-                all_draws.append(pd.read_sql(q, con))
+                all_draws.append(pd.read_sql(text(q), con))
 
         if all_draws:
             draw_df = pd.concat(all_draws, ignore_index=True)
@@ -1215,7 +1243,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 WHERE MANDT = '100' AND ({' OR '.join(chunk)})
             """
             with dil_engine.begin() as con:
-                all_files.append(pd.read_sql(q, con))
+                all_files.append(pd.read_sql(text(q), con))
 
         if all_files:
             files_df = pd.concat(all_files, ignore_index=True)
@@ -1240,7 +1268,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 WHERE MANDT = '100' AND ({' OR '.join(chunk)})
             """
             with dil_engine.begin() as con:
-                all_loios.append(pd.read_sql(q, con))
+                all_loios.append(pd.read_sql(text(q), con))
 
         if all_loios:
             loio_df = pd.concat(all_loios, ignore_index=True)
@@ -1263,7 +1291,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 placeholders = ",".join(f"'{lid}'" for lid in chunk)
                 q = f"SELECT LOIO_ID, FILE_SIZE FROM DIL.DMS_FILE_SIZE WHERE LOIO_ID IN ({placeholders})"
                 with dil_engine.begin() as con:
-                    all_sizes.append(pd.read_sql(q, con))
+                    all_sizes.append(pd.read_sql(text(q), con))
 
             if all_sizes:
                 size_df = pd.concat(all_sizes, ignore_index=True)
@@ -1289,7 +1317,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
                 WHERE MANDT = '100' AND ({' OR '.join(chunk)})
             """
             with dil_engine.begin() as con:
-                all_drad.append(pd.read_sql(q, con))
+                all_drad.append(pd.read_sql(text(q), con))
 
         if all_drad:
             drad = pd.concat(all_drad, ignore_index=True)
@@ -1496,6 +1524,27 @@ def tech_material_batches():
             'with_file': r.with_file,
         })
     return jsonify({'ok': True, 'batches': batches})
+
+
+@migrate_bp.route('/api/tech-material/batch/<batch_id>', methods=['DELETE'])
+def tech_material_delete_batch(batch_id):
+    """Delete a TECH material batch and all its staging records."""
+    try:
+        with misc_engine.begin() as con:
+            count = con.execute(text(
+                "SELECT COUNT(*) FROM dbo.tech_material_staging WHERE batch_id = :bid"
+            ), {'bid': batch_id}).scalar()
+
+            if not count:
+                return jsonify({'ok': False, 'error': 'Batch nicht gefunden'}), 404
+
+            con.execute(text(
+                "DELETE FROM dbo.tech_material_staging WHERE batch_id = :bid"
+            ), {'bid': batch_id})
+
+        return jsonify({'ok': True, 'deleted': count, 'batch_id': batch_id})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @migrate_bp.route('/api/tech-material/data/<batch_id>', methods=['GET'])
@@ -1998,7 +2047,7 @@ def _tech_write_mapping_excel(path, batch_id, all_records, doc_log, file_log,
 
     stats = [
         ('Batch-ID', batch_id),
-        ('Erstellt am', datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')),
+        ('Erstellt am', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')),
         ('', ''),
         ('Staging-Zeilen gesamt', len(all_records)),
         ('Einzigartige Dokumente', len(unique_docs)),

@@ -6,6 +6,7 @@ Provides helper functions for testing and debugging.
 import sys
 import os
 import pandas as pd
+from sqlalchemy import text
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -79,7 +80,7 @@ def list_batches(limit=10):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(query, con)
+        df = pd.read_sql(text(query), con)
     
     if len(df) == 0:
         print("No batches found")
@@ -101,7 +102,7 @@ def get_batch_details(batch_id):
     """
     
     with misc_engine.begin() as con:
-        batch_df = pd.read_sql(batch_query, con)
+        batch_df = pd.read_sql(text(batch_query), con)
     
     if len(batch_df) == 0:
         print(f"Batch not found: {batch_id}")
@@ -126,7 +127,7 @@ def get_batch_details(batch_id):
     """
     
     with misc_engine.begin() as con:
-        records_df = pd.read_sql(records_query, con)
+        records_df = pd.read_sql(text(records_query), con)
     
     print("\nRecords Summary:")
     print(records_df.to_string(index=False))
@@ -182,7 +183,7 @@ def view_failed_records(batch_id):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(query, con)
+        df = pd.read_sql(text(query), con)
     
     if len(df) == 0:
         print(f"No failed records in batch {batch_id}")
@@ -203,7 +204,7 @@ def cleanup_test_batches():
             SELECT batch_id FROM dbo.migration_batch
             WHERE source_file LIKE '%test%'
         """
-        test_df = pd.read_sql(test_query, con)
+        test_df = pd.read_sql(text(test_query), con)
         
         if len(test_df) == 0:
             print("No test batches found")

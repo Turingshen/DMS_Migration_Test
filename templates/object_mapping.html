@@ -425,8 +425,8 @@
             </a>
         </div>
         <div class="btn-group">
-            <button class="btn btn-info" onclick="downloadTemplate()" data-i18n="map.download_template">
-                📥 Vorlage herunterladen
+            <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
+                💾 Zuordnungen exportieren
             </button>
             <button class="btn btn-primary" onclick="showUploadModal()" data-i18n="map.upload_excel">
                 📤 Excel hochladen
@@ -434,12 +434,9 @@
             <button class="btn btn-apply" onclick="applyMappings()" data-i18n="map.apply">
                 ✨ Auf Staging anwenden
             </button>
-            <button class="btn btn-warning" onclick="downloadMappings()" data-i18n="map.export">
-                💾 Zuordnungen exportieren
-            </button>
             <span style="border-left: 2px solid #ccc; height: 30px; display: inline-block; margin: 0 5px;"></span>
-            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Objektlinks für alle verlinkbaren Datensätze erstellen" data-i18n-title="map.link_all_title" style="background: #28a745;" data-i18n="map.link_all">
-                🔗 Alle verlinken
+            <button class="btn btn-primary" onclick="linkAll()" id="linkAllBtn" title="Nur zugeordnete Objektlinks verlinken" data-i18n-title="map.link_all_title" style="background: #28a745;" data-i18n="map.link_all">
+                🔗 Zuordnungen verlinken
             </button>
             <button class="btn btn-primary" onclick="linkSelected()" id="linkSelectedBtn" disabled title="Objektlinks für ausgewählte Datensätze erstellen" data-i18n-title="map.link_selected_title" style="background: #28a745;" data-i18n="map.link_selected">
                 🔗 Ausgewählte verlinken

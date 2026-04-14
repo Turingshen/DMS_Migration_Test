@@ -3,7 +3,7 @@ $(document).ready(function() {
     // Toggle source field requirements based on rule type
     $('#ruleType').on('change', function() {
         const type = $(this).val();
-        const isTranslation = type === 'translation';
+        const isTranslation = type === 'translation' || type === 'replace_prefix';
         $('#sourceColumn').prop('required', isTranslation);
         $('#sourceValue').prop('required', isTranslation);
         $('#sourceColumn').prop('disabled', !isTranslation);
@@ -66,7 +66,7 @@ function displayRules(rules) {
             ? `${escapeHtml(rule.condition_column)} ${escapeHtml(rule.condition_operator || 'contains')} ${escapeHtml(rule.condition_value)}`
             : '-';
         const type = (rule.rule_type || 'translation').toLowerCase();
-        const typeClass = type === 'overwrite' ? 'badge-warning' : 'badge-info';
+        const typeClass = type === 'overwrite' ? 'badge-warning' : type === 'replace_prefix' ? 'badge-success' : 'badge-info';
         const execOrder = rule.execution_order !== undefined ? rule.execution_order : 100;
         const isActive = rule.active === 1 || rule.active === true;
         const rowClass = isActive ? '' : 'rule-inactive';
@@ -115,7 +115,7 @@ function saveRule() {
         notes: $('#notes').val().trim()
     };
     
-    if (data.rule_type === 'translation') {
+    if (data.rule_type === 'translation' || data.rule_type === 'replace_prefix') {
         if (!data.source_column || !data.target_column || data.target_value === null || data.target_value === undefined) {
             showError(t('rules.val.translation_required'));
             return;
@@ -166,7 +166,7 @@ function editRule(id) {
                 $('#editConditionValue').val(rule.condition_value || '');
                 $('#editNotes').val(rule.notes || '');
                 // Disable/enable source fields depending on rule type (overwrite vs translation)
-                const isTranslation = (rule.rule_type || 'translation').toLowerCase() === 'translation';
+                const isTranslation = (rule.rule_type || 'translation').toLowerCase() === 'translation' || (rule.rule_type || '').toLowerCase() === 'replace_prefix';
                 $('#editSourceColumn').prop('disabled', !isTranslation);
                 $('#editSourceValue').prop('disabled', !isTranslation);
                 // Show condition section if the rule has a condition

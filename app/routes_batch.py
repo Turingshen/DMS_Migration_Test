@@ -73,7 +73,8 @@ def get_batches():
                     SUM(CASE WHEN link_status = 'linked' THEN 1 ELSE 0 END) as link_linked,
                     SUM(CASE WHEN link_status = 'link_exists' THEN 1 ELSE 0 END) as link_exists,
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
-                    SUM(CASE WHEN ISNULL(link_status, 'pending') IN ('linked', 'link_exists', 'link_failed', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
+                    SUM(CASE WHEN link_status = 'link_skipped' THEN 1 ELSE 0 END) as link_skipped,
+                    SUM(CASE WHEN ISNULL(link_status, 'pending') IN ('linked', 'link_exists', 'link_failed', 'link_skipped', 'pending') AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
                 FROM dbo.migration_staging
                 GROUP BY batch_id
             ) s ON b.batch_id = s.batch_id
@@ -81,7 +82,7 @@ def get_batches():
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         # Replace NaN/NaT with None for JSON serialization
         df = df.where(pd.notnull(df), None)
@@ -419,7 +420,7 @@ def refresh_batch_data_stream(batch_id):
             """
             
             with misc_engine.begin() as con:
-                df = pd.read_sql(query, con)
+                df = pd.read_sql(text(query), con)
             
             if len(df) == 0:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No records found'})}\n\n"
@@ -461,7 +462,7 @@ def refresh_batch_data_stream(batch_id):
                     AND ({where_clause})
                 """
                 with dil_engine.begin() as con:
-                    chunk_df = pd.read_sql(loio_query, con)
+                    chunk_df = pd.read_sql(text(loio_query), con)
                 all_loios.append(chunk_df)
                 
                 if i % 2000 == 0:
@@ -496,7 +497,7 @@ def refresh_batch_data_stream(batch_id):
                         WHERE LOIO_ID IN ({placeholders})
                     """
                     with dil_engine.begin() as con:
-                        chunk_df = pd.read_sql(size_query, con)
+                        chunk_df = pd.read_sql(text(size_query), con)
                     all_sizes.append(chunk_df)
                     
                     if i % 4000 == 0:
@@ -536,7 +537,7 @@ def refresh_batch_data_stream(batch_id):
                     WHERE {where_clause}
 """
                 with dil_engine.begin() as con:
-                    chunk_df = pd.read_sql(draw_query, con)
+                    chunk_df = pd.read_sql(text(draw_query), con)
                 all_filenames.append(chunk_df)
                 
                 if i % 3000 == 0:
@@ -572,7 +573,7 @@ def refresh_batch_data_stream(batch_id):
                     WHERE MANDT = '100' AND ({where_clause})
                 """
                 with dil_engine.begin() as con:
-                    chunk_df = pd.read_sql(drat_query, con)
+                    chunk_df = pd.read_sql(text(drat_query), con)
                 all_descriptions.append(chunk_df)
                 
                 if i % 3000 == 0:
@@ -593,7 +594,7 @@ def refresh_batch_data_stream(batch_id):
                 drat_final = pd.DataFrame(columns=['doknr', 'dokar', 'dokvr', 'doktl', 'dktxt'])
             
             # Clean up temp escaped columns (no longer needed)
-            df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, inplace=True, errors='ignore')
+            df = df.drop(['doknr_escaped', 'dokar_escaped'], axis=1, errors='ignore')
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'drat', 'percent': 55, 'message': f'Found {descriptions_found} descriptions from DRAT'})}\n\n"
             
@@ -606,7 +607,7 @@ def refresh_batch_data_stream(batch_id):
             
             # Get full records for rule application
             with misc_engine.begin() as con:
-                full_df = pd.read_sql(f"""
+                full_df = pd.read_sql(text(f"""
                     SELECT id, source_documenttype, source_documentnumber, source_documentversion,
                            source_documentpart, source_description, authorization_group,
                            source_dokob, source_objky, filename,
@@ -615,7 +616,7 @@ def refresh_batch_data_stream(batch_id):
                            source_document_status, target_document_status, execution_status
                     FROM dbo.migration_staging
                     WHERE batch_id = '{batch_id}'
-                """, con)
+                """), con)
             
             # Reset target_documenttype from source before applying rules
             # BUT only for records that are NOT already successful (preserve successful migrations)
@@ -645,7 +646,7 @@ def refresh_batch_data_stream(batch_id):
                 # Update only the non-successful rows in full_df
                 for col in non_success_df.columns:
                     if col in full_df.columns:
-                        full_df.loc[not_successful_mask, col] = non_success_df[col].values
+                        full_df.loc[not_successful_mask, col] = non_success_df[col].to_numpy()
                 print(f"[REFRESH] Applied rules to {not_successful_mask.sum()} non-successful records")
             
             # Recompute target_documentnumber based on VALUE (numeric vs alphanumeric)
@@ -697,8 +698,8 @@ def refresh_batch_data_stream(batch_id):
             if non_success_mask.any():
                 non_success_subset = full_df.loc[non_success_mask].copy()
                 doknr_results = non_success_subset.apply(_compute_doknr_row, axis=1, result_type='expand')
-                full_df.loc[non_success_mask, 'target_documentnumber'] = doknr_results[0].values
-                full_df.loc[non_success_mask, 'target_documentnumber_sanitized'] = doknr_results[1].values
+                full_df.loc[non_success_mask, 'target_documentnumber'] = doknr_results[0].to_numpy()
+                full_df.loc[non_success_mask, 'target_documentnumber_sanitized'] = doknr_results[1].to_numpy()
                 print(f"[REFRESH] Computed target_documentnumber for {non_success_mask.sum()} non-successful records, preserved {(~non_success_mask).sum()} successful records")
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'rules', 'percent': 60, 'message': f'Applied {rules_applied} rules'})}\n\n"
@@ -748,9 +749,9 @@ def refresh_batch_data_stream(batch_id):
                     right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
                     suffixes=('', '_draw')
                 )
-                df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                df_merged = df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
                                         'doknr_draw', 'dokar_draw', 'dokvr_draw', 'doktl_draw'],
-                               errors='ignore', inplace=True)
+                               errors='ignore')
                 df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
             
             # Merge descriptions from DRAT
@@ -767,9 +768,9 @@ def refresh_batch_data_stream(batch_id):
                     right_on=['doknr', 'dokar', 'dokvr', 'doktl'],
                     suffixes=('', '_drat')
                 )
-                df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                df_merged = df_merged.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
                                         'doknr_drat', 'dokar_drat', 'dokvr_drat', 'doktl_drat'],
-                               errors='ignore', inplace=True)
+                               errors='ignore')
                 df_merged = df_merged.drop_duplicates(subset=['id'], keep='first')
             
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'update', 'percent': 70, 'message': 'Preparing bulk update...'})}\n\n"

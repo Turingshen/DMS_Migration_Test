@@ -9,6 +9,7 @@ _refresh_token_standalone().
 """
 
 import pandas as pd
+import numpy as np
 import time
 import json
 import requests
@@ -23,6 +24,68 @@ from flask import session as http_session
 _migration_lock = threading.Lock()
 _active_migrations = {}  # batch_id -> start_time
 _cancel_requested = {}   # batch_id -> True/False - for graceful cancellation
+
+
+def _sanitize_record(row):
+    """Convert a pandas Series to a dict with NaN/NaT replaced by None.
+    
+    pandas iterrows() returns NaN (float) for SQL NULL values, which causes
+    'float' object has no attribute 'strip' errors and 'NAN' string leaks.
+    """
+    return {k: (None if pd.isna(v) else v) for k, v in row.items()}
+
+
+def _apply_prefix_rules(records_df):
+    """Apply replace_prefix translation rules to records where target_documentnumber is NULL.
+
+    This ensures prefix replacements (e.g. CB* -> SIT) are applied even if
+    'Daten anreichern' was not re-run after a batch reset.
+    Only modifies rows where target_documentnumber is currently empty.
+    """
+    import re
+    from app.prepare import load_translations
+    from app.process import sanitize_doknr as _sanitize_doknr
+
+    rules = load_translations()
+    prefix_rules = [r for r in rules if (r.get('rule_type') or '').lower() == 'replace_prefix']
+    if not prefix_rules:
+        return records_df
+
+    # Only touch rows where target_documentnumber is empty
+    empty_mask = records_df['target_documentnumber'].isna() | (records_df['target_documentnumber'].astype(str).str.strip() == '')
+
+    if not empty_mask.any():
+        return records_df
+
+    for rule in prefix_rules:
+        source_col = rule.get('source_column')
+        target_col = rule.get('target_column')
+        source_val = rule.get('source_value')
+        target_val = rule.get('target_value')
+        if not source_col or not target_col or not source_val or target_val is None:
+            continue
+        if source_col not in records_df.columns:
+            continue
+
+        src = str(source_val).rstrip('*')
+        col_series = records_df[source_col].astype(str)
+        prefix_mask = empty_mask & col_series.str.startswith(src, na=False)
+        if prefix_mask.any():
+            replaced = col_series[prefix_mask].str.replace(
+                f'^{re.escape(src)}', str(target_val), n=1, regex=True
+            )
+            records_df.loc[prefix_mask, target_col] = replaced
+            # Also update sanitized column if the target is documentnumber
+            if target_col == 'target_documentnumber':
+                def _sanitize(val):
+                    if pd.isna(val) or not str(val).strip():
+                        return None
+                    s, _ = _sanitize_doknr(str(val))
+                    return s if s and s.strip() else str(val)[:25]
+                records_df.loc[prefix_mask, 'target_documentnumber_sanitized'] = replaced.apply(_sanitize)
+            print(f"[EXECUTE] Applied replace_prefix rule at execution time: {prefix_mask.sum()} rows ({src}* -> {target_val}*)")
+
+    return records_df
 
 # Background execution results storage
 _background_results = {}  # batch_id -> result dict (kept until next execution)
@@ -285,8 +348,8 @@ def is_local_path(path: str) -> bool:
     
     LOCAL paths (.url shortcut required):
         - file://C:/... or file:///C:/...
-        - C:\... or D:\... (Windows drive letter paths)
-        - \\server\share\... (UNC network paths)
+        - C:\\... or D:\\... (Windows drive letter paths)
+        - \\\\server\\share\\... (UNC network paths)
     
     REMOTE paths (CreateUrlAsAttachment works):
         - http://...
@@ -344,7 +407,7 @@ def get_filep_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> str:
     """Get the raw FILEP value from DRAW for LOCAL_LINK detection.
     
     FILEP contains either:
-        - A local file path (for DAPPL=HTM local links): C:\..., \\\\server\\...
+        - A local file path (for DAPPL=HTM local links): C:\\\\..., \\\\\\\\server\\\\...
         - A URL (for DAPPL=HTM web links): http://..., https://...
         - A filename (for normal files)
     
@@ -411,10 +474,10 @@ def get_shortcut_filename(original_path: str) -> str:
     correct DAPPL instead of BIN/HTM.
     
     Examples:
-        C:\temp\document.pdf → document.pdf (SAP DAPPL: PDF)
-        \\server\share\file.xls → file.xls (SAP DAPPL: XLS)
-        file:///C:/path/report.docx → report.docx (SAP DAPPL: DOC)
-        C:\path\image.jpg → image.jpg (SAP DAPPL: JPG)
+        C:\\temp\\document.pdf -> document.pdf (SAP DAPPL: PDF)
+        \\\\server\\share\\file.xls -> file.xls (SAP DAPPL: XLS)
+        file:///C:/path/report.docx -> report.docx (SAP DAPPL: DOC)
+        C:\\path\\image.jpg -> image.jpg (SAP DAPPL: JPG)
     
     Args:
         original_path: The original local path
@@ -993,7 +1056,7 @@ def load_approved_records(batch_id):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(query, con)
+        df = pd.read_sql(text(query), con)
     
     return df
 
@@ -1035,7 +1098,7 @@ def load_specific_records(batch_id, record_ids):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(query, con)
+        df = pd.read_sql(text(query), con)
     
     return df
 
@@ -2197,6 +2260,9 @@ def execute_single_document(staging_record, session_snapshot, _container_lost_re
                             resp_d = create_resp.json().get('d', {})
                             created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
                             if created_doc_number:
+                                created_doc_number = str(created_doc_number).strip()
+                                if created_doc_number.isdigit():
+                                    created_doc_number = created_doc_number.zfill(25)
                                 doc_number = created_doc_number
                                 with misc_engine.begin() as con:
                                     con.execute(text("""
@@ -2414,6 +2480,9 @@ def execute_single_document(staging_record, session_snapshot, _container_lost_re
                             resp_d = create_resp.json().get('d', {})
                             created_doc_number = resp_d.get('DocumentInfoRecordDocNumber')
                             if created_doc_number:
+                                created_doc_number = str(created_doc_number).strip()
+                                if created_doc_number.isdigit():
+                                    created_doc_number = created_doc_number.zfill(25)
                                 doc_number = created_doc_number
                                 with misc_engine.begin() as con:
                                     con.execute(text("""
@@ -2763,6 +2832,9 @@ def execute_single_document(staging_record, session_snapshot, _container_lost_re
                             
                             # Update doc_number from response
                             if created_doc_number:
+                                created_doc_number = str(created_doc_number).strip()
+                                if created_doc_number.isdigit():
+                                    created_doc_number = created_doc_number.zfill(25)
                                 if created_doc_number != doc_number:
                                     logger.info(f"Target system assigned document number: {created_doc_number}", category="CREATE")
                                 doc_number = created_doc_number
@@ -3489,6 +3561,10 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                 'error': 'No records found for execution'
             }
         
+        # Apply replace_prefix rules for records with empty target_documentnumber
+        # (ensures prefix rules work even without re-running 'Daten anreichern')
+        records_df = _apply_prefix_rules(records_df)
+        
         # API Warmup - wake up APIs before starting migration
         first_loio = None
         if len(records_df) > 0 and 'source_loioid' in records_df.columns:
@@ -3546,7 +3622,7 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
         clear_cancel_request(batch_id)  # Clear any previous cancel request
         
         # Convert DataFrame to list of tuples for package processing
-        records_list = list(records_df.iterrows())
+        records_list = [(idx, _sanitize_record(row)) for idx, row in records_df.iterrows()]
         
         # Use PACKAGE_SIZE for grouping, max_workers for parallelism within each package
         effective_package_size = PACKAGE_SIZE
@@ -4285,7 +4361,7 @@ def batch_set_linking(staging_ids):
         print(f"[LINK_BATCH_SET_ERROR] Failed to set linking for {len(staging_ids)} records: {e}")
 
 
-def load_linkable_records(batch_id, record_ids=None):
+def load_linkable_records(batch_id, record_ids=None, mappings=None):
     """Load records that are eligible for linking (Phase 2).
     
     Records must have:
@@ -4293,6 +4369,10 @@ def load_linkable_records(batch_id, record_ids=None):
       - container_created = 1 — container confirmed
       - link_status IN ('pending', 'link_failed') — not yet linked (or retry)
       - source_object_links populated (for multi-link) OR target_dokob/target_objky (legacy)
+    
+    When mappings are provided, only returns records that have at least one link
+    matching a mapping key. Records without any matching mapping are bulk-set to
+    'link_skipped' directly (no per-record API call needed).
     """
     base_query = """
         SELECT 
@@ -4332,6 +4412,49 @@ def load_linkable_records(batch_id, record_ids=None):
     
     with misc_engine.begin() as con:
         df = pd.read_sql(text(base_query), con, params={'batch_id': batch_id})
+    
+    # Filter out records that have no matching mappings (bulk-skip them)
+    if mappings and not df.empty:
+        def _has_mapped_link(row):
+            # Legacy target values: always linkable
+            t_dokob = row.get('target_dokob')
+            t_objky = row.get('target_objky')
+            if t_dokob and t_objky and pd.notnull(t_dokob) and pd.notnull(t_objky):
+                if str(t_dokob).strip() and str(t_objky).strip():
+                    return True
+            # Check source_object_links JSON against mappings
+            sol = row.get('source_object_links')
+            if sol and pd.notnull(sol):
+                try:
+                    parsed = json.loads(sol)
+                    for item in parsed:
+                        key = (str(item.get('dokob', '')).upper(), str(item.get('objky', '')))
+                        if key in mappings:
+                            return True
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return False
+        
+        has_mapping = df.apply(_has_mapped_link, axis=1)
+        unmapped_df = df[~has_mapping]
+        df = df[has_mapping].copy()
+        
+        # Bulk-skip unmapped records in DB
+        if len(unmapped_df) > 0:
+            unmapped_ids = unmapped_df['id'].tolist()
+            print(f"[LINK] Skipping {len(unmapped_ids)} records without matching mappings")
+            # Batch update in chunks of 500
+            for i in range(0, len(unmapped_ids), 500):
+                chunk = unmapped_ids[i:i+500]
+                ids_str = ','.join(str(rid) for rid in chunk)
+                with misc_engine.begin() as con:
+                    con.execute(text(f"""
+                        UPDATE dbo.migration_staging
+                        SET link_status = 'link_skipped',
+                            link_error = 'Kein Objekt-Mapping vorhanden',
+                            link_completed_at = GETUTCDATE()
+                        WHERE id IN ({ids_str})
+                    """))
     
     return df
 
@@ -4491,9 +4614,10 @@ def link_single_record(staging_record, session_snapshot, mappings_cache=None, sk
                 if key in mappings:
                     target_dokob, target_objky = mappings[key]
                 else:
-                    # No mapping found -> pass through source values as-is
-                    target_dokob, target_objky = src_dokob, src_objky
-                    logger.info(f"No object mapping for {key}, passing through source values for link #{link_idx}", category="OBJLINK")
+                    # No mapping found -> skip this link (don't pass through source values)
+                    logger.info(f"No object mapping for {key}, skipping link #{link_idx}", category="OBJLINK")
+                    links_skipped += 1
+                    continue
             
             # ── Pre-check: skip if link already exists in SAP ──────
             if (target_dokob, target_objky) in existing_links:
@@ -4690,8 +4814,14 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         except Exception as e:
             print(f"[LINK_WARN] Could not fix READ_EMPTY records: {e}")
         
-        # Load linkable records
-        records_df = load_linkable_records(batch_id, record_ids)
+        # Pre-load object mappings ONCE for the entire batch (avoid N+1 queries)
+        mappings_cache = load_object_mappings(batch_id) or {}
+        if mappings_cache:
+            print(f"[LINK] Pre-loaded {len(mappings_cache)} object mappings (cached for all threads)")
+        
+        # Load linkable records — pre-filter against mappings so records without
+        # any matching mapping are bulk-skipped (no per-record API call needed)
+        records_df = load_linkable_records(batch_id, record_ids, mappings=mappings_cache)
         
         if len(records_df) == 0:
             clear_linking_lock(batch_id)
@@ -4699,11 +4829,6 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 'success': False,
                 'error': 'Keine verlinkbaren Datensätze gefunden. Voraussetzungen: Upload erfolgreich, Container angelegt, Objekt-Mapping vorhanden, noch nicht verlinkt.'
             }
-        
-        # Pre-load object mappings ONCE for the entire batch (avoid N+1 queries)
-        mappings_cache = load_object_mappings(batch_id) or {}
-        if mappings_cache:
-            print(f"[LINK] Pre-loaded {len(mappings_cache)} object mappings (cached for all threads)")
         
         # Pre-load DOKOB filter for this batch (only link selected object types)
         dokob_filter_set = load_batch_dokob_filter(batch_id)
@@ -4747,7 +4872,7 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         cancel_reason = None
         
         # Convert to list for package processing
-        records_list = list(records_df.iterrows())
+        records_list = [(idx, _sanitize_record(row)) for idx, row in records_df.iterrows()]
         effective_package_size = LINK_PACKAGE_SIZE
         total_packages = (len(records_list) + effective_package_size - 1) // effective_package_size
         
@@ -4780,7 +4905,7 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
             print(f"[LINK_PACKAGE {package_num + 1}/{total_packages}] Processing records {start_idx + 1}-{end_idx}")
             
             # Bulk set all records in this package to "linking" status
-            package_ids = [row.to_dict()['id'] for _, row in package_records]
+            package_ids = [row['id'] for _, row in package_records]
             batch_set_linking(package_ids)
             
             # Execute package in parallel (skip individual DB status updates - we batch them)
@@ -4788,7 +4913,7 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 for _, row in package_records:
-                    record_dict = row.to_dict()
+                    record_dict = row
                     future = executor.submit(link_single_record, record_dict, session_snapshot, 
                                              mappings_cache=mappings_cache, skip_status_updates=True,
                                              dokob_filter_set=dokob_filter_set)

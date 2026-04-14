@@ -119,7 +119,7 @@ def refresh_werke_cache_stream():
                     SELECT DISTINCT drad.DOKNR, drad.DOKVR, drad.DOKTL, stko.WRKAN as WERK
                     FROM DIL.DRAD drad
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
-                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR AND stpo.STLTY = stko.STLTY
                     WHERE drad.DOKOB = 'STPO_DOC'
                 ) combined
                 WHERE WERK IS NOT NULL AND WERK != ''
@@ -352,7 +352,7 @@ def load_dms_objects_stream():
                            {_has_file_sql}
                     FROM DIL.DRAD drad
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
-                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR AND stpo.STLTY = stko.STLTY
                     WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                       AND (stpo.LKENZ IS NULL OR stpo.LKENZ = '')
                 """
@@ -413,7 +413,7 @@ def load_dms_objects_stream():
                 'STPO_DOC': f"""
                     SELECT COUNT(*) FROM DIL.DRAD drad
                     JOIN DIL.STPO stpo ON drad.OBJKY = BINTOHEX(stpo.GUIDX)
-                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR
+                    JOIN DIL.STKO stko ON stpo.STLNR = stko.STLNR AND stpo.STLTY = stko.STLTY
                     WHERE drad.DOKOB = 'STPO_DOC' AND stko.WRKAN IN ('{werke_filter}')
                 """
             }
@@ -433,7 +433,7 @@ def load_dms_objects_stream():
                     query_start = time.time()
                     try:
                         # Get data (includes FILEP column from LEFT JOIN DRAW)
-                        df = pd.read_sql(query, con)
+                        df = pd.read_sql(text(query), con)
                         df.columns = [c.lower() for c in df.columns]
                         
                         # Map HAS_FILE to ABLAGE column: KPRO (Content Repository) or DB (DRAO)

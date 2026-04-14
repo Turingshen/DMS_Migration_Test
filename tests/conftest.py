@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 def pytest_configure(config):
     """Suppress third-party SQLAlchemy HANA dialect warnings (not our code)."""
+    # Note: sqlalchemy-hana 4.5 fixed dbapi() rename and supports statement caching.
+    # These filters are kept as safety nets but may no longer trigger.
     config.addinivalue_line(
         "filterwarnings",
         "ignore:The dbapi\\(\\) classmethod.*has been renamed:DeprecationWarning"

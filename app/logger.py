@@ -4,6 +4,7 @@ Stores structured logs in database and provides console output.
 """
 
 import datetime as dt
+from datetime import timezone
 import json
 from sqlalchemy import text
 from app_config import MiscEngine
@@ -36,7 +37,7 @@ class MigrationLogger:
         try:
             # Console output - only for WARNING+ by default
             if self.console_output and self._should_print(level):
-                timestamp = dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = dt.datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 prefix = f"[{timestamp}] [{level}]"
                 if category:
                     prefix += f" [{category}]"

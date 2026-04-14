@@ -464,13 +464,15 @@
                 .then(data => {
                     if (!data.success || !linkProgressInterval) return;
 
-                    const pct = data.progress_pct || 0;
+                    const pct = Math.min(data.progress_pct || 0, 100);
                     showLinkProgress();
                     const bar = document.getElementById('linkProgressBar');
-                    bar.style.width = pct + '%';
-                    bar.textContent = pct + '%';
+                    bar.style.width = pct.toFixed(1) + '%';
+                    bar.textContent = pct.toFixed(1) + '%';
+                    // Use real total (max of link_total and completed to avoid >100%)
+                    const realTotal = Math.max(data.link_total || 0, data.completed || 0);
                     document.getElementById('linkProgressStats').textContent =
-                        t('map.link_progress', {completed: data.completed, total: data.link_total, linked: data.linked, exists: data.link_exists, failed: data.link_failed});
+                        t('map.link_progress', {completed: data.completed, total: realTotal, linked: data.linked, exists: data.link_exists, failed: data.link_failed});
                     document.getElementById('linkProgressPhase').textContent =
                         t('map.link_phase', {phase: data.migration_phase || '—'});
 

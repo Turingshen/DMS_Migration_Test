@@ -6,6 +6,7 @@ Loads source data, enriches it with metadata, and stores in staging database.
 import pandas as pd
 import uuid
 import datetime as dt
+import re
 import requests
 import json
 import time
@@ -59,7 +60,7 @@ def load_translations():
             WHERE active = 1
         """
         with misc_engine.begin() as con:
-            translations_df = pd.read_sql(query, con)
+            translations_df = pd.read_sql(text(query), con)
         
         # Build list of rule dicts
         rules = []
@@ -208,7 +209,7 @@ def enrich_loio_ids(data_df):
                 AND ({where_clause})
             """
             with dil_engine.begin() as con:
-                chunk_df = pd.read_sql(query, con)
+                chunk_df = pd.read_sql(text(query), con)
             all_loios.append(chunk_df)
         
         if all_loios:
@@ -228,9 +229,9 @@ def enrich_loio_ids(data_df):
                 left_on=['_doknr', '_dokar', '_dokvr', '_doktl'],
                 right_on=['doknr', 'dokar', 'dokvr', 'doktl']
             )
-            data_df.rename(columns={'lo_objid': 'loioid'}, inplace=True)
-            data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl', 
-                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore', inplace=True)
+            data_df = data_df.rename(columns={'lo_objid': 'loioid'})
+            data_df = data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl', 
+                                  'doknr', 'dokar', 'dokvr', 'doktl'], errors='ignore')
             
             found_count = data_df['loioid'].notna().sum()
             print(f"[PREPARE] Found LOIO_IDs for {found_count}/{len(data_df)} documents")
@@ -279,7 +280,7 @@ def enrich_file_sizes(data_df):
                 WHERE LOIO_ID IN ({placeholders})
             """
             with dil_engine.begin() as con:
-                chunk_df = pd.read_sql(query, con)
+                chunk_df = pd.read_sql(text(query), con)
             all_sizes.append(chunk_df)
         
         if all_sizes:
@@ -293,8 +294,8 @@ def enrich_file_sizes(data_df):
                 left_on='loioid',
                 right_on='loio_id'
             )
-            data_df.rename(columns={'file_size': 'file_size_bytes'}, inplace=True)
-            data_df.drop(columns=['loio_id'], errors='ignore', inplace=True)
+            data_df = data_df.rename(columns={'file_size': 'file_size_bytes'})
+            data_df = data_df.drop(columns=['loio_id'], errors='ignore')
             
             # Convert to int, handling NaN
             data_df['file_size_bytes'] = pd.to_numeric(data_df['file_size_bytes'], errors='coerce')
@@ -444,7 +445,7 @@ def enrich_descriptions(data_df):
                 AND ({where_clause})
             """
             with dil_engine.begin() as con:
-                chunk_df = pd.read_sql(query, con)
+                chunk_df = pd.read_sql(text(query), con)
             all_descs.append(chunk_df)
         
         if all_descs:
@@ -495,10 +496,10 @@ def enrich_descriptions(data_df):
                 print(f"[PREPARE] Enriched {filled_count}/{needs_desc.sum()} descriptions from DIL.DRAT")
                 
                 # Cleanup merge columns
-                data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
+                data_df = data_df.drop(columns=['_doknr', '_dokar', '_dokvr', '_doktl',
                                       'doknr', 'dokar', 'dokvr', 'doktl', 'dktxt', 'langu',
                                       'dktxt_en', 'dktxt_any'],
-                             errors='ignore', inplace=True)
+                             errors='ignore')
             else:
                 print("[PREPARE] No descriptions found in DIL.DRAT")
         else:
@@ -570,6 +571,20 @@ def apply_translations(data_df, rules):
             final_val = None if target_val == '' else target_val
             data_df.loc[mask, target_col] = final_val
             print(f"[RULE] Applied overwrite rule to {mask.sum()} rows (set {target_col} = {final_val}))")
+        elif rtype == 'replace_prefix':
+            # Replace prefix: replace source_val prefix with target_val in source column values
+            # e.g. source_val="CB", target_val="SIT" → "CB1234" becomes "SIT1234"
+            if source_col and source_col in data_df.columns and source_val:
+                src = str(source_val).rstrip('*')  # strip trailing wildcard if present
+                col_series = data_df[source_col].astype(str)
+                prefix_mask = mask & col_series.str.startswith(src, na=False)
+                if prefix_mask.any():
+                    data_df.loc[prefix_mask, target_col] = col_series[prefix_mask].str.replace(
+                        f'^{re.escape(src)}', str(target_val), n=1, regex=True
+                    )
+                    print(f"[RULE] Applied replace_prefix rule to {prefix_mask.sum()} rows ({src}* -> {target_val}* in {target_col})")
+                else:
+                    print(f"[RULE] replace_prefix rule matched 0 rows ({src}* in {source_col})")
 
     return data_df
 
@@ -598,7 +613,7 @@ def load_source_data(source_file_path=None, custom_query=None, query_source='dil
             raise ValueError(f"Database engine for '{query_source}' is not available. Check database configuration.")
         
         with engine.begin() as con:
-            data_df = pd.read_sql(custom_query, con)
+            data_df = pd.read_sql(text(custom_query), con)
         # Already aliased to lowercase; ensure consistent formatting
         data_df.columns = [str(c).strip().lower() for c in data_df.columns]
     

@@ -254,14 +254,16 @@
             resp.batches.forEach(function (b) {
                 const dt = b.created_at ? new Date(b.created_at).toLocaleString('de-DE') : '';
                 list.append(
-                    '<li class="list-group-item d-flex justify-content-between align-items-center" ' +
-                    'style="cursor:pointer" onclick="techLoadBatch(\'' + escHtml(b.batch_id) + '\')">' +
-                    '<div><strong>' + escHtml(b.batch_id) + '</strong><br>' +
+                    '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+                    '<div style="cursor:pointer;flex:1" onclick="techLoadBatch(\'' + escHtml(b.batch_id) + '\')">' +
+                    '<strong>' + escHtml(b.batch_id) + '</strong><br>' +
                     '<small class="text-muted">' + dt + ' — ' + escHtml(b.created_by || '') + '</small></div>' +
-                    '<div class="text-end">' +
+                    '<div class="text-end d-flex align-items-center gap-2">' +
                     '<span class="badge bg-secondary">' + b.total + ' Zeilen</span> ' +
                     '<span class="badge bg-info">' + b.documents + ' Docs</span> ' +
                     '<span class="badge bg-success">' + b.with_file + ' m. Datei</span>' +
+                    '<button class="btn btn-outline-danger btn-sm ms-2" title="Batch löschen" ' +
+                    'onclick="event.stopPropagation(); techDeleteBatch(\'' + escHtml(b.batch_id) + '\')">✕</button>' +
                     '</div></li>'
                 );
             });
@@ -277,6 +279,23 @@
             buildStagedTable(stagedColumns, stagedData);
             updateStagedKpis(stagedData, resp.total);
             setStep(2);
+        });
+    };
+
+    window.techDeleteBatch = function (batchId) {
+        if (!confirm('Batch "' + batchId + '" und alle zugehörigen Daten löschen?')) return;
+        $.ajax({
+            url: '/api/tech-material/batch/' + encodeURIComponent(batchId),
+            method: 'DELETE',
+            success: function (resp) {
+                if (resp.ok) {
+                    if (currentBatchId === batchId) { currentBatchId = null; setStep(1); }
+                    loadBatches();
+                } else {
+                    alert('Fehler: ' + (resp.error || 'Unbekannt'));
+                }
+            },
+            error: function () { alert('Fehler beim Löschen'); }
         });
     };
 

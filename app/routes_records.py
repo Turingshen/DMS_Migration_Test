@@ -262,7 +262,7 @@ def get_results(batch_id):
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         # Convert to JSON-safe records (handles NaN/NaT properly)
         results = df_to_json_safe(df)
@@ -345,9 +345,9 @@ def list_migration_rules():
                     ORDER BY active DESC, id
                 """
             
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
-        translations = df.to_dict(orient='records')
+        translations = df_to_json_safe(df)
         return jsonify({'success': True, 'rules': translations})
         
     except Exception as e:
@@ -620,7 +620,7 @@ def get_batch_logs(batch_id):
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         print(f"[LOGS] Found {len(df)} records for batch {batch_id}")
         

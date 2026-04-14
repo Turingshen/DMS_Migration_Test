@@ -38,7 +38,7 @@ def get_batch_progress(batch_id):
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         if len(df) == 0:
             return jsonify({'success': False, 'error': 'Batch not found'}), 404
@@ -371,7 +371,7 @@ def get_batch_records(batch_id):
         
         with misc_engine.begin() as con:
             total_count = con.execute(text(count_query)).scalar()
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         # Convert to JSON-safe records (handles NaN/NaT properly)
         records = df_to_json_safe(df)
@@ -746,7 +746,8 @@ def get_link_progress(batch_id):
                     SUM(CASE WHEN link_status = 'link_failed' THEN 1 ELSE 0 END) as link_failed,
                     SUM(CASE WHEN link_status = 'linking' THEN 1 ELSE 0 END) as linking_now,
                     SUM(CASE WHEN ISNULL(link_status, 'pending') = 'pending' AND execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_pending,
-                    SUM(CASE WHEN execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total
+                    SUM(CASE WHEN execution_status IN ('success', 'partial') AND ISNULL(container_created, 0) = 1 AND target_dokob IS NOT NULL AND target_dokob != '' THEN 1 ELSE 0 END) as link_total,
+                    SUM(CASE WHEN link_status = 'link_skipped' THEN 1 ELSE 0 END) as link_skipped
                 FROM dbo.migration_staging
                 WHERE batch_id = '{batch_id}'
             """)).fetchone()
@@ -757,8 +758,9 @@ def get_link_progress(batch_id):
         linking_now = link_stats[3] or 0
         link_pending = link_stats[4] or 0
         link_total = link_stats[5] or 0
+        link_skipped = link_stats[6] or 0
 
-        completed = linked + link_exists + link_failed
+        completed = linked + link_exists + link_failed + link_skipped
         progress_pct = (completed / link_total * 100) if link_total > 0 else 0
 
         is_linking = is_linking_running(batch_id)[0]
@@ -771,6 +773,7 @@ def get_link_progress(batch_id):
             'linked': int(linked),
             'link_exists': int(link_exists),
             'link_failed': int(link_failed),
+            'link_skipped': int(link_skipped),
             'linking_now': int(linking_now),
             'link_pending': int(link_pending),
             'completed': int(completed),

@@ -751,7 +751,7 @@ def object_mapping_all_batches():
                 GROUP BY b.batch_id, b.wave, b.description, b.total_records, b.status
                 ORDER BY b.wave, b.batch_id
             """
-            df = pd.read_sql(query, con)
+            df = pd.read_sql(text(query), con)
         
         batches = df.to_dict(orient='records')
         

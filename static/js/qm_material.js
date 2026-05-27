@@ -390,6 +390,14 @@
 
     function _startExecution(recordIds) {
         var dirPath = ($('#qmFilePath').val() || '').trim();
+        var onlyWithMapping = $('#qmOnlyWithMapping').is(':checked');
+
+        // Warn if no dir_path provided at all
+        if (!dirPath) {
+            if (!confirm('⚠️ Kein Dateipfad angegeben!\n\nOhne Pfad werden nur Container und Links erstellt – keine Dateien hochgeladen.\n\nTrotzdem fortfahren?')) {
+                return;
+            }
+        }
 
         // Warn if dir_path is set but files were not scanned yet
         if (dirPath && !_filesScanned) {
@@ -404,6 +412,7 @@
         var payload = { batch_id: currentBatchId };
         if (recordIds) payload.record_ids = recordIds;
         if (dirPath) payload.dir_path = dirPath;
+        if (onlyWithMapping) payload.only_with_mapping = true;
 
         $.ajax({
             url: '/api/qm-material/execute',
@@ -536,6 +545,11 @@
         $('#qmErrorModal').modal('show');
     };
 
+    window.qmDownloadExcel = function () {
+        if (!currentBatchId) return;
+        window.location.href = '/api/qm-material/export-excel/' + currentBatchId;
+    };
+
     window.qmSetStep = setStep;
     window.qmStartMigration = window.qmExecuteAll;
     window.qmLoadBatchList = loadBatchList;
@@ -655,6 +669,53 @@
             },
             error: function (xhr) {
                 var msg = 'Fehler beim Scannen';
+                if (xhr.responseJSON && xhr.responseJSON.error) msg = xhr.responseJSON.error;
+                resultDiv.html('<div class="alert alert-danger mb-0 py-2">' + escHtml(msg) + '</div>');
+            }
+        });
+    };
+
+    // ── Rename files (replace source material with target material) ──
+    window.qmRenameFiles = function (dryRun) {
+        var dirPath = $('#qmFilePath').val().trim();
+        if (!dirPath) { alert('Bitte einen Pfad angeben'); return; }
+        if (!currentBatchId) { alert('Kein Batch geladen'); return; }
+
+        var resultDiv = $('#qmRenameResult');
+        resultDiv.removeClass('d-none').html('<i class="fas fa-spinner fa-spin"></i> Analysiere...');
+
+        $.ajax({
+            url: '/api/qm-material/rename-files',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ batch_id: currentBatchId, dir_path: dirPath, dry_run: dryRun }),
+            success: function (resp) {
+                if (resp.ok) {
+                    var html = '<div class="alert ' + (dryRun ? 'alert-warning' : 'alert-success') + ' mb-0 py-2">';
+                    if (dryRun) {
+                        html += '<strong>Vorschau:</strong> ' + resp.to_rename + ' Dateien würden umbenannt, ' + resp.skipped + ' übersprungen.';
+                        if (resp.to_rename > 0) {
+                            html += '<br><button class="btn btn-sm btn-warning mt-1" onclick="qmRenameFiles(false)">' +
+                                '<i class="fas fa-check"></i> Jetzt umbenennen (' + resp.to_rename + ' Dateien)</button>';
+                            html += '<br><small class="text-muted mt-1">Beispiele: ';
+                            var examples = resp.renames.slice(0, 3);
+                            examples.forEach(function (r) { html += '<br>' + escHtml(r.old) + ' → ' + escHtml(r.new); });
+                            html += '</small>';
+                        }
+                    } else {
+                        html += '<strong>' + resp.renamed + '</strong> Dateien erfolgreich umbenannt.';
+                        if (resp.errors.length > 0) {
+                            html += ' <span class="text-danger">' + resp.errors.length + ' Fehler.</span>';
+                        }
+                    }
+                    html += '</div>';
+                    resultDiv.html(html);
+                } else {
+                    resultDiv.html('<div class="alert alert-danger mb-0 py-2">' + escHtml(resp.error || 'Fehler') + '</div>');
+                }
+            },
+            error: function (xhr) {
+                var msg = 'Fehler beim Umbenennen';
                 if (xhr.responseJSON && xhr.responseJSON.error) msg = xhr.responseJSON.error;
                 resultDiv.html('<div class="alert alert-danger mb-0 py-2">' + escHtml(msg) + '</div>');
             }

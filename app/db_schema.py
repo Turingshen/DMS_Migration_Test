@@ -1071,7 +1071,7 @@ def init_staging_tables(engine):
             print("[DB_INIT] Created qm_material_staging table")
         else:
             # Ensure new columns exist (added later)
-            for col, typedef in [('target_dokar', 'VARCHAR(3)'), ('target_dokvr', 'VARCHAR(2)'), ('target_doktl', 'VARCHAR(3)'), ('target_description', 'NVARCHAR(255)'), ('target_doknr', 'VARCHAR(25)'), ('source_file', 'NVARCHAR(500)'), ('file_uploaded', 'BIT DEFAULT 0'), ('qinf_material', 'VARCHAR(18)'), ('qinf_zaehl', 'VARCHAR(6)')]:
+            for col, typedef in [('target_dokar', 'VARCHAR(3)'), ('target_dokvr', 'VARCHAR(2)'), ('target_doktl', 'VARCHAR(3)'), ('target_description', 'NVARCHAR(255)'), ('target_doknr', 'VARCHAR(25)'), ('source_file', 'NVARCHAR(500)'), ('file_uploaded', 'BIT DEFAULT 0'), ('qinf_material', 'VARCHAR(18)'), ('qinf_zaehl', 'VARCHAR(6)'), ('qinf_linked', 'BIT DEFAULT 0')]:
                 exists = con.execute(text(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
                     "WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='qm_material_staging' "

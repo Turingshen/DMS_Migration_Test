@@ -300,7 +300,7 @@ def qm_material_data(batch_id):
         'trade_name', 'hand_prod', 'vmds', 'spec_nr', 'revision',
         'sp_agr_dt', 'approv_dt', 'archivnr', 'target_dokar', 'target_dokvr', 'target_doktl',
         'target_description', 'target_doknr', 'file_uploaded',
-        'qinf_material', 'qinf_zaehl',
+        'qinf_material', 'qinf_zaehl', 'qinf_linked', 'qinf_usage_count',
         'status', 'error_message',
     ]
 
@@ -310,7 +310,14 @@ def qm_material_data(batch_id):
         ), {'bid': batch_id}).scalar()
 
         rows = con.execute(text("""
-            SELECT * FROM dbo.qm_material_staging
+            SELECT *,
+                CASE 
+                    WHEN qinf_material IS NOT NULL AND qinf_material <> '' AND qinf_material <> 'nan'
+                     AND qinf_zaehl IS NOT NULL AND qinf_zaehl <> '' AND qinf_zaehl <> 'nan'
+                    THEN COUNT(*) OVER (PARTITION BY qinf_material, qinf_zaehl)
+                    ELSE NULL
+                END AS qinf_usage_count
+            FROM dbo.qm_material_staging
             WHERE batch_id = :bid
             ORDER BY line_number
             OFFSET :off ROWS FETCH NEXT :lim ROWS ONLY
@@ -329,6 +336,79 @@ def qm_material_data(batch_id):
         'ok': True, 'columns': columns, 'data': data,
         'total': total, 'page': page, 'per_page': per_page, 'total_pages': total_pages,
     })
+
+
+# ── QM Material Excel Export ───────────────────────────────────────
+
+@migrate_bp.route('/api/qm-material/export-excel/<batch_id>', methods=['GET'])
+def qm_material_export_excel(batch_id):
+    """Export all staging data for a batch as Excel file."""
+    import io
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+
+    columns = [
+        'line_number', 'doc', 'source_file', 'material', 'vendor', 'cocd', 'plnt', 'sloc',
+        'trade_name', 'hand_prod', 'vmds', 'spec_nr', 'revision',
+        'sp_agr_dt', 'approv_dt', 'archivnr', 'target_dokar', 'target_dokvr', 'target_doktl',
+        'target_description', 'target_doknr', 'file_uploaded',
+        'qinf_material', 'qinf_zaehl', 'qinf_linked', 'qinf_usage_count',
+        'status', 'error_message',
+    ]
+
+    with misc_engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT *,
+                CASE 
+                    WHEN qinf_material IS NOT NULL AND qinf_material <> '' AND qinf_material <> 'nan'
+                     AND qinf_zaehl IS NOT NULL AND qinf_zaehl <> '' AND qinf_zaehl <> 'nan'
+                    THEN COUNT(*) OVER (PARTITION BY qinf_material, qinf_zaehl)
+                    ELSE NULL
+                END AS qinf_usage_count
+            FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+            ORDER BY line_number
+        """), {'bid': batch_id}).fetchall()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Bericht'
+
+    # Header row
+    for col_idx, col_name in enumerate(columns, 1):
+        ws.cell(row=1, column=col_idx, value=col_name)
+
+    # Data rows
+    for row_idx, r in enumerate(rows, 2):
+        for col_idx, c in enumerate(columns, 1):
+            val = getattr(r, c, None)
+            if val is None:
+                ws.cell(row=row_idx, column=col_idx, value='')
+            elif isinstance(val, (int, float, bool)):
+                ws.cell(row=row_idx, column=col_idx, value=val)
+            else:
+                ws.cell(row=row_idx, column=col_idx, value=str(val))
+
+    # Auto-width columns
+    for col_idx in range(1, len(columns) + 1):
+        col_letter = get_column_letter(col_idx)
+        max_len = len(columns[col_idx - 1])
+        for row in ws.iter_rows(min_row=2, max_row=min(50, ws.max_row), min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f'QM_Bericht_{batch_id}.xlsx'
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
 
 
 # ── QM Material File Scan ──────────────────────────────────────────
@@ -414,6 +494,107 @@ def qm_material_scan_files():
     })
 
 
+@migrate_bp.route('/api/qm-material/rename-files', methods=['POST'])
+def qm_material_rename_files():
+    """Rename files in dir_path: replace source material number with target (qinf_material).
+
+    Filename format: <source_material>-<rest_of_name>.pdf
+    The first segment (before first '-') is the source material number.
+    It will be replaced with the qinf_material (target material) from the mapping.
+
+    Body: { batch_id, dir_path, dry_run (optional, default true) }
+    """
+    body = request.get_json(silent=True) or {}
+    batch_id = body.get('batch_id', '').strip()
+    dir_path = body.get('dir_path', '').strip()
+    dry_run = body.get('dry_run', True)
+
+    if not batch_id:
+        return jsonify({'ok': False, 'error': 'batch_id fehlt'}), 400
+    if not dir_path:
+        return jsonify({'ok': False, 'error': 'dir_path fehlt'}), 400
+
+    norm_path = os.path.normpath(dir_path)
+    if not os.path.isdir(norm_path):
+        return jsonify({'ok': False, 'error': f'Verzeichnis nicht gefunden: {dir_path}'}), 400
+
+    # Load mapping: source material -> target material (qinf_material)
+    with misc_engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT DISTINCT material, qinf_material
+            FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+              AND qinf_material IS NOT NULL AND qinf_material <> ''
+              AND material IS NOT NULL AND material <> ''
+        """), {'bid': batch_id}).fetchall()
+
+    if not rows:
+        return jsonify({'ok': False, 'error': 'Kein Mapping gefunden (qinf_material leer für alle Records)'}), 400
+
+    # Build source->target lookup (strip leading zeros for matching)
+    mat_map = {}
+    for r in rows:
+        source_mat = (r.material or '').strip().lstrip('0')
+        target_mat = (r.qinf_material or '').strip().lstrip('0')
+        if source_mat and target_mat:
+            mat_map[source_mat] = target_mat
+
+    # Scan directory and prepare renames
+    renames = []
+    skipped = []
+    try:
+        for fname in os.listdir(norm_path):
+            fpath = os.path.join(norm_path, fname)
+            if not os.path.isfile(fpath):
+                continue
+            # First segment before '-' is the material number
+            dash_idx = fname.find('-')
+            if dash_idx < 1:
+                skipped.append({'file': fname, 'reason': 'Kein Trennzeichen gefunden'})
+                continue
+            file_mat = fname[:dash_idx].strip().lstrip('0')
+            if file_mat not in mat_map:
+                skipped.append({'file': fname, 'reason': f'Material {file_mat} nicht im Mapping'})
+                continue
+            new_name = mat_map[file_mat] + fname[dash_idx:]
+            if new_name == fname:
+                skipped.append({'file': fname, 'reason': 'Name unverändert'})
+                continue
+            new_path = os.path.join(norm_path, new_name)
+            if os.path.exists(new_path):
+                skipped.append({'file': fname, 'reason': f'Zieldatei existiert bereits: {new_name}'})
+                continue
+            renames.append({'old': fname, 'new': new_name})
+    except PermissionError:
+        return jsonify({'ok': False, 'error': 'Zugriff verweigert auf ' + dir_path}), 403
+
+    # Execute renames if not dry_run
+    renamed = 0
+    errors = []
+    if not dry_run:
+        for r in renames:
+            try:
+                os.rename(
+                    os.path.join(norm_path, r['old']),
+                    os.path.join(norm_path, r['new'])
+                )
+                renamed += 1
+            except OSError as e:
+                errors.append({'file': r['old'], 'error': str(e)})
+
+    return jsonify({
+        'ok': True,
+        'dry_run': dry_run,
+        'total_files_in_dir': len(renames) + len(skipped),
+        'to_rename': len(renames),
+        'skipped': len(skipped),
+        'renamed': renamed,
+        'renames': renames[:200],
+        'skipped_details': skipped[:100],
+        'errors': errors,
+    })
+
+
 # ── QM Material Execution ───────────────────────────────────────────
 
 @migrate_bp.route('/api/qm-material/execute', methods=['POST'])
@@ -424,6 +605,7 @@ def qm_material_execute():
       - batch_id (str): the staging batch
       - record_ids (list[int], optional): specific record IDs to migrate; if omitted, all pending
       - dir_path (str, optional): directory containing source files to upload
+      - only_with_mapping (bool, optional): if true, skip records without QINF mapping
     """
     if not _is_authenticated():
         return jsonify({'ok': False, 'error': 'Nicht authentifiziert. Bitte zuerst anmelden.'}), 401
@@ -432,6 +614,7 @@ def qm_material_execute():
     batch_id = body.get('batch_id')
     record_ids = body.get('record_ids')  # optional list of staging IDs
     dir_path = body.get('dir_path', '').strip()  # optional file directory
+    only_with_mapping = body.get('only_with_mapping', False)  # filter: only records with QINF mapping
 
     if not batch_id:
         return jsonify({'ok': False, 'error': 'batch_id fehlt'}), 400
@@ -454,7 +637,7 @@ def qm_material_execute():
     # Start background thread
     t = threading.Thread(
         target=_qm_execute_background,
-        args=(batch_id, snapshot, record_ids, dir_path),
+        args=(batch_id, snapshot, record_ids, dir_path, only_with_mapping),
         daemon=True,
     )
     t.start()
@@ -472,7 +655,7 @@ def qm_material_progress(batch_id):
     return jsonify({'ok': True, **result})
 
 
-def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path=''):
+def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path='', only_with_mapping=False):
     """Background worker: create Q01 containers and optionally upload files."""
     target_system = session_snapshot.get('target_system', 'zvfr3')
 
@@ -484,6 +667,13 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
         }
 
     try:
+        # Build optional mapping filter clause
+        mapping_filter = ""
+        if only_with_mapping:
+            mapping_filter = (" AND qinf_material IS NOT NULL AND qinf_material <> '' AND qinf_material <> 'nan'"
+                              " AND qinf_zaehl IS NOT NULL AND qinf_zaehl <> '' AND qinf_zaehl <> 'nan'"
+                              " AND source_file IS NOT NULL AND source_file <> ''")
+
         # Load records to process
         with misc_engine.connect() as con:
             if record_ids:
@@ -493,14 +683,14 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                            target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
                            qinf_material, qinf_zaehl
                     FROM dbo.qm_material_staging
-                    WHERE batch_id = :bid AND id IN ({placeholders})
+                    WHERE batch_id = :bid AND id IN ({placeholders}){mapping_filter}
                     ORDER BY id
                 """), {'bid': batch_id}).fetchall()
             else:
                 # Include 'done' records that have a source_file but need upload (when dir_path given)
                 # Also include 'error' records where container was created but upload failed
                 if dir_path:
-                    rows = con.execute(text("""
+                    rows = con.execute(text(f"""
                         SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
                                target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
                                ISNULL(file_uploaded, 0) AS file_uploaded,
@@ -510,11 +700,11 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             status = 'pending'
                             OR (status = 'done' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0)
                             OR (status = 'error' AND target_doknr IS NOT NULL AND target_doknr <> '' AND source_file IS NOT NULL AND ISNULL(file_uploaded, 0) = 0)
-                        )
+                        ){mapping_filter}
                         ORDER BY id
                     """), {'bid': batch_id}).fetchall()
                 else:
-                    rows = con.execute(text("""
+                    rows = con.execute(text(f"""
                         SELECT id, target_dokar, target_dokvr, target_doktl, target_description,
                                target_doknr, source_file, material, vendor, cocd, plnt, sloc, status,
                                qinf_material, qinf_zaehl
@@ -522,7 +712,7 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                         WHERE batch_id = :bid AND (
                             status = 'pending'
                             OR (status = 'error' AND target_doknr IS NOT NULL AND target_doknr <> '')
-                        )
+                        ){mapping_filter}
                         ORDER BY id
                     """), {'bid': batch_id}).fetchall()
 
@@ -580,6 +770,7 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                     # Add QINF object link via Deep Insert if mapping exists
                     qinf_mat = (getattr(rec, 'qinf_material', None) or '').strip()
                     qinf_z = (getattr(rec, 'qinf_zaehl', None) or '').strip()
+                    qinf_linked = False
                     if qinf_mat and qinf_z:
                         objky = qinf_mat.zfill(18) + ' ' * 22 + qinf_z.zfill(6)
                         payload['to_ProductObj'] = [{
@@ -587,6 +778,7 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             'LinkedSAPObjectKey': objky,
                             'DocObjectLinkCounter': '001',
                         }]
+                        qinf_linked = True  # assume linked unless fallback triggers
                         logger.info(f"[QM_EXEC] Record {rec_id}: QINF link → OBJKY='{objky}'", category="QM_EXEC")
 
                     server_session.headers.update({'Content-Type': 'application/json'})
@@ -610,6 +802,7 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             err_code = ''
                         if '26/285' in err_code or 'nur eine Dokumentverknüpfung' in resp.text:
                             logger.warning(f"[QM_EXEC] Record {rec_id}: QINF already linked, retrying without QINF link", category="QM_CREATE")
+                            qinf_linked = False
                             payload_no_qinf = {k: v for k, v in payload.items() if k != 'to_ProductObj'}
                             server_session.headers.update({'Content-Type': 'application/json'})
                             resp = server_session.post(create_url, json=payload_no_qinf, timeout=30)
@@ -700,10 +893,11 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             SET status = 'done',
                                 target_doknr = :doknr,
                                 file_uploaded = :fu,
+                                qinf_linked = :ql,
                                 error_message = NULL,
                                 migrated_at = GETUTCDATE()
                             WHERE id = :rid
-                        """), {'doknr': target_doknr, 'fu': file_uploaded, 'rid': rec_id})
+                        """), {'doknr': target_doknr, 'fu': file_uploaded, 'ql': 1 if qinf_linked else 0, 'rid': rec_id})
                     done_count += 1
                 else:
                     err_msg = f"Container {target_doknr} erstellt{upload_err}"
@@ -713,10 +907,11 @@ def _qm_execute_background(batch_id, session_snapshot, record_ids=None, dir_path
                             SET status = 'error',
                                 target_doknr = :doknr,
                                 file_uploaded = 0,
+                                qinf_linked = :ql,
                                 error_message = :err,
                                 migrated_at = GETUTCDATE()
                             WHERE id = :rid
-                        """), {'doknr': target_doknr, 'err': err_msg, 'rid': rec_id})
+                        """), {'doknr': target_doknr, 'ql': 1 if qinf_linked else 0, 'err': err_msg, 'rid': rec_id})
                     fail_count += 1
                     with _qm_bg_lock:
                         _qm_bg_results[batch_id]['errors'].append({
@@ -859,6 +1054,12 @@ def qinf_mapping_upload(batch_id):
 
             mat = str(row.get('qinf_material', '') or '').strip()
             zaehl = str(row.get('qinf_zaehl', '') or '').strip()
+
+            # Treat 'nan' (from pandas) as empty
+            if mat.lower() == 'nan':
+                mat = ''
+            if zaehl.lower() == 'nan':
+                zaehl = ''
 
             if not mat and not zaehl:
                 skipped += 1

@@ -288,6 +288,22 @@ def qm_material_batches():
     return jsonify({'ok': True, 'batches': batches})
 
 
+@migrate_bp.route('/api/qm-material/batches/<batch_id>', methods=['DELETE'])
+def qm_material_delete_batch(batch_id):
+    """Delete an entire QM material batch from staging."""
+    with misc_engine.begin() as con:
+        result = con.execute(text("""
+            DELETE FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+        """), {'bid': batch_id})
+        deleted = result.rowcount
+
+    if deleted == 0:
+        return jsonify({'ok': False, 'error': 'Batch nicht gefunden'}), 404
+
+    return jsonify({'ok': True, 'deleted': deleted, 'message': f'Batch {batch_id} gelöscht ({deleted} Zeilen)'})
+
+
 @migrate_bp.route('/api/qm-material/data/<batch_id>', methods=['GET'])
 def qm_material_data(batch_id):
     """Get staging data for a QM material batch (paginated)."""
@@ -968,6 +984,7 @@ def qinf_mapping_download(batch_id):
     with misc_engine.connect() as con:
         df = pd.read_sql(text("""
             SELECT id, material, vendor, cocd, plnt, sloc,
+                   ISNULL(source_file, '') AS source_file,
                    ISNULL(qinf_material, '') AS qinf_material,
                    ISNULL(qinf_zaehl, '') AS qinf_zaehl
             FROM dbo.qm_material_staging
@@ -986,6 +1003,7 @@ def qinf_mapping_download(batch_id):
         'cocd': 'CoCd',
         'plnt': 'Plnt',
         'sloc': 'SLoc',
+        'source_file': 'Datei',
         'qinf_material': 'Map to Material',
         'qinf_zaehl': 'Zähler',
     })
@@ -1081,6 +1099,62 @@ def qinf_mapping_upload(batch_id):
         'updated': updated,
         'skipped': skipped,
         'message': f'{updated} Zuordnungen aktualisiert, {skipped} übersprungen',
+    })
+
+
+# ── QM Material Suggest Delete ────────────────────────────────────
+
+@migrate_bp.route('/api/qm-material/suggest-delete/<batch_id>', methods=['GET'])
+def qm_material_suggest_delete(batch_id):
+    """Return IDs of pending rows that have no file or no QINF mapping."""
+    with misc_engine.connect() as con:
+        rows = con.execute(text("""
+            SELECT id FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+              AND status = 'pending'
+              AND (
+                  source_file IS NULL OR source_file = ''
+                  OR qinf_material IS NULL OR qinf_material = '' OR qinf_material = 'nan'
+                  OR qinf_zaehl IS NULL OR qinf_zaehl = '' OR qinf_zaehl = 'nan'
+              )
+        """), {'bid': batch_id}).fetchall()
+
+    ids = [r.id for r in rows]
+    return jsonify({'ok': True, 'ids': ids, 'count': len(ids)})
+
+
+# ── QM Material Delete Rows ───────────────────────────────────────
+
+@migrate_bp.route('/api/qm-material/delete-rows/<batch_id>', methods=['POST'])
+def qm_material_delete_rows(batch_id):
+    """Delete selected rows from the staging table."""
+    data = request.get_json(silent=True) or {}
+    row_ids = data.get('ids', [])
+
+    if not row_ids:
+        return jsonify({'ok': False, 'error': 'Keine IDs angegeben'}), 400
+
+    # Validate all IDs are integers
+    try:
+        row_ids = [int(rid) for rid in row_ids]
+    except (ValueError, TypeError):
+        return jsonify({'ok': False, 'error': 'Ungültige IDs'}), 400
+
+    with misc_engine.begin() as con:
+        # Only delete pending rows that belong to this batch
+        result = con.execute(text("""
+            DELETE FROM dbo.qm_material_staging
+            WHERE batch_id = :bid
+              AND id IN :ids
+              AND status = 'pending'
+        """.replace(':ids', '(' + ','.join(str(i) for i in row_ids) + ')')),
+            {'bid': batch_id})
+        deleted = result.rowcount
+
+    return jsonify({
+        'ok': True,
+        'deleted': deleted,
+        'message': f'{deleted} Zeilen gelöscht',
     })
 
 

@@ -277,12 +277,13 @@
             var rowId = row['id'] || (idx + 1);
             var status = row['status'] || row['Status'] || 'pending';
             var checked = selectedRecords[rowId] ? 'checked' : '';
+            var rowHighlight = selectedRecords[rowId] ? ' table-warning' : '';
             var statusBadge = _statusBadge(status);
             var errMsg = row['error_message'] || '';
             var errBadge = errMsg
                 ? '<span class="badge badge-danger" style="cursor:pointer;" onclick="qmShowError(this)" data-error="' + escAttr(errMsg) + '"><i class="fas fa-exclamation-circle"></i> Detail</span>'
                 : '<span class="badge badge-light">–</span>';
-            var tr = '<tr data-id="' + rowId + '">' +
+            var tr = '<tr data-id="' + rowId + '" class="' + rowHighlight + '">' +
                 '<td><input type="checkbox" class="qm-row-cb" value="' + rowId + '" ' + checked + '></td>' +
                 '<td>' + (idx + 1) + '</td>';
             visibleCols.forEach(function (c) {
@@ -335,6 +336,7 @@
         var count = Object.keys(selectedRecords).length;
         $('#qmSelCount').text(count + ' ausgewählt');
         $('#qmBtnExecSelected').prop('disabled', count === 0);
+        $('#qmBtnDeleteSelected').prop('disabled', count === 0);
     }
 
     // ── KPI update ─────────────────────────────────────────────────
@@ -550,6 +552,62 @@
         window.location.href = '/api/qm-material/export-excel/' + currentBatchId;
     };
 
+    window.qmDeleteSelected = function () {
+        var ids = Object.keys(selectedRecords);
+        if (ids.length === 0) return;
+        if (!confirm('⚠️ ' + ids.length + ' Zeilen dauerhaft löschen?\n\nNur Zeilen mit Status "pending" werden gelöscht.')) return;
+
+        $.ajax({
+            url: '/api/qm-material/delete-rows/' + encodeURIComponent(currentBatchId),
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ ids: ids }),
+            success: function (resp) {
+                if (resp.ok) {
+                    alert('✓ ' + resp.deleted + ' Zeilen gelöscht');
+                    selectedRecords = {};
+                    _loadPage(currentPage);
+                    updateKpis();
+                } else {
+                    alert('Fehler: ' + (resp.error || 'Unbekannt'));
+                }
+            },
+            error: function (xhr) {
+                var msg = 'Löschen fehlgeschlagen';
+                if (xhr.responseJSON && xhr.responseJSON.error) msg = xhr.responseJSON.error;
+                alert(msg);
+            }
+        });
+    };
+
+    window.qmSuggestDelete = function () {
+        if (!currentBatchId) return;
+        $.getJSON('/api/qm-material/suggest-delete/' + encodeURIComponent(currentBatchId), function (resp) {
+            if (!resp.ok) { alert('Fehler beim Laden'); return; }
+            if (resp.count === 0) { alert('Keine Zeilen ohne Datei/Mapping gefunden.'); return; }
+
+            // Set all suggested IDs as selected
+            selectedRecords = {};
+            resp.ids.forEach(function (id) { selectedRecords[String(id)] = true; });
+            _updateSelCount();
+
+            // Update checkboxes on current page
+            $('.qm-row-cb').each(function () {
+                var id = $(this).val();
+                $(this).prop('checked', !!selectedRecords[id]);
+                // Highlight row
+                var row = $(this).closest('tr');
+                if (selectedRecords[id]) {
+                    row.addClass('table-warning');
+                } else {
+                    row.removeClass('table-warning');
+                }
+            });
+
+            alert(resp.count + ' Zeilen ohne Datei oder Mapping markiert.\n\nPrüfen Sie die Auswahl und klicken Sie "Ausgewählte löschen".');
+        });
+    };
+
     window.qmSetStep = setStep;
     window.qmStartMigration = window.qmExecuteAll;
     window.qmLoadBatchList = loadBatchList;
@@ -583,8 +641,10 @@
                     '<td class="text-center"><span class="badge badge-warning">' + b.pending + '</span></td>' +
                     '<td class="text-center"><span class="badge badge-success">' + b.done + '</span></td>' +
                     '<td class="text-center"><span class="badge badge-danger">' + b.errors + '</span></td>' +
-                    '<td><button class="btn btn-xs btn-outline-info" onclick="qmLoadBatch(\'' + escHtml(b.batch_id) + '\')">' +
-                    '<i class="fas fa-folder-open"></i> Öffnen</button></td>' +
+                    '<td><button class="btn btn-xs btn-outline-info mr-1" onclick="qmLoadBatch(\'' + escHtml(b.batch_id) + '\')">'
+                    + '<i class="fas fa-folder-open"></i> Öffnen</button>'
+                    + '<button class="btn btn-xs btn-outline-danger" onclick="qmDeleteBatch(\'' + escHtml(b.batch_id) + '\')">'
+                    + '<i class="fas fa-trash"></i></button></td>' +
                     '</tr>';
             });
             table += '</tbody></table>';
@@ -598,6 +658,27 @@
         currentPage = 1;
         _filesScanned = false;  // Reset scan flag for newly loaded batch
         _loadPage(1, function () { setStep(2); });
+    };
+
+    window.qmDeleteBatch = function (batchId) {
+        if (!confirm('⚠️ Batch "' + batchId + '" komplett löschen?\n\nAlle Zeilen (inkl. migrierter) werden unwiderruflich entfernt.')) return;
+        $.ajax({
+            url: '/api/qm-material/batches/' + encodeURIComponent(batchId),
+            type: 'DELETE',
+            success: function (resp) {
+                if (resp.ok) {
+                    alert('✓ ' + resp.message);
+                    loadBatchList();
+                } else {
+                    alert('Fehler: ' + (resp.error || 'Unbekannt'));
+                }
+            },
+            error: function (xhr) {
+                var msg = 'Löschen fehlgeschlagen';
+                if (xhr.responseJSON && xhr.responseJSON.error) msg = xhr.responseJSON.error;
+                alert(msg);
+            }
+        });
     };
 
     // ── Pagination ────────────────────────────────────────────────

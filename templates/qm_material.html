@@ -252,7 +252,8 @@
             </div>
             <div class="card-body py-2">
                 <small class="text-muted">
-                    Laden Sie die Excel-Vorlage herunter, füllen Sie die Spalten
+                    <strong>Hinweis:</strong> Führen Sie zuerst den Datei-Scan durch (Schritt oben), damit die Spalte "Datei" im Template befüllt ist.<br>
+                    Laden Sie dann die Excel-Vorlage herunter, füllen Sie die Spalten
                     <strong>"Map to Material"</strong> und <strong>"Zähler"</strong> aus
                     und laden Sie die Datei wieder hoch. Beim Ausführen wird automatisch eine QINF-Verknüpfung erstellt.
                 </small>
@@ -267,6 +268,12 @@
                     <input type="text" id="qmSearchTable" class="form-control form-control-sm d-inline-block mr-2"
                            style="width: 200px;" placeholder="Suchen..." data-i18n-placeholder="search">
                     <span class="badge badge-info mr-2" id="qmSelCount">0 ausgewählt</span>
+                    <button class="btn btn-sm btn-outline-warning mr-1" onclick="qmSuggestDelete()" title="Zeilen ohne Datei oder Mapping markieren">
+                        <i class="fas fa-filter"></i> Löschvorschlag
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger mr-1" id="qmBtnDeleteSelected" onclick="qmDeleteSelected()" disabled>
+                        <i class="fas fa-trash"></i> Ausgewählte löschen
+                    </button>
                     <button class="btn btn-sm btn-outline-success mr-1" id="qmBtnExecSelected" onclick="qmExecuteSelected()" disabled>
                         <i class="fas fa-play"></i> Ausgewählte migrieren
                     </button>

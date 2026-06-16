@@ -4819,6 +4819,61 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         if mappings_cache:
             print(f"[LINK] Pre-loaded {len(mappings_cache)} object mappings (cached for all threads)")
         
+        # Auto-reset link_skipped records that now have a matching mapping
+        # (user added mappings after a previous linking run)
+        if mappings_cache:
+            try:
+                with misc_engine.begin() as con:
+                    skipped_df = pd.read_sql(text("""
+                        SELECT id, source_object_links, source_dokob, source_objky
+                        FROM dbo.migration_staging
+                        WHERE batch_id = :batch_id
+                            AND link_status = 'link_skipped'
+                            AND (link_error LIKE '%Objekt-Mapping%' OR link_error LIKE '%object mapping%')
+                            AND execution_status IN ('success', 'partial')
+                            AND ISNULL(container_created, 0) = 1
+                    """), con, params={'batch_id': batch_id})
+                
+                if not skipped_df.empty:
+                    reset_ids = []
+                    for _, row in skipped_df.iterrows():
+                        # Check if any source link now has a mapping
+                        sol = row.get('source_object_links')
+                        if sol and pd.notnull(sol):
+                            try:
+                                parsed = json.loads(sol)
+                                for item in parsed:
+                                    key = (str(item.get('dokob', '')).upper(), str(item.get('objky', '')))
+                                    if key in mappings_cache:
+                                        reset_ids.append(row['id'])
+                                        break
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        # Also check primary dokob/objky columns
+                        if row['id'] not in reset_ids:
+                            p_dokob = row.get('source_dokob')
+                            p_objky = row.get('source_objky')
+                            if p_dokob and p_objky and pd.notnull(p_dokob) and pd.notnull(p_objky):
+                                key = (str(p_dokob).upper(), str(p_objky))
+                                if key in mappings_cache:
+                                    reset_ids.append(row['id'])
+                    
+                    if reset_ids:
+                        for i in range(0, len(reset_ids), 500):
+                            chunk = reset_ids[i:i+500]
+                            ids_str = ','.join(str(rid) for rid in chunk)
+                            with misc_engine.begin() as con:
+                                con.execute(text(f"""
+                                    UPDATE dbo.migration_staging
+                                    SET link_status = 'pending',
+                                        link_error = NULL,
+                                        link_completed_at = NULL
+                                    WHERE id IN ({ids_str})
+                                """))
+                        print(f"[LINK] Auto-reset {len(reset_ids)} previously skipped records (mappings now available)")
+            except Exception as e:
+                print(f"[LINK_WARN] Could not auto-reset skipped records: {e}")
+        
         # Load linkable records — pre-filter against mappings so records without
         # any matching mapping are bulk-skipped (no per-record API call needed)
         records_df = load_linkable_records(batch_id, record_ids, mappings=mappings_cache)

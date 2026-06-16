@@ -44,8 +44,18 @@ def validation_data(batch_id):
             total = kpis.get('total', 0) or 0
             linked = kpis.get('linked', 0) or 0
             link_skipped = kpis.get('link_skipped', 0) or 0
-            # Coverage excludes link_skipped (not applicable, not an error)
-            applicable = total - link_skipped
+
+            # Only exclude "harmless" skips from coverage (no files, not applicable).
+            # Skips due to missing mapping should count as NOT covered.
+            harmless_skipped = con.execute(text("""
+                SELECT COUNT(*) FROM dbo.migration_staging
+                WHERE batch_id = :bid AND skip_migration = 0
+                    AND link_status = 'link_skipped'
+                    AND link_error NOT LIKE '%Mapping%'
+                    AND link_error NOT LIKE '%mapping%'
+            """), {'bid': batch_id}).fetchone()[0] or 0
+
+            applicable = total - harmless_skipped
             kpis['coverage_pct'] = round(linked / applicable * 100, 1) if applicable > 0 else 0
 
             # ── 2. Link-status breakdown ─────────────────────────
@@ -401,11 +411,11 @@ def validation_export_excel(batch_id):
         ws.title = 'Validierung'
 
         headers = [
-            'Quell-Dok', 'Quell-Typ/Ver./Teil',
-            'Ziel-Dok', 'Ziel-Typ/Ver./Teil',
-            'Quell-Beschreibung', 'Ziel-Beschreibung',
-            'Quell-Dateiname', 'Ziel-Dateiname',
-            'Typ', 'Größe (Bytes)', 'Status', 'Fehler'
+            'Source Doc', 'Source Type/Ver/Part',
+            'Target Doc', 'Target Type/Ver/Part',
+            'Source Description', 'Target Description',
+            'Source Filename', 'Target Filename',
+            'MIME Type', 'Size (Bytes)', 'Status', 'Error'
         ]
         ws.append(headers)
         for col_idx, _ in enumerate(headers, 1):
@@ -437,7 +447,7 @@ def validation_export_excel(batch_id):
                 tgt_fn,
                 fd.get('mime_type') or '',
                 fd.get('file_size_bytes') or '',
-                'Erfolgreich' if fd.get('upload_status') == 'SUCCESS' else (fd.get('upload_status') or ''),
+                'Success' if fd.get('upload_status') == 'SUCCESS' else (fd.get('upload_status') or ''),
                 fd.get('error_detail') or fd.get('error_category') or ''
             ]
             ws.append(row_data)
@@ -473,6 +483,141 @@ def validation_export_excel(batch_id):
 
         ws.auto_filter.ref = ws.dimensions
         ws.freeze_panes = 'A2'
+
+        # ── Sheet 2: Objektlinks ─────────────────────────────────
+        ws2 = wb.create_sheet('Object Links')
+        link_headers = [
+            'Source Doc', 'Source Type/Ver/Part',
+            'Target Doc', 'Target Type/Ver/Part',
+            'Source DOKOB', 'Source OBJKY',
+            'Target DOKOB', 'Target OBJKY',
+            'Link Status', 'Link Error'
+        ]
+        ws2.append(link_headers)
+        for col_idx, _ in enumerate(link_headers, 1):
+            cell = ws2.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # Load object mappings for target resolution
+        with misc_engine.connect() as con:
+            link_rows = con.execute(text("""
+                SELECT
+                    id, source_documentnumber, source_documenttype,
+                    source_documentversion, source_documentpart,
+                    target_documentnumber, target_documenttype,
+                    target_documentversion, target_documentpart,
+                    source_dokob, source_objky,
+                    target_dokob, target_objky,
+                    source_object_links, container_created,
+                    link_status, link_error
+                FROM dbo.migration_staging
+                WHERE batch_id = :bid AND skip_migration = 0
+                    AND execution_status IN ('success', 'partial')
+                ORDER BY id
+            """), {'bid': batch_id}).fetchall()
+
+            obj_map_rows = con.execute(text("""
+                SELECT source_dokob, source_objky, target_dokob, target_objky
+                FROM dbo.migration_object_mapping
+                WHERE batch_id = :bid AND active = 1
+            """), {'bid': batch_id}).fetchall()
+
+        # Build mapping lookup
+        obj_map = {}
+        for m in obj_map_rows:
+            key = (str(m[0]).upper(), str(m[1]))
+            obj_map[key] = (str(m[2]), str(m[3]))
+
+        # Status labels
+        status_labels = {
+            'linked': 'Linked', 'link_failed': 'Failed', 'link_exists': 'Exists',
+            'link_skipped': 'Skipped', 'pending': 'Pending', 'linking': 'In Progress',
+            'partial_linked': 'Partial'
+        }
+
+        for lr in link_rows:
+            row_dict = dict(lr._mapping)
+            src_tvt = '/'.join(filter(None, [row_dict.get('source_documenttype'), row_dict.get('source_documentversion'), row_dict.get('source_documentpart')]))
+            tgt_tvt = '/'.join(filter(None, [row_dict.get('target_documenttype'), row_dict.get('target_documentversion'), row_dict.get('target_documentpart')])) if row_dict.get('container_created') else ''
+            tgt_doc = row_dict.get('target_documentnumber') or '' if row_dict.get('container_created') else ''
+
+            # Parse source_object_links JSON
+            links = []
+            sol = row_dict.get('source_object_links')
+            if sol:
+                try:
+                    links = _json.loads(sol)
+                except (ValueError, TypeError):
+                    pass
+
+            link_status_label = status_labels.get(row_dict.get('link_status') or 'pending', row_dict.get('link_status') or '')
+            link_error = row_dict.get('link_error') or ''
+
+            if links:
+                for lnk in links:
+                    src_dokob = lnk.get('dokob', '')
+                    src_objky = lnk.get('objky', '')
+                    # Resolve target via mapping
+                    key = (src_dokob.upper(), src_objky)
+                    if key in obj_map:
+                        tgt_dokob, tgt_objky = obj_map[key]
+                    else:
+                        tgt_dokob = '\u2014'
+                        tgt_objky = '\u2014'
+
+                    ws2.append([
+                        row_dict.get('source_documentnumber') or '',
+                        src_tvt,
+                        tgt_doc,
+                        tgt_tvt,
+                        src_dokob,
+                        src_objky,
+                        tgt_dokob,
+                        tgt_objky,
+                        link_status_label,
+                        link_error
+                    ])
+            else:
+                # No links parsed - use single source_dokob/source_objky
+                src_dokob = row_dict.get('source_dokob') or ''
+                src_objky = row_dict.get('source_objky') or ''
+                tgt_dokob = row_dict.get('target_dokob') or '\u2014'
+                tgt_objky = row_dict.get('target_objky') or '\u2014'
+
+                ws2.append([
+                    row_dict.get('source_documentnumber') or '',
+                    src_tvt,
+                    tgt_doc,
+                    tgt_tvt,
+                    src_dokob,
+                    src_objky,
+                    tgt_dokob,
+                    tgt_objky,
+                    link_status_label,
+                    link_error
+                ])
+
+            # Row coloring for link status
+            row_num2 = ws2.max_row
+            status_cell2 = ws2.cell(row=row_num2, column=9)
+            if row_dict.get('link_status') == 'linked':
+                status_cell2.fill = green_fill
+            elif row_dict.get('link_status') in ('link_failed', 'link_skipped'):
+                status_cell2.fill = red_fill if row_dict.get('link_status') == 'link_failed' else yellow_fill
+
+        # Auto-width for sheet 2
+        for col_idx, _ in enumerate(link_headers, 1):
+            max_len = len(link_headers[col_idx - 1])
+            for row in ws2.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    if cell.value:
+                        max_len = max(max_len, min(len(str(cell.value)), 40))
+            ws2.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = max_len + 2
+
+        ws2.auto_filter.ref = ws2.dimensions
+        ws2.freeze_panes = 'A2'
 
         buf = BytesIO()
         wb.save(buf)

@@ -265,9 +265,9 @@
                             tgtDokob = mapped.dokob;
                             tgtObjky = mapped.objky;
                         } else {
-                            // Fallback: pass-through source values (same behavior as execute)
-                            tgtDokob = lnk.dokob || '';
-                            tgtObjky = lnk.objky || '';
+                            // No mapping → show dash (link will be skipped)
+                            tgtDokob = '\u2014';
+                            tgtObjky = '\u2014';
                         }
                     }
                     expanded.push({

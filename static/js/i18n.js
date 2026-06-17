@@ -428,8 +428,6 @@
         'prev.stats.excl':              { de: 'Excl.', en: 'Excl.' },
         'prev.stats.size':              { de: 'Größe', en: 'Size' },
         'prev.stats.pacing':            { de: 'Pacing', en: 'Pacing' },
-        'prev.stats.est_runtime':       { de: 'Gesch. Laufzeit', en: 'Est. Runtime' },
-        'prev.stats.runtime_details':   { de: 'Laufzeit-Details', en: 'Runtime Details' },
         'prev.staging_records':         { de: 'Staging-Datensätze', en: 'Staging Records' },
         'prev.records_selected':        { de: '{{n}} Datensätze ausgewählt', en: '{{n}} records selected' },
         'prev.btn.columns':             { de: 'Spalten', en: 'Columns' },
@@ -613,7 +611,6 @@
         // Migration progress
         'mig.running':                 { de: 'Migration läuft...', en: 'Migration running...' },
         'mig.starting':                { de: 'Starte...', en: 'Starting...' },
-        'mig.eta_calc':                { de: 'ETA: berechne...', en: 'ETA: calculating...' },
         'mig.polling':                 { de: 'Polling aktiv', en: 'Polling active' },
         'mig.last_updated':            { de: 'Zuletzt aktualisiert: {{time}}', en: 'Last updated: {{time}}' },
         'mig.remaining':               { de: 'Verbleibend: {{n}}', en: 'Remaining: {{n}}' },
@@ -683,7 +680,6 @@
         'runtime.immediate':           { de: 'Nächster Upload startet sofort nach API-Response', en: 'Next upload starts immediately after API response' },
         'runtime.no_wait':             { de: 'Kein Zeit-basiertes Warten mehr', en: 'No more time-based waiting' },
         'runtime.faster':              { de: 'Schneller als zeit-basiertes Pacing!', en: 'Faster than time-based pacing!' },
-        'runtime.no_pending':          { de: 'Keine ausstehenden Dokumente', en: 'No pending documents' },
 
         // Record detail
         'detail.doc_info':             { de: 'Dokumentinformationen', en: 'Document Information' },

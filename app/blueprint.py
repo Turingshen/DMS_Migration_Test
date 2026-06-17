@@ -2,7 +2,7 @@
 Shared blueprint, configuration, and helper functions for all route modules.
 """
 
-from flask import Blueprint, session
+from flask import Blueprint, session, request, redirect, url_for, jsonify
 import pandas as pd
 from sqlalchemy import text
 
@@ -53,6 +53,29 @@ def _is_authenticated() -> bool:
     if _is_basic_auth_system(source_sys) and _is_basic_auth_system(target_sys):
         return True
     return False
+
+
+@migrate_bp.before_request
+def _require_login():
+    """Globaler Auth-Guard fuer alle App-Routen.
+
+    Zugriff nur fuer authentifizierte Nutzer: entweder OAuth (bearer_token)
+    oder beide Systeme via Basic-Auth (verschluesselte DB-Credentials) -
+    identisch zu _is_authenticated(). /login, /callback, /favicon.ico und
+    /static liegen ausserhalb dieses Blueprints und bleiben oeffentlich.
+    """
+    if _is_authenticated():
+        return None
+    # Normale Browser-Navigation (HTML-Seite) -> auf Login umleiten, Ziel merken.
+    if request.method == 'GET' and 'text/html' in (request.headers.get('Accept') or ''):
+        session['next'] = request.url
+        return redirect(url_for('login'))
+    # AJAX/API-Aufrufe -> 401 JSON (Frontend wertet login_required aus).
+    return jsonify({
+        'success': False,
+        'error': 'Not logged in. Please login to SAP first.',
+        'login_required': True
+    }), 401
 
 
 def _build_session_snapshot():

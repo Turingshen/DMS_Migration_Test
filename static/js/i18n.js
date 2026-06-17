@@ -38,6 +38,7 @@
         'nav.target_tooltip':           { de: 'Zielsystem (S/4HANA)', en: 'Target System (S/4HANA)' },
         'nav.dil_tooltip':              { de: 'DIL Datenanreicherung', en: 'DIL Data Enrichment' },
         'nav.login':                    { de: 'Anmelden / Session erneuern', en: 'Login / Renew Session' },
+        'nav.logout':                   { de: 'Abmelden', en: 'Logout' },
         'nav.back_tooltip':             { de: 'Zurück zur Hauptseite', en: 'Back to Main Page' },
         'loading':                      { de: 'Lade...', en: 'Loading...' },
         'error_prefix':                 { de: 'Fehler: ', en: 'Error: ' },

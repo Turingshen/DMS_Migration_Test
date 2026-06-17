@@ -307,6 +307,54 @@ def login():
     http_session.modified = True  # Ensure session changes are persisted
     return redirect(redirect_url)
 
+
+def logout():
+    """Log the user out by clearing the local session.
+
+    Clears the OAuth bearer token and all user data, then shows a standalone
+    "logged out" landing page. We deliberately do NOT redirect to /login here:
+    that would immediately re-start the OAuth flow and a still-active corporate
+    SSO session would silently log the user straight back in. The landing page
+    requires an explicit click to log in again.
+    """
+    _record('logout', user=http_session.get('fullName'))
+    http_session.clear()
+    login_url = url_for('login')
+    html = f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Abgemeldet / Logged out</title>
+    <style>
+        body {{ font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+               background:#f5f6f8; margin:0; display:flex; min-height:100vh;
+               align-items:center; justify-content:center; }}
+        .card {{ background:#fff; padding:2.5rem 3rem; border-radius:8px;
+                box-shadow:0 2px 12px rgba(0,0,0,.1); text-align:center; max-width:420px; }}
+        .icon {{ font-size:2.5rem; }}
+        h1 {{ font-size:1.4rem; margin:.75rem 0 .25rem; color:#222; }}
+        p {{ color:#666; margin:.25rem 0 1.5rem; }}
+        a.btn {{ display:inline-block; background:#0d6efd; color:#fff; text-decoration:none;
+                padding:.6rem 1.4rem; border-radius:6px; font-weight:600; }}
+        a.btn:hover {{ background:#0b5ed7; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">&#128075;</div>
+        <h1>Abgemeldet</h1>
+        <p>Sie wurden abgemeldet. / You have been logged out.</p>
+        <a class="btn" href="{login_url}">Erneut anmelden / Log in again</a>
+    </div>
+</body>
+</html>"""
+    resp = Response(html, mimetype='text/html')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
 # Step 2: User authorization, this happens on the federation service side.
 
 

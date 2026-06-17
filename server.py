@@ -114,6 +114,7 @@ def add_no_cache_headers(response):
 # Import authentication routes
 import authentication as auth
 app.add_url_rule('/login', view_func=auth.login)
+app.add_url_rule('/logout', view_func=auth.logout)
 app.add_url_rule('/callback', view_func=auth.callback)
 
 # Register app blueprint

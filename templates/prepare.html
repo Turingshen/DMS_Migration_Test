@@ -3,9 +3,6 @@
 {% block title %}Neuer Migration-Batch{% endblock %}
 
 {% block head %}
-<!-- CodeMirror CSS -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/monokai.min.css">
 <style>
     /* ── Workflow Steps ── */
     .workflow-steps { display: flex; align-items: center; margin-bottom: 25px; }
@@ -164,13 +161,8 @@
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" id="tab-sql" data-toggle="tab" href="#pane-sql" role="tab">
-                        <i class="fas fa-code"></i> <span data-i18n="prep.tab.sql">SQL Query</span>
-                    </a>
-                </li>
-                <li class="nav-item">
                     <a class="nav-link" id="tab-file" data-toggle="tab" href="#pane-file" role="tab">
-                        <i class="fas fa-file-excel"></i> <span data-i18n="prep.tab.excel">Excel / CSV Upload</span>
+                        <i class="fas fa-file-upload"></i> <span data-i18n="prep.tab.excel">DMS-Key Liste</span>
                     </a>
                 </li>
             </ul>
@@ -279,60 +271,131 @@
                 </div>
 
                 <!-- ════════════════════════════════════════════ -->
-                <!--  TAB 2: SQL Query                           -->
-                <!-- ════════════════════════════════════════════ -->
-                <div class="tab-pane fade" id="pane-sql" role="tabpanel">
-                    <div class="form-group mb-2">
-                        <label><strong data-i18n="prep.sql.source">Datenquelle</strong></label>
-                        <div class="custom-control custom-radio custom-control-inline">
-                            <input type="radio" id="srcDil" name="querySource" class="custom-control-input" value="dil" checked>
-                            <label class="custom-control-label" for="srcDil">VI-DIL (HANA)</label>
-                        </div>
-                        <div class="custom-control custom-radio custom-control-inline">
-                            <input type="radio" id="srcDatastore" name="querySource" class="custom-control-input" value="datastore">
-                            <label class="custom-control-label" for="srcDatastore">Datastore (MSSQL)</label>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <textarea class="form-control" id="customQuery" rows="10">SELECT TOP 1000
-    drad.doknr as documentnumber,
-    drad.dokob,
-    drad.objky,
-    drad.dokar as documenttype,
-    drad.dokvr as documentversion,
-    drad.doktl as documentpart,
-    drad.longtext_id,
-    iflos.strno
-FROM dil.drad AS drad
-LEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno
-WHERE iflos.tplnr IS NOT NULL;</textarea>
-                        <small class="form-text text-muted" data-i18n="prep.sql.hint">
-                            Query muss mindestens zurückgeben: documentnumber, documenttype, documentversion, documentpart
-                        </small>
-                    </div>
-                </div>
-
-                <!-- ════════════════════════════════════════════ -->
-                <!--  TAB 3: Excel / CSV Upload                  -->
+                <!--  TAB 2: DMS-Key-Liste hochladen             -->
                 <!-- ════════════════════════════════════════════ -->
                 <div class="tab-pane fade" id="pane-file" role="tabpanel">
-                    <div class="form-group">
-                        <label for="fileInput" data-i18n="prep.excel.title">Excel / CSV Datei</label>
-                        <div class="custom-file">
-                            <input type="file" class="custom-file-input" id="fileInput" accept=".xlsx,.xls,.csv">
-                            <label class="custom-file-label" for="fileInput" data-i18n="prep.excel.choose_file">Datei wählen...</label>
-                        </div>
-                        <small class="form-text text-muted" data-i18n="prep.excel.required_fields">
-                            Pflichtfelder: Documentnumber, Documentpart, Documenttype, Documentversion
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <span data-i18n="prep.file.intro">Lade eine Liste mit DMS-Keys hoch. Die Objekt-Verknüpfungen werden anschließend automatisch in DRAD ermittelt – wie bei "DMS Objekte".</span>
+                        <br>
+                        <small class="d-block mt-1" data-i18n-html="prep.file.key_format">
+                            Key-Aufbau: <strong>Typ / Version / Teil / Dokumentnummer</strong>
+                            (z.&nbsp;B. <code>I71 / 00 / 000 / 0000000000000010002152984</code> intern
+                            oder <code>IY1 / 00 / 000 / EQUI330171928</code> extern)
                         </small>
                     </div>
-                    <div class="alert alert-secondary mt-3">
+
+                    <div class="alert alert-secondary">
                         <i class="fas fa-file-excel"></i>
                         <strong data-i18n="prep.excel.download_template">Template herunterladen:</strong>
                         <a href="/download_template" class="btn btn-sm btn-success ml-2">
                             <i class="fas fa-download"></i> migration_template.xlsx
                         </a>
-                        <br><small class="text-muted mt-1 d-block" data-i18n="prep.file.template_hint">Enthält alle erforderlichen Spalten und eine Anleitung.</small>
+                        <br><small class="text-muted mt-1 d-block" data-i18n="prep.file.template_hint">Enthält die erforderlichen Spalten (ein Tabellenblatt): Documenttype, Documentversion, Documentpart, Documentnumber.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="fileInput" data-i18n="prep.file.upload_label">DMS-Key-Liste (Excel / CSV)</label>
+                        <div class="input-group">
+                            <div class="custom-file">
+                                <input type="file" class="custom-file-input" id="fileInput" accept=".xlsx,.xls,.csv">
+                                <label class="custom-file-label" for="fileInput" data-i18n="prep.excel.choose_file">Datei wählen...</label>
+                            </div>
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-success" id="btnLoadKeys" onclick="loadFileKeys()">
+                                    <i class="fas fa-search"></i> <span data-i18n="prep.file.load_keys">Keys laden &amp; prüfen</span>
+                                </button>
+                            </div>
+                        </div>
+                        <small class="form-text text-muted" data-i18n="prep.file.required">Spalten: Documenttype, Documentversion, Documentpart, Documentnumber</small>
+                    </div>
+
+                    <!-- Progress (key lookup) -->
+                    <div id="fileProgressRow" class="mt-3" style="display:none;">
+                        <div class="progress" style="height: 25px;">
+                            <div id="fileProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                                 role="progressbar" style="width:100%">
+                                <span id="fileProgressText" data-i18n="prep.file.loading">Suche Objektverknüpfungen in DRAD...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Summary (after key lookup) -->
+                    <div id="fileSummaryRow" class="mt-3" style="display:none;">
+                        <div class="card">
+                            <div class="card-header bg-light py-2">
+                                <i class="fas fa-clipboard-check"></i> <span data-i18n="prep.file.summary_title">Geprüfte Keys</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="row text-center">
+                                    <div class="col-3">
+                                        <div class="h4 mb-0" id="fileStatUploaded">0</div>
+                                        <small class="text-muted" data-i18n="prep.file.uploaded">Hochgeladen</small>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="h4 mb-0 text-success" id="fileStatFound">0</div>
+                                        <small class="text-muted" data-i18n="prep.file.found">Gefundene Dokumente</small>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="h4 mb-0 text-info" id="fileStatLinks">0</div>
+                                        <small class="text-muted" data-i18n="prep.file.links">Objektverknüpfungen</small>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="h4 mb-0 text-warning" id="fileStatSkipped">0</div>
+                                        <small class="text-muted" data-i18n="prep.file.not_found">Ohne Verknüpfung</small>
+                                    </div>
+                                </div>
+                                <div id="fileDokobSummary" class="mt-3"></div>
+                                <div id="fileNotFoundBox" class="mt-3" style="display:none;">
+                                    <button class="btn btn-sm btn-outline-warning" type="button" data-toggle="collapse" data-target="#fileNotFoundList">
+                                        <i class="fas fa-exclamation-triangle"></i> <span data-i18n="prep.file.show_skipped">Übersprungene Keys anzeigen</span>
+                                    </button>
+                                    <small class="d-block text-muted mt-1" data-i18n="prep.file.not_found_hint">Diese Keys haben keine (gültige) Objektverknüpfung in DRAD und werden nicht migriert.</small>
+                                    <div class="collapse mt-2" id="fileNotFoundList">
+                                        <pre class="bg-light p-2 small mb-0" style="max-height:160px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;" id="fileNotFoundPre"></pre>
+                                    </div>
+                                </div>
+                                <div id="fileInvalidBox" class="mt-2 text-danger small" style="display:none;"></div>
+                                <div class="alert alert-success mt-3 mb-0" id="fileReadyHint" style="display:none;">
+                                    <i class="fas fa-arrow-down"></i> <span data-i18n="prep.file.next_hint">Fülle unten die Batch-Metadaten aus und klicke „Migration Batch erstellen".</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Results preview (same layout as DMS Objekte) -->
+                    <div id="fileResultsRow" class="mt-3" style="display:none;">
+                        <div class="card">
+                            <div class="card-header bg-light py-2">
+                                <div class="d-flex align-items-center justify-content-between flex-wrap">
+                                    <div>
+                                        <i class="fas fa-table"></i> <span data-i18n="prep.results">Ergebnisse</span>
+                                        <span class="text-muted ml-2" id="fileTableInfo"></span>
+                                    </div>
+                                    <div class="d-flex align-items-center" style="gap: 8px;">
+                                        <div class="btn-group btn-group-sm" id="fileAblageFilterGroup">
+                                            <button type="button" class="btn btn-outline-secondary active" data-ablage="ALL" onclick="setFileAblageFilter('ALL')" data-i18n="all">Alle</button>
+                                            <button type="button" class="btn btn-outline-info" data-ablage="KPRO" onclick="setFileAblageFilter('KPRO')"><i class="fas fa-cloud"></i> KPRO</button>
+                                            <button type="button" class="btn btn-outline-warning" data-ablage="DB" onclick="setFileAblageFilter('DB')"><i class="fas fa-database"></i> DB</button>
+                                        </div>
+                                        <input type="text" id="fileTableSearchInput" class="form-control form-control-sm"
+                                               style="width: 200px;" placeholder="Suchen (DOKNR, OBJKY, DOKOB...)" data-i18n-placeholder="prep.results.search"
+                                               oninput="applyFileTableFilter()">
+                                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('fileTableSearchInput').value=''; applyFileTableFilter();" title="Filter zurücksetzen" data-i18n-title="prep.btn.reset_filter_title">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="card-body p-0" style="max-height:300px; overflow-y:auto;">
+                                <table class="table table-sm table-striped table-hover mb-0" id="fileResultsTable">
+                                    <thead class="thead-dark">
+                                        <tr><th>DOKAR</th><th>DOKNR</th><th>DOKVR</th><th>DOKTL</th><th>DOKOB</th><th>OBJKY</th><th>WERK</th><th data-i18n="prep.th.ablage">Ablage</th></tr>
+                                    </thead>
+                                    <tbody id="fileResultsBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -503,10 +566,6 @@ WHERE iflos.tplnr IS NOT NULL;</textarea>
         </div>
     </div>
 </div>
-
-<!-- CodeMirror -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/sql/sql.min.js"></script>
 
     <script src="/static/js/prepare.js"></script>
 {% endblock %}

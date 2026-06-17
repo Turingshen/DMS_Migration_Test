@@ -165,21 +165,57 @@ def get_batch_statistics():
 
 @migrate_bp.route('/download_template', methods=['GET'])
 def download_template():
-    """Download the Excel template for migration data upload."""
-    import os
+    """Generate and download the Excel template for the DMS-key upload.
+
+    One sheet with the four key columns (Documenttype / Documentversion /
+    Documentpart / Documentnumber). The number columns are text-formatted so
+    leading zeros and long internal numbers are preserved.
+    """
+    import io
     from flask import send_file
-    
-    template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'migration_template.xlsx')
-    
-    if os.path.exists(template_path):
-        return send_file(
-            template_path,
-            as_attachment=True,
-            download_name='migration_template.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    else:
-        return jsonify({'success': False, 'error': 'Template file not found'}), 404
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'DMS_Keys'
+
+    headers = ['Documenttype', 'Documentversion', 'Documentpart', 'Documentnumber']
+    ws.append(headers)
+
+    # Example rows: one internal (25-digit) key, one external key.
+    examples = [
+        ['I71', '00', '000', '0000000000000010002152984'],
+        ['IY1', '00', '000', 'EQUI330171928'],
+    ]
+    for row in examples:
+        ws.append(row)
+
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2E5C8A', end_color='2E5C8A', fill_type='solid')
+    widths = [16, 16, 14, 30]
+    for idx, (header, width) in enumerate(zip(headers, widths), start=1):
+        col = ws.cell(row=1, column=idx)
+        col.font = header_font
+        col.fill = header_fill
+        col.alignment = Alignment(horizontal='center')
+        letter = col.column_letter
+        ws.column_dimensions[letter].width = width
+        # Force text format for the whole column so leading zeros survive.
+        for r in range(1, ws.max_row + 1):
+            ws.cell(row=r, column=idx).number_format = '@'
+
+    ws.freeze_panes = 'A2'
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name='migration_template.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
 
 
 @migrate_bp.route('/prepare', methods=['GET', 'POST'])

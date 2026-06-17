@@ -15,5 +15,6 @@ import app.routes_execute    # noqa: F401
 import app.routes_records    # noqa: F401
 import app.routes_mapping    # noqa: F401
 import app.routes_dms        # noqa: F401
+import app.routes_file_import  # noqa: F401
 import app.routes_validate   # noqa: F401
 import app.routes_material   # noqa: F401

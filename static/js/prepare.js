@@ -1,16 +1,16 @@
 // ═══════════════════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════════════════
-let editor = null;
 let allWerke = [];
 let loadedData = [];
 let werkeData = {};
 let countryToRegion = {};
 let selectedDokobs = [];
 let dokobCounts = {};
-let queryEdited = false;
-let programmaticChange = false;
 let pendingExclusions = null;  // Uploaded exclusion data (from Excel)
+let fileKeysLoaded = false;    // True once uploaded DMS keys are resolved into dms_objects.db
+let fileLoadedData = [];       // Resolved documents from the uploaded key list (for the results table)
+let fileAblageFilter = 'ALL';
 
 const regionMap = {
     'EU': ['DE','FR','IT','ES','PT','NL','BE','AT','CH','PL','CZ','HU','RO','BG','SK','SI','HR','RS','GR','FI','SE','NO','DK','IE','GB','UK','LU','EE','LV','LT'],
@@ -23,40 +23,14 @@ const regionMap = {
 //  INIT
 // ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', function() {
-    // CodeMirror init (SQL tab)
-    editor = CodeMirror.fromTextArea(document.getElementById('customQuery'), {
-        mode: 'text/x-sql', theme: 'monokai', lineNumbers: true,
-        matchBrackets: true, autoCloseBrackets: true
-    });
-    editor.setSize(null, 280);
-
-    // Refresh CodeMirror when SQL tab is shown (fix hidden tab rendering)
-    $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
-        if (e.target.id === 'tab-sql') editor.refresh();
-    });
-
-    // Track manual edits in CodeMirror
-    editor.on('change', function() {
-        if (!programmaticChange) queryEdited = true;
-    });
-
-    // Switch default query when source radio changes
-    document.querySelectorAll('input[name="querySource"]').forEach(radio => {
-        radio.addEventListener('change', function() {
-            if (queryEdited) return;
-            programmaticChange = true;
-            if (this.value === 'dil') {
-                editor.setValue("SELECT TOP 100\n    drad.doknr as documentnumber,\n    drad.dokob,\n    drad.objky,\n    drad.dokar as documenttype,\n    drad.dokvr as documentversion,\n    drad.doktl as documentpart,\n    drad.longtext_id,\n    iflos.strno\nFROM dil.drad AS drad\nLEFT JOIN dil.iflos AS iflos ON drad.objky = iflos.strno\nWHERE iflos.tplnr IS NOT NULL;");
-            } else {
-                editor.setValue("SELECT TOP 100\n    DOKNR as documentnumber,\n    DOKAR as documenttype,\n    DOKVR as documentversion,\n    DOKTL as documentpart\nFROM dbo.migration_selection;");
-            }
-            programmaticChange = false;
-        });
-    });
-
-    // File label
+    // File label + reset resolved-keys state when a new file is chosen
     document.getElementById('fileInput').addEventListener('change', function() {
         this.nextElementSibling.textContent = this.files[0] ? this.files[0].name : t('prep.excel.choose_file');
+        fileKeysLoaded = false;
+        const summary = document.getElementById('fileSummaryRow');
+        if (summary) summary.style.display = 'none';
+        const results = document.getElementById('fileResultsRow');
+        if (results) results.style.display = 'none';
     });
 
     // Char counter
@@ -80,7 +54,6 @@ function createBatch() {
     if (!wave) { alert(t('prep.msg.choose_wave')); return; }
 
     if (activeTab === 'tab-dms')       createDMSBatch();
-    else if (activeTab === 'tab-sql')  createSQLBatch();
     else if (activeTab === 'tab-file') createFileBatch();
 }
 
@@ -139,32 +112,195 @@ function createDMSBatchConfirmed() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  PATH 2: SQL Query → Batch
+//  PATH 2: DMS-Key-Liste hochladen → DRAD-Lookup → Batch
 // ═══════════════════════════════════════════════════════════════
-function createSQLBatch() {
-    const query = editor.getValue().trim();
-    if (!query) { alert(t('prep.msg.enter_sql')); return; }
-
-    const formData = new FormData();
-    formData.append('use_file', 'false');
-    formData.append('custom_query', query);
-    formData.append('query_source', document.querySelector('input[name="querySource"]:checked').value);
-    appendMetadata(formData);
-    submitPrepare(formData);
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  PATH 3: Excel / CSV Upload → Batch
-// ═══════════════════════════════════════════════════════════════
-function createFileBatch() {
+//  Step A: upload the key list, resolve object links via DRAD into dms_objects.db
+function loadFileKeys() {
     const fileInput = document.getElementById('fileInput');
     if (!fileInput.files[0]) { alert(t('prep.msg.choose_file')); return; }
 
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
-    formData.append('use_file', 'true');
-    appendMetadata(formData);
-    submitPrepare(formData);
+
+    const btn = document.getElementById('btnLoadKeys');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    showFileProgress(t('prep.file.loading'));
+    document.getElementById('fileSummaryRow').style.display = 'none';
+
+    fetch('/api/dms/import-keys', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            resetLoadKeysBtn();
+            if (!data.success) {
+                fileKeysLoaded = false;
+                alert((t('error_prefix') || 'Fehler:') + ' ' + (data.error || t('prep.msg.unknown_error')));
+                return;
+            }
+            renderFileSummary(data);
+            fileKeysLoaded = (data.found_documents || 0) > 0;
+        })
+        .catch(err => {
+            resetLoadKeysBtn();
+            fileKeysLoaded = false;
+            alert(String(err));
+        });
+}
+
+function resetLoadKeysBtn() {
+    hideFileProgress();
+    const btn = document.getElementById('btnLoadKeys');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-search"></i> ' + t('prep.file.load_keys');
+}
+
+function renderFileSummary(data) {
+    document.getElementById('fileStatUploaded').textContent = (data.uploaded_keys || 0).toLocaleString();
+    document.getElementById('fileStatFound').textContent = (data.found_documents || 0).toLocaleString();
+    document.getElementById('fileStatLinks').textContent = (data.total_links || 0).toLocaleString();
+    document.getElementById('fileStatSkipped').textContent = (data.not_found_count || 0).toLocaleString();
+
+    let badges = '';
+    if (data.dokob_summary) {
+        for (const [dk, cnt] of Object.entries(data.dokob_summary)) {
+            badges += `<span class="badge badge-info mr-1">${dk}: ${Number(cnt).toLocaleString()}</span>`;
+        }
+    }
+    document.getElementById('fileDokobSummary').innerHTML = badges;
+
+    const nfBox = document.getElementById('fileNotFoundBox');
+    if ((data.not_found_count || 0) > 0) {
+        nfBox.style.display = 'block';
+        document.getElementById('fileNotFoundPre').textContent = (data.not_found_keys || []).join('\n');
+    } else {
+        nfBox.style.display = 'none';
+    }
+
+    const invBox = document.getElementById('fileInvalidBox');
+    if ((data.invalid_count || 0) > 0) {
+        invBox.style.display = 'block';
+        const invPre = document.createElement('pre');
+        invPre.className = 'bg-light p-2 small mb-0 mt-1';
+        invPre.style.maxHeight = '160px';
+        invPre.style.overflowY = 'auto';
+        invPre.style.whiteSpace = 'pre-wrap';
+        invPre.textContent = (data.invalid_keys || []).join('\n');
+        invBox.innerHTML = `<i class="fas fa-times-circle"></i> ${data.invalid_count} ${t('prep.file.invalid')}:`;
+        invBox.appendChild(invPre);
+    } else {
+        invBox.style.display = 'none';
+    }
+
+    document.getElementById('fileReadyHint').style.display = (data.found_documents || 0) > 0 ? 'block' : 'none';
+    document.getElementById('fileSummaryRow').style.display = 'block';
+
+    renderFileResults(data.data || []);
+}
+
+//  Results table (same layout/behaviour as the DMS Objekte preview)
+function renderFileResults(rows) {
+    fileLoadedData = rows || [];
+    fileAblageFilter = 'ALL';
+    document.querySelectorAll('#fileAblageFilterGroup button').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('#fileAblageFilterGroup button[data-ablage="ALL"]');
+    if (allBtn) allBtn.classList.add('active');
+    const search = document.getElementById('fileTableSearchInput');
+    if (search) search.value = '';
+    applyFileTableFilter();
+    document.getElementById('fileResultsRow').style.display = fileLoadedData.length ? 'block' : 'none';
+}
+
+function setFileAblageFilter(filter) {
+    fileAblageFilter = filter;
+    document.querySelectorAll('#fileAblageFilterGroup button').forEach(b => b.classList.remove('active'));
+    const btn = document.querySelector(`#fileAblageFilterGroup button[data-ablage="${filter}"]`);
+    if (btn) btn.classList.add('active');
+    applyFileTableFilter();
+}
+
+function applyFileTableFilter() {
+    const searchTerm = (document.getElementById('fileTableSearchInput').value || '').toLowerCase().trim();
+    const tbody = $('#fileResultsBody'); tbody.empty();
+    if (!fileLoadedData || !fileLoadedData.length) {
+        tbody.append('<tr><td colspan="8" class="text-center">' + t('prep.msg.no_data') + '</td></tr>');
+        $('#fileTableInfo').html('');
+        return;
+    }
+    let filtered = fileLoadedData;
+    if (fileAblageFilter !== 'ALL') {
+        filtered = filtered.filter(r => (r.ablage || 'KPRO') === fileAblageFilter);
+    }
+    if (searchTerm) {
+        filtered = filtered.filter(r =>
+            (r.dokar||'').toLowerCase().includes(searchTerm) ||
+            (r.doknr||'').toLowerCase().includes(searchTerm) ||
+            (r.dokvr||'').toLowerCase().includes(searchTerm) ||
+            (r.doktl||'').toLowerCase().includes(searchTerm) ||
+            (r.dokob||'').toLowerCase().includes(searchTerm) ||
+            (r.objky||'').toLowerCase().includes(searchTerm) ||
+            (r.werk||'').toLowerCase().includes(searchTerm) ||
+            (r.ablage||'').toLowerCase().includes(searchTerm)
+        );
+    }
+    filtered.slice(0, 200).forEach(r => {
+        const ablage = r.ablage || 'KPRO';
+        const ablageClass = ablage === 'KPRO' ? 'badge-info' : 'badge-warning';
+        const ablageIcon = ablage === 'KPRO' ? '<i class="fas fa-cloud"></i>' : '<i class="fas fa-database"></i>';
+        tbody.append(`<tr><td>${r.dokar||''}</td><td><code>${r.doknr||''}</code></td><td>${r.dokvr||''}</td><td>${r.doktl||''}</td><td><span class="badge badge-info">${r.dokob||''}</span></td><td><small>${r.objky||''}</small></td><td><span class="badge badge-secondary">${r.werk||''}</span></td><td><span class="badge ${ablageClass}">${ablageIcon} ${ablage}</span></td></tr>`);
+    });
+    const showing = Math.min(200, filtered.length);
+    const filterInfo = (searchTerm || fileAblageFilter !== 'ALL')
+        ? ' ' + t('prep.msg.filtered_from', {n: fileLoadedData.length.toLocaleString()})
+        : '';
+    $('#fileTableInfo').html(t('prep.msg.entries_shown', {shown: showing.toLocaleString(), total: filtered.length.toLocaleString(), filter: filterInfo}));
+}
+
+function showFileProgress(label) {
+    document.getElementById('fileProgressRow').style.display = 'block';
+    setFileProgress(label);
+}
+function setFileProgress(label) {
+    const el = document.getElementById('fileProgressText');
+    if (el && label) el.textContent = label;
+}
+function hideFileProgress() {
+    document.getElementById('fileProgressRow').style.display = 'none';
+}
+
+//  Step B: create the batch from the resolved keys, reusing the DMS create-batch stream
+function createFileBatch() {
+    if (!fileKeysLoaded) { alert(t('prep.file.msg.load_first')); return; }
+
+    const wave = document.getElementById('batchWave').value;
+    const description = document.getElementById('batchDescription').value.trim();
+    const notes = document.getElementById('batchNotes').value.trim();
+
+    const btn = document.getElementById('createBatchBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 0%';
+    showFileProgress(t('prep.msg.creating'));
+    document.getElementById('resultSection').style.display = 'none';
+
+    const params = new URLSearchParams({ wave, description, notes, dokob_filter: '' });
+    const es = new EventSource(`/api/dms/create-batch-stream?${params}`);
+
+    es.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.type === 'status' || data.type === 'progress') {
+            setFileProgress(data.message || t('prep.msg.processing'));
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${data.percent || 0}%`;
+        } else if (data.type === 'complete') {
+            es.close(); hideFileProgress(); resetBtn();
+            showBatchResult(true, data);
+        } else if (data.type === 'error') {
+            es.close(); hideFileProgress(); resetBtn();
+            showBatchResult(false, { error: data.message });
+        }
+    };
+    es.onerror = function() {
+        es.close(); hideFileProgress(); resetBtn();
+        showBatchResult(false, { error: t('prep.msg.connection_error') });
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -26,22 +26,23 @@ def skip_records():
         if not record_ids:
             return jsonify({'success': False, 'error': 'No record IDs provided'}), 400
         
-        # Build the IN clause for record IDs
+        # Build the IN clause for record IDs (int cast prevents injection)
         ids_str = ','.join(str(int(rid)) for rid in record_ids)
         skip_value = 1 if skip else 0
+        skip_reason = f'Skipped: {reason}'
         
         with misc_engine.begin() as con:
-            # Update skip_migration flag
+            # Update skip_migration flag (parametrized to prevent SQL injection)
             result = con.execute(text(f"""
                 UPDATE dbo.migration_staging
-                SET skip_migration = {skip_value},
+                SET skip_migration = :skip_value,
                     execution_error = CASE 
-                        WHEN {skip_value} = 1 THEN 'Skipped: {reason}'
+                        WHEN :skip_value = 1 THEN :skip_reason
                         ELSE execution_error
                     END
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                     AND id IN ({ids_str})
-            """))
+            """), {'skip_value': skip_value, 'skip_reason': skip_reason, 'batch_id': batch_id})
             updated_count = result.rowcount
         
         return jsonify({
@@ -194,25 +195,25 @@ def reset_failed():
         # so partial records will only retry the missing files.
         with misc_engine.begin() as con:
             # Get IDs before resetting
-            id_rows = con.execute(text(f"""
+            id_rows = con.execute(text("""
                 SELECT id FROM dbo.migration_staging
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                     AND execution_status IN ('failed', 'partial')
                     AND skip_migration = 0
-            """)).fetchall()
+            """), {'batch_id': batch_id}).fetchall()
             reset_ids = [row[0] for row in id_rows]
             
             if reset_ids:
-                result = con.execute(text(f"""
+                result = con.execute(text("""
                     UPDATE dbo.migration_staging
                     SET execution_status = 'pending',
                         execution_error = NULL,
                         execution_started_at = NULL,
                         execution_completed_at = NULL
-                    WHERE batch_id = '{batch_id}'
+                    WHERE batch_id = :batch_id
                         AND execution_status IN ('failed', 'partial')
                         AND skip_migration = 0
-                """))
+                """), {'batch_id': batch_id})
                 reset_count = result.rowcount
             else:
                 reset_count = 0
@@ -232,7 +233,7 @@ def reset_failed():
 def get_results(batch_id):
     """Get execution results for a batch."""
     try:
-        query = f"""
+        query = """
             SELECT 
                 id,
                 source_documentnumber,
@@ -256,13 +257,13 @@ def get_results(batch_id):
                 file_size_bytes,
                 mime_type
             FROM dbo.migration_staging
-            WHERE batch_id = '{batch_id}'
+            WHERE batch_id = :batch_id
                 AND execution_status != 'pending'
             ORDER BY source_documenttype, source_documentnumber, source_documentversion, source_documentpart, source_dokob
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(text(query), con)
+            df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
         
         # Convert to JSON-safe records (handles NaN/NaT properly)
         results = df_to_json_safe(df)
@@ -590,7 +591,7 @@ def get_batch_logs(batch_id):
     try:
         print(f"[LOGS] Fetching logs for batch: {batch_id}")
         
-        query = f"""
+        query = """
             SELECT 
                 id,
                 source_documentnumber,
@@ -615,12 +616,12 @@ def get_batch_logs(batch_id):
                 filename,
                 mime_type
             FROM dbo.migration_staging
-            WHERE batch_id = '{batch_id}'
+            WHERE batch_id = :batch_id
             ORDER BY execution_completed_at DESC, id DESC
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(text(query), con)
+            df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
         
         print(f"[LOGS] Found {len(df)} records for batch {batch_id}")
         

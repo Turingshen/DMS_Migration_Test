@@ -22,7 +22,7 @@ from app.execute import (
 def get_batch_progress(batch_id):
     """Get execution progress for a batch (for live polling during execution)."""
     try:
-        query = f"""
+        query = """
             SELECT 
                 batch_id,
                 status,
@@ -34,11 +34,11 @@ def get_batch_progress(batch_id):
                 created_at,
                 last_execution_started_at
             FROM dbo.migration_batch
-            WHERE batch_id = '{batch_id}'
+            WHERE batch_id = :batch_id
         """
         
         with misc_engine.begin() as con:
-            df = pd.read_sql(text(query), con)
+            df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
         
         if len(df) == 0:
             return jsonify({'success': False, 'error': 'Batch not found'}), 404
@@ -57,18 +57,18 @@ def get_batch_progress(batch_id):
             with misc_engine.begin() as con:
                 if exec_start and row['status'] == 'executing':
                     # During execution: only count partials from THIS run
-                    partial_result = con.execute(text(f"""
+                    partial_result = con.execute(text("""
                         SELECT COUNT(*) FROM dbo.migration_staging
-                        WHERE batch_id = '{batch_id}' 
+                        WHERE batch_id = :batch_id 
                             AND execution_status = 'partial'
                             AND execution_started_at >= :exec_start
-                    """), {'exec_start': exec_start}).fetchone()
+                    """), {'batch_id': batch_id, 'exec_start': exec_start}).fetchone()
                 else:
                     # Not executing: show all partials (batch overview)
-                    partial_result = con.execute(text(f"""
+                    partial_result = con.execute(text("""
                         SELECT COUNT(*) FROM dbo.migration_staging
-                        WHERE batch_id = '{batch_id}' AND execution_status = 'partial'
-                    """)).fetchone()
+                        WHERE batch_id = :batch_id AND execution_status = 'partial'
+                    """), {'batch_id': batch_id}).fetchone()
                 partial = partial_result[0] if partial_result else 0
         except:
             pass
@@ -234,36 +234,29 @@ def get_batch_records(batch_id):
         search_term = request.args.get('search', '').strip()
         ablage_filter = request.args.get('ablage_filter', '').strip()
         
-        # Build WHERE clause with ms. prefix for JOIN
-        where_conditions = [f"ms.batch_id = '{batch_id}'"]
+        # Build WHERE clause with ms. prefix for JOIN (parametrized to prevent SQL injection)
+        where_conditions = ["ms.batch_id = :batch_id"]
+        params = {'batch_id': batch_id}
         if status_filter:
-            where_conditions.append(f"ms.execution_status = '{status_filter}'")
+            where_conditions.append("ms.execution_status = :status_filter")
+            params['status_filter'] = status_filter
         # If filtering by error_category, filter by failed/partial status AND the category in staging table
         if error_category_filter:
             where_conditions.append("ms.execution_status IN ('failed', 'partial')")
-            where_conditions.append(f"ms.error_category = '{error_category_filter}'")
+            where_conditions.append("ms.error_category = :error_category")
+            params['error_category'] = error_category_filter
         # Server-side text search: search across DOKNR, OBJKY, description, filename, target_documentnumber
         if search_term:
-            safe_search = search_term.replace("'", "''")
-            where_conditions.append(f"(ms.source_documentnumber LIKE '%{safe_search}%' OR ms.source_objky LIKE '%{safe_search}%' OR ms.source_description LIKE '%{safe_search}%' OR ms.filename LIKE '%{safe_search}%' OR ms.target_documentnumber LIKE '%{safe_search}%' OR ms.source_dokob LIKE '%{safe_search}%')")
+            where_conditions.append("(ms.source_documentnumber LIKE :search OR ms.source_objky LIKE :search OR ms.source_description LIKE :search OR ms.filename LIKE :search OR ms.target_documentnumber LIKE :search OR ms.source_dokob LIKE :search)")
+            params['search'] = f"%{search_term}%"
         # Ablage filter (KPRO or DB)
         if ablage_filter in ('KPRO', 'DB'):
-            where_conditions.append(f"ISNULL(ms.ablage, 'KPRO') = '{ablage_filter}'")
+            where_conditions.append("ISNULL(ms.ablage, 'KPRO') = :ablage_filter")
+            params['ablage_filter'] = ablage_filter
         where_clause = " AND ".join(where_conditions)
         
-        # First get total count (with all filters applied)
-        count_conditions = [f"ms.batch_id = '{batch_id}'"]
-        if status_filter:
-            count_conditions.append(f"ms.execution_status = '{status_filter}'")
-        if error_category_filter:
-            count_conditions.append("ms.execution_status IN ('failed', 'partial')")
-            count_conditions.append(f"ms.error_category = '{error_category_filter}'")
-        if search_term:
-            safe_search = search_term.replace("'", "''")
-            count_conditions.append(f"(ms.source_documentnumber LIKE '%{safe_search}%' OR ms.source_objky LIKE '%{safe_search}%' OR ms.source_description LIKE '%{safe_search}%' OR ms.filename LIKE '%{safe_search}%' OR ms.target_documentnumber LIKE '%{safe_search}%' OR ms.source_dokob LIKE '%{safe_search}%')")
-        if ablage_filter in ('KPRO', 'DB'):
-            count_conditions.append(f"ISNULL(ms.ablage, 'KPRO') = '{ablage_filter}'")
-        count_query = "SELECT COUNT(*) FROM dbo.migration_staging ms WHERE " + " AND ".join(count_conditions)
+        # Total count uses the same filters/params as the main query
+        count_query = "SELECT COUNT(*) FROM dbo.migration_staging ms WHERE " + where_clause
         
         # Build paginated query using OFFSET/FETCH for SQL Server
         # Use ms.error_category from staging table (set during execution)
@@ -370,8 +363,8 @@ def get_batch_records(batch_id):
             """
         
         with misc_engine.begin() as con:
-            total_count = con.execute(text(count_query)).scalar()
-            df = pd.read_sql(text(query), con)
+            total_count = con.execute(text(count_query), params).scalar()
+            df = pd.read_sql(text(query), con, params=params)
         
         # Convert to JSON-safe records (handles NaN/NaT properly)
         records = df_to_json_safe(df)
@@ -511,8 +504,8 @@ def execute_selected():
                 'already_running': True
             })
         
-        # Reset selected records to pending for execution
-        record_ids_str = ','.join(str(id) for id in record_ids)
+        # Reset selected records to pending for execution (int cast prevents injection)
+        record_ids_str = ','.join(str(int(rid)) for rid in record_ids)
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_staging
@@ -520,10 +513,10 @@ def execute_selected():
                     execution_error = NULL,
                     execution_started_at = NULL,
                     execution_completed_at = NULL
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                     AND id IN ({record_ids_str})
                     AND skip_migration = 0
-            """))
+            """), {'batch_id': batch_id})
             
             # Reset container_created for records where the target document
             # no longer exists (CONTAINER_LOST / "existiert nicht").
@@ -532,22 +525,22 @@ def execute_selected():
             con.execute(text(f"""
                 UPDATE dbo.migration_staging
                 SET container_created = 0
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                     AND id IN ({record_ids_str})
                     AND (execution_error LIKE '%existiert nicht%'
                          OR execution_error LIKE '%CONTAINER_LOST%'
                          OR execution_error LIKE '%does not exist%')
-            """))
+            """), {'batch_id': batch_id})
             # Clean stale file_details for those same records so they get
             # a full fresh upload.
             con.execute(text(f"""
                 DELETE fd
                 FROM dbo.migration_file_details fd
                 INNER JOIN dbo.migration_staging ms ON fd.staging_id = ms.id
-                WHERE ms.batch_id = '{batch_id}'
+                WHERE ms.batch_id = :batch_id
                     AND ms.id IN ({record_ids_str})
                     AND ISNULL(ms.container_created, 0) = 0
-            """))
+            """), {'batch_id': batch_id})
             
             # Also immediately reset the batch counters so the frontend
             # sees correct values from the very first poll (no race condition
@@ -561,8 +554,8 @@ def execute_selected():
                     successful_records = 0,
                     failed_records = 0,
                     last_execution_started_at = GETUTCDATE()
-                WHERE batch_id = '{batch_id}'
-            """))
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
         
         # Snapshot session and start background thread
         snapshot = _build_session_snapshot()
@@ -671,19 +664,19 @@ def execute_link_selected():
         if running:
             return jsonify({'success': False, 'error': msg, 'already_running': True})
 
-        # Reset link_status for selected records so they can be re-linked
-        record_ids_str = ','.join(str(rid) for rid in record_ids)
+        # Reset link_status for selected records so they can be re-linked (int cast prevents injection)
+        record_ids_str = ','.join(str(int(rid)) for rid in record_ids)
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_staging
                 SET link_status = 'pending',
                     link_error = NULL,
                     link_completed_at = NULL
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                     AND id IN ({record_ids_str})
                     AND execution_status IN ('success', 'partial')
                     AND ISNULL(container_created, 0) = 1
-            """))
+            """), {'batch_id': batch_id})
 
         # Snapshot session and start background thread
         snapshot = _build_session_snapshot()
@@ -729,11 +722,11 @@ def get_link_progress(batch_id):
     try:
         with misc_engine.begin() as con:
             # Get batch phase info
-            batch_row = con.execute(text(f"""
+            batch_row = con.execute(text("""
                 SELECT migration_phase, status
                 FROM dbo.migration_batch
-                WHERE batch_id = '{batch_id}'
-            """)).fetchone()
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchone()
 
             if not batch_row:
                 return jsonify({'success': False, 'error': 'Batch nicht gefunden'}), 404
@@ -751,8 +744,8 @@ def get_link_progress(batch_id):
                          ELSE 0 END) as link_total,
                     SUM(CASE WHEN link_status = 'link_skipped' THEN 1 ELSE 0 END) as link_skipped
                 FROM dbo.migration_staging
-                WHERE batch_id = '{batch_id}'
-            """)).fetchone()
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id}).fetchone()
 
         linked = link_stats[0] or 0
         link_exists = link_stats[1] or 0

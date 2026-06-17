@@ -1563,7 +1563,7 @@ def _tech_enrich_from_dil(batch_id, dil_engine):
             all_sizes = []
             for i in range(0, len(unique_loios), 2000):
                 chunk = unique_loios[i:i + 2000]
-                placeholders = ",".join(f"'{lid}'" for lid in chunk)
+                placeholders = ",".join("'" + str(lid).replace("'", "''") + "'" for lid in chunk)
                 q = f"SELECT LOIO_ID, FILE_SIZE FROM DIL.DMS_FILE_SIZE WHERE LOIO_ID IN ({placeholders})"
                 with dil_engine.begin() as con:
                     all_sizes.append(pd.read_sql(text(q), con))

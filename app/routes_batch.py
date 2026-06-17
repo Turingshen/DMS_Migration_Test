@@ -444,16 +444,16 @@ def refresh_batch_data_stream(batch_id):
             yield f"data: {json.dumps({'type': 'status', 'message': 'Loading batch records...'})}\n\n"
             
             # Get all records for this batch
-            query = f"""
+            query = """
                 SELECT id, source_documentnumber, source_documentpart, source_documenttype, source_documentversion,
                        file_size_bytes, source_loioid, filename
                 FROM dbo.migration_staging
-                WHERE batch_id = '{batch_id}'
+                WHERE batch_id = :batch_id
                   AND skip_migration = 0
             """
             
             with misc_engine.begin() as con:
-                df = pd.read_sql(text(query), con)
+                df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
             
             if len(df) == 0:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No records found'})}\n\n"
@@ -523,7 +523,7 @@ def refresh_batch_data_stream(batch_id):
                 
                 for i in range(0, total_loios, chunk_size):
                     chunk = loio_ids[i:i + chunk_size]
-                    placeholders = ",".join([f"'{lid}'" for lid in chunk])
+                    placeholders = ",".join(["'" + str(lid).replace("'", "''") + "'" for lid in chunk])
                     size_query = f"""
                         SELECT LOIO_ID, FILE_SIZE, FILE_NAME
                         FROM DIL.DMS_FILE_SIZE
@@ -640,7 +640,7 @@ def refresh_batch_data_stream(batch_id):
             
             # Get full records for rule application
             with misc_engine.begin() as con:
-                full_df = pd.read_sql(text(f"""
+                full_df = pd.read_sql(text("""
                     SELECT id, source_documenttype, source_documentnumber, source_documentversion,
                            source_documentpart, source_description, authorization_group,
                            source_dokob, source_objky, filename,
@@ -648,8 +648,8 @@ def refresh_batch_data_stream(batch_id):
                            target_documentpart, target_dokob, target_objky,
                            source_document_status, target_document_status, execution_status
                     FROM dbo.migration_staging
-                    WHERE batch_id = '{batch_id}'
-                """), con)
+                    WHERE batch_id = :batch_id
+                """), con, params={'batch_id': batch_id})
             
             # Reset target_documenttype from source before applying rules
             # BUT only for records that are NOT already successful (preserve successful migrations)
@@ -1075,8 +1075,10 @@ def refresh_batch_data_stream(batch_id):
                         dokar = str(c[2] or '').strip()
                         dokvr = str(c[3] or '').zfill(2)
                         doktl = str(c[4] or '').zfill(3)
+                        doknr_e = doknr.replace("'", "''")
+                        dokar_e = dokar.replace("'", "''")
                         conditions.append(
-                            f"(DOKNR='{doknr}' AND DOKAR='{dokar}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
+                            f"(DOKNR='{doknr_e}' AND DOKAR='{dokar_e}' AND DOKVR='{dokvr}' AND DOKTL='{doktl}')"
                         )
                     
                     # Query DIL.DMS_DOC_FILES for DAPPL in chunks

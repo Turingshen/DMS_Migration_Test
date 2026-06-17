@@ -539,9 +539,9 @@ def apply_translations(data_df, rules):
         if cond_col and cond_col in data_df.columns and cond_val is not None:
             col_series = data_df[cond_col].astype(str)
             if cond_op == 'contains':
-                mask = col_series.str.contains(str(cond_val), case=False, na=False)
+                mask = col_series.str.contains(re.escape(str(cond_val)), case=False, na=False)
             elif cond_op == 'not_contains':
-                mask = ~col_series.str.contains(str(cond_val), case=False, na=False)
+                mask = ~col_series.str.contains(re.escape(str(cond_val)), case=False, na=False)
             elif cond_op == 'equals':
                 mask = col_series == str(cond_val)
             elif cond_op == 'not_equal':
@@ -552,7 +552,11 @@ def apply_translations(data_df, rules):
         elif source_col and source_col in data_df.columns and source_val is not None:
             # Legacy translation condition: source_column contains/matches source_value
             col_series = data_df[source_col].astype(str)
-            mask = col_series.str.contains(str(source_val), case=False, na=False)
+            # Treat '*' or '.*' as wildcard (match all rows)
+            if str(source_val).strip() in ('*', '.*'):
+                mask = pd.Series([True] * len(data_df))
+            else:
+                mask = col_series.str.contains(re.escape(str(source_val)), case=False, na=False)
 
         if rtype == 'translation':
             # Translation: when mask true, set target to target_val, else keep existing or source value

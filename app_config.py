@@ -131,6 +131,13 @@ class DilEngine():
         cfg = Config.load()
         try:
             datastore = cfg.get('db', 'dil')
+
+            # Try to load credentials from encrypted DB store first
+            db_user, db_pw = self._get_db_credentials()
+            if db_user and db_pw:
+                datastore = {**datastore, 'db_user': db_user, 'db_pw': db_pw}
+                print("[INFO] DIL credentials loaded from encrypted DB store")
+
             # URL-encode the password to handle special characters like $
             encoded_pw = quote_plus(datastore['db_pw'])
             datastore_encoded = {**datastore, 'db_pw': encoded_pw}
@@ -140,6 +147,17 @@ class DilEngine():
         except Exception as e:
             print(f"[ERROR] Failed to initialize DIL database engine: {e}")
             self.engine = None
+
+    def _get_db_credentials(self):
+        """Try to read DIL credentials from the sap_credentials table."""
+        try:
+            from app.credentials import get_credentials
+            creds = get_credentials('dil')
+            if creds:
+                return creds['username'], creds['password']
+        except Exception:
+            pass
+        return None, None
         
     def __enter__(self):
         return self

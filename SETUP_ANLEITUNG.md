@@ -9,7 +9,9 @@
 - Bei der Installation **"Add Python to PATH"** aktivieren
 - Prüfen mit: `python --version`
 
-### 2. Git installieren
+### 2. Git installieren (optional)
+
+> Nur nötig, falls ein zentrales Git-Remote eingerichtet wird. Für die Weitergabe per Ordnerkopie/ZIP ist Git nicht erforderlich.
 
 - **Download:** https://git-scm.com/download/win
 - Prüfen mit: `git --version`
@@ -31,7 +33,25 @@ Folgende Systeme müssen erreichbar sein:
 
 ## Installation
 
-### Schritt 1: Repository klonen
+### Schritt 1: Projektordner bereitstellen
+
+**Option A – Ordner kopieren oder ZIP entpacken (empfohlen):**
+
+Den Ordner `DMS_Migration` vom Kollegen als Kopie oder ZIP-Datei erhalten und nach `C:\App_Archive\Apps\` entpacken bzw. kopieren:
+
+```powershell
+# Beispiel: ZIP entpacken
+Expand-Archive -Path "$HOME\Downloads\DMS_Migration.zip" -DestinationPath "C:\App_Archive\Apps"
+
+# Oder: Ordner direkt vom Netzlaufwerk/USB kopieren
+Copy-Item -Recurse "\\QUELL-PC\C$\App_Archive\Apps\DMS_Migration" "C:\App_Archive\Apps\"
+```
+
+> **Hinweis:** Den Unterordner `.venv` dabei **nicht** mitkopieren – die virtuelle Umgebung wird in Schritt 2 neu erstellt.
+
+**Option B – Mit Git klonen (falls ein Remote eingerichtet ist):**
+
+Aktuell ist kein Remote konfiguriert. Falls eines eingerichtet wird:
 
 ```powershell
 cd C:\App_Archive\Apps
@@ -172,6 +192,48 @@ Test-NetConnection -ComputerName win10240611.BASFAD.BASF.net -Port 1433
 
 ---
 
+## Lokale Datenbank übernehmen (Settings & Passwörter)
+
+Die Anwendung speichert SAP-Systemkonfigurationen und verschlüsselte Zugangsdaten in der zentralen MS SQL-Datenbank (`dbo.sap_systems`, `dbo.sap_system_apis`, `dbo.sap_credentials`). Zusätzlich gibt es eine lokale SQLite-Datenbank unter `userdata/dms_objects.db`, die geladene DMS-Objekte cached.
+
+### Datenbank von einem anderen PC übernehmen
+
+Wenn ein Kollege die Anwendung bereits eingerichtet hat, können Settings und Daten übernommen werden:
+
+#### 1. Lokale SQLite-Datenbank kopieren
+
+```powershell
+# Den gesamten userdata-Ordner vom Quell-PC kopieren
+Copy-Item -Recurse "\\QUELL-PC\C$\App_Archive\Apps\DMS_Migration\userdata" "C:\App_Archive\Apps\DMS_Migration\userdata"
+```
+
+Alternativ nur die Datenbankdatei:
+```powershell
+Copy-Item "\\QUELL-PC\C$\App_Archive\Apps\DMS_Migration\userdata\dms_objects.db" "C:\App_Archive\Apps\DMS_Migration\userdata\"
+```
+
+> **Hinweis:** Der Ordner `userdata/` muss existieren. Falls nicht: `mkdir userdata`
+
+#### 2. config-env.yml übernehmen
+
+Die Datei `config-env.yml` enthält alle Verbindungseinstellungen. Am einfachsten vom Kollegen kopieren:
+
+```powershell
+Copy-Item "\\QUELL-PC\C$\App_Archive\Apps\DMS_Migration\config-env.yml" "C:\App_Archive\Apps\DMS_Migration\"
+```
+
+#### 3. FLASK_SECRET_KEY beachten
+
+Die SAP-Zugangsdaten in der Datenbank (`dbo.sap_credentials`) sind mit **Fernet-Verschlüsselung** geschützt. Der Schlüssel wird aus dem `FLASK_SECRET_KEY` in `config-env.yml` abgeleitet.
+
+> **Wichtig:** Wenn der `FLASK_SECRET_KEY` geändert wird, können bestehende verschlüsselte Passwörter **nicht mehr entschlüsselt** werden. In diesem Fall müssen die SAP-Zugangsdaten in der Anwendung unter *Settings > API-Endpunkte konfigurieren* neu eingegeben werden.
+
+#### 4. Zentrale Datenbank (MS SQL)
+
+Die SAP-System-Konfigurationen und verschlüsselten Credentials liegen in der zentralen MISC-Datenbank. Solange die `config-env.yml` die korrekten DB-Verbindungsdaten enthält und der `FLASK_SECRET_KEY` übereinstimmt, sind alle Settings automatisch verfügbar – keine manuelle Übertragung nötig.
+
+---
+
 ## Projektstruktur
 
 ```
@@ -187,5 +249,7 @@ DMS_Migration/
 ├── templates/             # HTML-Templates (Jinja2)
 ├── tests/                 # Automatisierte Tests
 ├── userdata/              # Lokale Benutzerdaten / SAP Credentials
+│   ├── dms_objects.db     # SQLite-Cache für DMS-Objekte
+│   └── werke_cache.json   # Zwischengespeicherte Werksliste
 └── flask_session/         # Session-Dateien (wird automatisch erstellt)
 ```

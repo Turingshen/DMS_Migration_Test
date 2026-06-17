@@ -9,7 +9,6 @@
     .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
     .kpi-label { font-size: 0.8rem; color: #6c757d; }
 
-    .wave-column { min-width: 100%; }
     .wave-header {
         font-weight: 700; font-size: 1rem;
         padding: 8px 12px; border-radius: 6px;
@@ -36,10 +35,6 @@
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
 
     .wave-stats { font-size: 0.8rem; color: #6c757d; }
-    .kanban-container {
-        display: flex; flex-direction: column; gap: 12px;
-    }
-    .unassigned-section { background: #fff3cd; }
 
     .workflow-info {
         display: flex; align-items: center; gap: 8px;
@@ -56,44 +51,6 @@
         background: #007bff; color: #fff; text-decoration: none;
     }
     .workflow-info .arrow { color: #adb5bd; }
-
-    /* Gantt Timeline */
-    .gantt-container { overflow-x: auto; }
-    .gantt-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    .gantt-table th, .gantt-table td { padding: 4px 8px; border-bottom: 1px solid #e9ecef; white-space: nowrap; }
-    .gantt-table th { background: #f8f9fa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
-    .gantt-row-wave { background: #e2e6ea; font-weight: 700; }
-    .gantt-row-batch { background: #f8faff; font-size: 0.8rem; }
-    .gantt-cell-bar { position: relative; min-width: 30px; }
-    .gantt-month-header { text-align: center; font-size: 0.75rem; border-left: 1px solid #dee2e6; }
-    .gantt-day-cell { border-left: 1px dotted #eee; min-width: 6px; max-width: 6px; padding: 0 !important; }
-    .gantt-today { border-left: 2px solid #dc3545 !important; }
-    /* Bar segments: each cell in the bar range gets a colored div */
-    .gantt-seg { height: 18px; width: 100%; display: block; border-top: 1px solid transparent; border-bottom: 1px solid transparent; }
-    .gantt-seg-first { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-left: 1px solid transparent; }
-    .gantt-seg-last  { border-top-right-radius: 4px; border-bottom-right-radius: 4px; border-right: 1px solid transparent; }
-    /* Wave task bars: Qual = orange tones, Prod = purple tones */
-    .gantt-seg.wave-qual { background: #fde8d0; border-color: #f0ad4e; }
-    .gantt-seg.wave-prod { background: #e8d5f5; border-color: #9b59b6; }
-    .gantt-seg.wave-qual.status-arbeit { background: #fd7e14; border-color: #e8590c; animation: pulse 1.5s infinite; }
-    .gantt-seg.wave-prod.status-arbeit { background: #9b59b6; border-color: #7d3c98; animation: pulse 1.5s infinite; }
-    .gantt-seg.wave-qual.status-fertig { background: #28a745; border-color: #1e7e34; }
-    .gantt-seg.wave-prod.status-fertig { background: #28a745; border-color: #1e7e34; }
-    /* Batch bars: status-based colors */
-    .gantt-seg.batch-prepared  { background: #cce5ff; border-color: #80bdff; }
-    .gantt-seg.batch-executing { background: #ffc107; border-color: #e0a800; animation: pulse 1.5s infinite; }
-    .gantt-seg.batch-linking   { background: #17a2b8; border-color: #117a8b; }
-    .gantt-seg.batch-completed { background: #28a745; border-color: #1e7e34; }
-
-    /* Task List */
-    .task-row { transition: background 0.2s; }
-    .task-row:hover { background: #f0f4ff; }
-    .status-badge { cursor: pointer; font-size: 0.8rem; }
-    .status-badge:hover { opacity: 0.8; }
-    .task-env { font-size: 0.7rem; font-weight: 700; }
-    .task-env.qual { color: #fd7e14; }
-    .task-env.prod { color: #6f42c1; }
-    .date-range { font-size: 0.8rem; color: #6c757d; }
 </style>
 {% endblock %}
 
@@ -120,15 +77,15 @@
 
     <!-- KPI Cards -->
     <div class="row mb-3" id="kpiRow">
-        <div class="col-md-2">
+        <div class="col-md-3">
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiWaves">-</div>
-                    <div class="kpi-label" data-i18n="dash.kpi.waves" data-i18n-help="dash.kpi.waves_tip" data-inline-help="Anzahl verschiedener Migrationswellen. Jede Welle gruppiert mehrere Batches und hat einen eigenen Zeitplan." data-help-position="bottom">Wellen</div>
+                    <div class="kpi-label" data-i18n="dash.kpi.waves" data-i18n-help="dash.kpi.waves_tip" data-inline-help="Anzahl verschiedener Migrationswellen. Jede Welle gruppiert mehrere Batches." data-help-position="bottom">Wellen</div>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiBatches">-</div>
@@ -136,7 +93,7 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
             <div class="card kpi-card text-center">
                 <div class="card-body py-2">
                     <div class="kpi-value" id="kpiDocs">-</div>
@@ -144,23 +101,7 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card kpi-card text-center border-success">
-                <div class="card-body py-2">
-                    <div class="kpi-value text-success" id="kpiUploaded">-</div>
-                    <div class="kpi-label" data-i18n="dash.kpi.uploaded" data-i18n-help="dash.kpi.uploaded_tip" data-inline-help="Erfolgreich ins Zielsystem hochgeladene Dokumente (Container + Dateien)." data-help-position="bottom">Hochgeladen</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2">
-            <div class="card kpi-card text-center border-info">
-                <div class="card-body py-2">
-                    <div class="kpi-value text-info" id="kpiLinked">-</div>
-                    <div class="kpi-label" data-i18n="dash.kpi.linked" data-i18n-help="dash.kpi.linked_tip" data-inline-help="Dokumente, die erfolgreich mit Geschäftsobjekten im Zielsystem verknüpft wurden." data-help-position="bottom">Verlinkt</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
             <div class="card kpi-card text-center border-danger">
                 <div class="card-body py-2">
                     <div class="kpi-value text-danger" id="kpiFailed">-</div>
@@ -183,60 +124,21 @@
         </div>
     </div>
 
-    <!-- Two-Column Main Layout -->
+    <!-- Wave Overview -->
     <div class="row mb-3">
-        <!-- LEFT: Batches (Kanban) + Task List -->
-        <div class="col-lg-3">
-            <!-- Kanban Board (Wave-oriented) -->
-            <div class="card mb-3">
-                <div class="card-header py-2">
-                    <h6 class="mb-0"><i class="fas fa-columns"></i> <span data-i18n="dash.card.batches">Batches</span></h6>
-                </div>
-                <div class="card-body p-2" style="max-height: 420px; overflow-y: auto;">
-                    <div id="kanbanBoard">
-                        <div class="text-center py-4">
-                            <div class="spinner-border spinner-border-sm" role="status"></div>
-                            <span class="text-muted ml-2" data-i18n="loading">Lade...</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Task List -->
+        <div class="col-12">
             <div class="card">
-                <div class="card-header py-2">
-                    <h6 class="mb-0"><i class="fas fa-tasks"></i> <span data-i18n="dash.card.tasks">Aufgaben</span></h6>
-                </div>
-                <div class="card-body p-0" style="max-height: 350px; overflow-y: auto;">
-                    <table class="table table-sm mb-0" id="taskListTable">
-                        <thead class="thead-light">
-                            <tr>
-                                <th style="width:35%" data-i18n="dash.task.wave_task">Welle / Aufgabe</th>
-                                <th style="width:30%" data-i18n="dash.task.period">Zeitraum</th>
-                                <th style="width:15%" data-i18n="dash.task.status">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="taskListBody">
-                            <tr><td colspan="3" class="text-center text-muted py-3" data-i18n="loading">Lade...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- RIGHT: Gantt Timeline -->
-        <div class="col-lg-9">
-            <div class="card" style="height: 100%;">
                 <div class="card-header d-flex justify-content-between align-items-center py-2">
-                    <h6 class="mb-0"><i class="fas fa-project-diagram"></i> <span data-i18n="dash.card.wave_schedule">Wellen-Zeitplan</span></h6>
+                    <h6 class="mb-0"><i class="fas fa-stream"></i> <span data-i18n="dash.card.waves">Wellen</span></h6>
                     <button class="btn btn-sm btn-outline-primary" onclick="openWavePlanModal()">
                         <i class="fas fa-plus"></i> <span data-i18n="dash.card.plan_wave">Welle planen</span>
                     </button>
                 </div>
-                <div class="card-body p-2" style="overflow-x: auto;">
-                    <div class="gantt-container" id="ganttContainer">
-                        <div class="text-center text-muted py-3">
-                            <i class="fas fa-spinner fa-spin"></i> <span data-i18n="dash.loading_schedule">Lade Zeitplan...</span>
+                <div class="card-body p-2">
+                    <div id="waveOverview">
+                        <div class="text-center py-4">
+                            <div class="spinner-border spinner-border-sm" role="status"></div>
+                            <span class="text-muted ml-2" data-i18n="loading">Lade...</span>
                         </div>
                     </div>
                 </div>

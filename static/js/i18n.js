@@ -152,9 +152,11 @@
         // Cards
         'dash.card.batches':            { de: 'Batches', en: 'Batches' },
         'dash.card.tasks':              { de: 'Aufgaben', en: 'Tasks' },
+        'dash.card.waves':              { de: 'Wellen', en: 'Waves' },
         'dash.card.wave_schedule':      { de: 'Wellen-Zeitplan', en: 'Wave Schedule' },
         'dash.card.plan_wave':          { de: 'Welle planen', en: 'Plan Wave' },
         'dash.card.all_batches':        { de: 'Alle Batches', en: 'All Batches' },
+        'dash.wave_empty':              { de: 'Noch keine Batches in dieser Welle', en: 'No batches in this wave yet' },
 
         // Task table
         'dash.task.wave_task':          { de: 'Welle / Aufgabe', en: 'Wave / Task' },

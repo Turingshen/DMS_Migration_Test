@@ -6,7 +6,6 @@ const batchId = window.BATCH_ID;
 // Progress polling for execution (declared early to avoid TDZ issues)
 let progressInterval = null;
 let pollingTimeoutId = null; // Track the delayed start timeout
-let executionStartTime = null;
 let completionAlertShown = false; // Prevent duplicate completion alerts
 
 // Error Category Details - lazy initialized because t() may not be available yet
@@ -483,25 +482,6 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     if (failedOpt) failedOpt.textContent = `${t('prev.filter.failed')} (${failedCount.toLocaleString()})`;
     if (partialOpt) partialOpt.textContent = `${t('prev.filter.partial')} (${partialCount.toLocaleString()})`;
     
-    // Calculate runtime based on REALISTIC estimates:
-    // - API initialization (test ping, auth, etc.): ~60 seconds fixed overhead
-    // - Transfer rate: ~1 sec/MB
-    // - Container creation: ~5 seconds per container (includes API latency)
-    // - Safety buffer: 30% (accounts for network variability)
-    const apiInitOverhead = 60;
-    const transferRate = 1.0;
-    const containerOverhead = 5.0;
-    const safetyBuffer = 1.3;
-    
-    const totalSizeMB = (stats.total_size_bytes || 0) / (1024 * 1024);
-    const transferTime = totalSizeMB * transferRate;
-    const processingTime = toExecuteCount * containerOverhead;
-    const totalSerialRuntime = (transferTime + processingTime) * safetyBuffer;
-    
-    const maxWorkers = currentMaxWorkers;
-    const parallelRuntime = totalSerialRuntime / maxWorkers;
-    const totalRuntime = toExecuteCount > 0 ? apiInitOverhead + parallelRuntime : 0;
-    
     // Update statistics display (use toExecuteCount for "remaining work", totalActive excludes skipped)
     document.getElementById('statRecords').innerHTML = toExecuteCount > 0 
         ? `${toExecuteCount.toLocaleString()} <small class="text-muted">(${successCount} ✓)</small>`
@@ -509,12 +489,7 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
         : `<span class="text-success">${t('prev.stats.all_done', {n: totalActive.toLocaleString()})}</span>`
             + (skippedCount > 0 ? `<br><small class="text-muted" style="font-size:10px;">${t('prev.stats.of_total', {n: totalCount.toLocaleString()})}</small>` : '');
     document.getElementById('statTotalSize').textContent = formatFileSize(stats.total_size_bytes);
-    document.getElementById('statTiny').textContent = buckets.tiny || 0;
-    document.getElementById('statSmall').textContent = buckets.small || 0;
-    document.getElementById('statMedium').textContent = buckets.medium || 0;
     document.getElementById('statLarge').textContent = (buckets.large || 0) > 0 ? (buckets.large + ' ⚠️') : '0';
-    document.getElementById('statUnknown').textContent = buckets.unknown || 0;
-    document.getElementById('statRuntime').textContent = toExecuteCount > 0 ? formatDuration(totalRuntime) : '-';
     
     // Update selection info to show preview info
     const selectionInfo = document.getElementById('selectionInfo');
@@ -523,19 +498,6 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
     } else {
         selectionInfo.textContent = t('prev.stats.n_records', {n: totalRecords});
     }
-    
-    // Build runtime breakdown
-    const breakdown = [];
-    if (buckets.tiny > 0) breakdown.push(`⚡${buckets.tiny}`);
-    if (buckets.small > 0) breakdown.push(`🟢${buckets.small}`);
-    if (buckets.medium > 0) breakdown.push(`🟡${buckets.medium}`);
-    if (buckets.large > 0) breakdown.push(`🔴${buckets.large}`);
-    if (buckets.unknown > 0) breakdown.push(`❓${buckets.unknown}`);
-    
-    const detailText = toExecuteCount > 0 
-        ? `~1min Init + (${formatFileSize(stats.total_size_bytes)} + ${toExecuteCount}×5s) ÷ ${maxWorkers}`
-        : t('runtime.no_pending');
-    document.getElementById('statRuntimeDetail').textContent = detailText;
     
     // Non-Latin character warnings
     const nonLatinCount = stats.non_latin_count || 0;
@@ -549,21 +511,6 @@ function updateBatchStatisticsFromServer(stats, totalRecords) {
             nlBox.style.display = 'none';
         }
     }
-    
-    // Store for modal details
-    window.runtimeStats = {
-        buckets: buckets,
-        totalSize: stats.total_size_bytes,
-        totalRuntime: totalRuntime,
-        totalSerialRuntime: totalSerialRuntime,
-        parallelRuntime: parallelRuntime,
-        apiInitOverhead: apiInitOverhead,
-        maxWorkers: maxWorkers,
-        transferRate: transferRate,
-        containerOverhead: containerOverhead,
-        safetyBuffer: safetyBuffer,
-        containerCount: toExecuteCount
-    };
 }
 
 function updateBatchStatistics(records) {
@@ -571,161 +518,23 @@ function updateBatchStatistics(records) {
     const pendingRecords = records.filter(r => r.execution_status !== 'success');
     const successCount = records.filter(r => r.execution_status === 'success').length;
     
-    // Size buckets for statistics display
-    const buckets = {
-        tiny:    { max: 1,   count: 0, size: 0, label: '⚡ ≤1MB' },
-        small:   { max: 10,  count: 0, size: 0, label: '🟢 1-10MB' },
-        medium:  { max: 99,  count: 0, size: 0, label: '🟡 10-99MB' },
-        large:   { max: Infinity, count: 0, size: 0, label: '🔴 >99MB' },
-        unknown: { count: 0 }
-    };
-    
     let totalSize = 0;
+    let largeCount = 0;
     
     pendingRecords.forEach(record => {
         const bytes = record.file_size_bytes;
         if (bytes !== null && bytes !== undefined && !isNaN(bytes) && bytes > 0) {
-            const sizeMB = bytes / (1024 * 1024);
             totalSize += Number(bytes);
-            
-            if (sizeMB <= 1) {
-                buckets.tiny.count++;
-                buckets.tiny.size += bytes;
-            } else if (sizeMB <= 10) {
-                buckets.small.count++;
-                buckets.small.size += bytes;
-            } else if (sizeMB <= 99) {
-                buckets.medium.count++;
-                buckets.medium.size += bytes;
-            } else {
-                buckets.large.count++;
-                buckets.large.size += bytes;
-            }
-        } else {
-            buckets.unknown.count++;
+            if (bytes / (1024 * 1024) > 99) largeCount++;
         }
     });
-    
-    // Calculate runtime based on response-based pacing
-    // REALISTIC ESTIMATES based on actual observations:
-    // - API initialization (test ping, auth, etc.): ~60 seconds fixed overhead
-    // - Transfer rate: ~1 sec/MB (download + upload combined)
-    // - Container creation: ~3-4 seconds per container (API call, processing, response)
-    // - Safety buffer: 20% for network variability
-    
-    const apiInitOverhead = 60;    // Fixed startup cost in seconds
-    const transferRate = 1.0;      // seconds per MB
-    const containerOverhead = 5.0; // API overhead per container (includes latency)
-    const safetyBuffer = 1.3;      // 30% buffer for network variability
-    
-    // Total runtime = init + (transfer time + overhead per container) * safety
-    const totalSizeMB = totalSize / (1024 * 1024);
-    const containerCount = pendingRecords.length;
-    const transferTime = totalSizeMB * transferRate;
-    const processingTime = containerCount * containerOverhead;
-    const totalSerialRuntime = (transferTime + processingTime) * safetyBuffer;
-    
-    // Divide by number of workers for parallel execution
-    const maxWorkers = currentMaxWorkers;
-    const parallelRuntime = totalSerialRuntime / maxWorkers;
-    
-    // Add fixed init overhead (not parallelizable)
-    const totalRuntime = pendingRecords.length > 0 ? apiInitOverhead + parallelRuntime : 0;
     
     // Update statistics display - show pending count and success count
     document.getElementById('statRecords').innerHTML = pendingRecords.length > 0 
         ? `${pendingRecords.length} <small class="text-muted">(${successCount} ✓)</small>`
         : `<span class="text-success">${t('prev.stats.all_done', {n: records.length})}</span>`;
     document.getElementById('statTotalSize').textContent = formatFileSize(totalSize);
-    document.getElementById('statTiny').textContent = buckets.tiny.count;
-    document.getElementById('statSmall').textContent = buckets.small.count;
-    document.getElementById('statMedium').textContent = buckets.medium.count;
-    document.getElementById('statLarge').textContent = buckets.large.count > 0 ? buckets.large.count + ' ⚠️' : '0';
-    document.getElementById('statUnknown').textContent = buckets.unknown.count;
-    document.getElementById('statRuntime').textContent = pendingRecords.length > 0 ? formatDuration(totalRuntime) : '-';
-    
-    // Build runtime breakdown
-    const breakdown = [];
-    if (buckets.tiny.count > 0) breakdown.push(`⚡${buckets.tiny.count}`);
-    if (buckets.small.count > 0) breakdown.push(`🟢${buckets.small.count}`);
-    if (buckets.medium.count > 0) breakdown.push(`🟡${buckets.medium.count}`);
-    if (buckets.large.count > 0) breakdown.push(`🔴${buckets.large.count}`);
-    if (buckets.unknown.count > 0) breakdown.push(`❓${buckets.unknown.count}`);
-    
-    const detailText = pendingRecords.length > 0 
-        ? `~1min Init + (${formatFileSize(totalSize)} + ${containerCount}×5s) ÷ ${maxWorkers}`
-        : t('runtime.no_pending');
-    document.getElementById('statRuntimeDetail').textContent = detailText;
-    
-    // Store for modal details
-    window.runtimeStats = {
-        buckets: buckets,
-        totalSize: totalSize,
-        totalRuntime: totalRuntime,
-        totalSerialRuntime: totalSerialRuntime,
-        parallelRuntime: parallelRuntime,
-        apiInitOverhead: apiInitOverhead,
-        maxWorkers: maxWorkers,
-        transferRate: transferRate,
-        containerOverhead: containerOverhead,
-        safetyBuffer: safetyBuffer,
-        containerCount: containerCount
-    };
-}
-
-function showRuntimeDetails() {
-    if (!window.runtimeStats) return;
-    
-    const stats = window.runtimeStats;
-    const b = stats.buckets;
-    
-    const details = `
-═══ Runtime Calculation (Realistic Estimate) ═══
-
-📦 PACKAGE BREAKDOWN:
-┌─────────────┬───────┬──────────┐
-│ Package     │ Count │ Size     │
-├─────────────┼───────┼──────────┤
-│ ⚡ ≤1MB     │ ${b.tiny.count.toString().padStart(5)} │ ${formatFileSize(b.tiny.size || 0).padStart(8)} │
-│ 🟢 1-10MB   │ ${b.small.count.toString().padStart(5)} │ ${formatFileSize(b.small.size || 0).padStart(8)} │
-│ 🟡 10-99MB  │ ${b.medium.count.toString().padStart(5)} │ ${formatFileSize(b.medium.size || 0).padStart(8)} │
-│ 🔴 >99MB    │ ${b.large.count.toString().padStart(5)} │ ${formatFileSize(b.large.size || 0).padStart(8)} │
-│ ❓ Unknown  │ ${b.unknown.count.toString().padStart(5)} │      -   │
-└─────────────┴───────┴──────────┘
-
-📊 CALCULATION:
-1️⃣ API-Initialisierung (Ping, Auth): ~${stats.apiInitOverhead}s (fix)
-
-2️⃣ Transfer Time:
-   ${formatFileSize(stats.totalSize)} × ${stats.transferRate}s/MB = ${formatDuration(stats.totalSize / (1024*1024) * stats.transferRate)}
-
-3️⃣ Container-Verarbeitung:
-   ${stats.containerCount} Container × ${stats.containerOverhead}s = ${formatDuration(stats.containerCount * stats.containerOverhead)}
-
-4️⃣ Sicherheitspuffer: +${Math.round((stats.safetyBuffer - 1) * 100)}%
-
-🚀 PARALLEL EXECUTION:
-• Workers: ${stats.maxWorkers}
-• Serielle Zeit: ${formatDuration(stats.totalSerialRuntime)}
-• Parallel: ${formatDuration(stats.parallelRuntime)}
-• + Init: ${formatDuration(stats.apiInitOverhead)}
-
-⏱️ GESCHÄTZTE LAUFZEIT: ${formatDuration(stats.totalRuntime)}
-
-💡 HINWEIS:
-• Grobe Schätzung basierend auf Erfahrungswerten
-• Tatsächliche Zeit variiert je nach Netzwerk/Last
-    `.trim();
-    
-    alert(details);
-}
-
-function formatDuration(seconds) {
-    if (seconds < 60) return Math.round(seconds) + ' sec';
-    if (seconds < 3600) return Math.round(seconds / 60) + ' min';
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.round((seconds % 3600) / 60);
-    return hours + 'h ' + mins + 'm';
+    document.getElementById('statLarge').textContent = largeCount > 0 ? largeCount + ' ⚠️' : '0';
 }
 
 function displayRecords(records) {
@@ -962,10 +771,6 @@ function checkAndReconnectExecution() {
                 if (cancelBtn) cancelBtn.style.display = 'inline-block';
                 // Start progress polling
                 startProgressPolling();
-                // We don't have the original start time, estimate from progress
-                if (data.executed > 0) {
-                    executionStartTime = Date.now() - 2000; // rough estimate
-                }
             }
         })
         .catch(() => { /* ignore */ });
@@ -987,9 +792,8 @@ function showProgressBar() {
                 <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
                      role="progressbar" style="width: 0%">0%</div>
             </div>
-            <div class="d-flex justify-content-between mt-2">
+            <div class="mt-2">
                 <small id="progressDetails">${t('mig.starting')}</small>
-                <small id="progressETA">${t('mig.eta_calc')}</small>
             </div>
             <div class="text-end mt-1">
                 <small id="progressPulse" class="text-muted"><i class="fas fa-circle text-success" style="font-size:6px;vertical-align:middle"></i> ${t('mig.polling')}</small>
@@ -998,7 +802,6 @@ function showProgressBar() {
         document.getElementById('batchStats').parentNode.appendChild(progressDiv);
     }
     progressDiv.style.display = 'block';
-    executionStartTime = Date.now();
 }
 
 function hideProgressBar() {
@@ -1012,7 +815,6 @@ function updateProgressDisplay(data) {
     const bar = document.getElementById('progressBar');
     const stats = document.getElementById('progressStats');
     const details = document.getElementById('progressDetails');
-    const eta = document.getElementById('progressETA');
     
     if (!bar) return;
     
@@ -1041,21 +843,6 @@ function updateProgressDisplay(data) {
     }
     detailsHtml += ` | <span class="text-danger">✗ ${data.failed}</span> | ${t('mig.remaining', {n: data.remaining})}`;
     details.innerHTML = detailsHtml;
-    
-    // Calculate ETA
-    if (data.executed > 0 && executionStartTime) {
-        const elapsed = (Date.now() - executionStartTime) / 1000;
-        const rate = data.executed / elapsed;
-        const etaSeconds = data.remaining / rate;
-        
-        if (etaSeconds > 3600) {
-            eta.textContent = `ETA: ${Math.floor(etaSeconds/3600)}h ${Math.round((etaSeconds%3600)/60)}m`;
-        } else if (etaSeconds > 60) {
-            eta.textContent = `ETA: ${Math.round(etaSeconds/60)}m ${Math.round(etaSeconds%60)}s`;
-        } else {
-            eta.textContent = `ETA: ${Math.round(etaSeconds)}s`;
-        }
-    }
 }
 
 function pollProgress() {
@@ -1575,7 +1362,6 @@ function retryFailed() {
         document.getElementById('progressBar').style.width = '0%';
         document.getElementById('progressBar').textContent = '0%';
         document.getElementById('progressDetails').textContent = t('mig.retry_init');
-        document.getElementById('progressETA').textContent = t('mig.eta_calc');
         startProgressPolling();
         
         // Step 3: Execute ONLY the reset records via execute_selected

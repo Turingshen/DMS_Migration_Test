@@ -349,7 +349,6 @@
         'prep.msg.creating':            { de: 'Starte Batch-Erstellung...', en: 'Starting batch creation...' },
         'prep.msg.processing':          { de: 'Verarbeite...', en: 'Processing...' },
         'prep.msg.connection_error':    { de: 'Verbindungsfehler', en: 'Connection error' },
-        'prep.msg.enter_sql':           { de: 'Bitte eine SQL-Query eingeben', en: 'Please enter a SQL query' },
         'prep.msg.choose_file':         { de: 'Bitte eine Datei auswählen', en: 'Please choose a file' },
         'prep.msg.creating2':           { de: 'Wird erstellt...', en: 'Creating...' },
         'prep.msg.created_ok':          { de: 'Migration Batch erfolgreich erstellt!', en: 'Migration batch created successfully!' },
@@ -1256,21 +1255,6 @@
         'val.links.not_linked':        { de: 'Linking nicht durchgeführt', en: 'Linking not performed' },
 
         // ══════════════════════════════════════════════════════════════
-        // WAVE OVERVIEW (wave_overview.html)
-        // ══════════════════════════════════════════════════════════════
-        'waves.title':                 { de: 'Wellen-Übersicht', en: 'Wave Overview' },
-        'waves.subtitle':              { de: 'Überblick über alle Migrationswellen und deren Fortschritt', en: 'Overview of all migration waves and their progress' },
-        'waves.refresh':               { de: 'Aktualisieren', en: 'Refresh' },
-        'waves.stat.batches':          { de: 'Batches', en: 'Batches' },
-        'waves.stat.docs':             { de: 'Dokumente', en: 'Documents' },
-        'waves.stat.uploaded':         { de: 'Hochgeladen', en: 'Uploaded' },
-        'waves.stat.linked':           { de: 'Verlinkt', en: 'Linked' },
-        'waves.stat.errors':           { de: 'Fehler', en: 'Errors' },
-        'waves.stat.pending':          { de: 'Ausstehend', en: 'Pending' },
-        'waves.loading':               { de: 'Lade Wellen-Daten...', en: 'Loading wave data...' },
-        'waves.refresh_title':         { de: 'Aktualisieren', en: 'Refresh' },
-
-        // ══════════════════════════════════════════════════════════════
         // LANGUAGE TOGGLE
         // ══════════════════════════════════════════════════════════════
         'lang.de':                     { de: 'Deutsch', en: 'German' },
@@ -1369,8 +1353,10 @@
         localStorage.setItem(STORAGE_KEY, lang);
         applyAll();
 
-        // Dispatch event for other modules (contextual_help, inline_help, etc.)
-        window.dispatchEvent(new CustomEvent('languageChanged', { detail: { lang: lang } }));
+        // Dispatch event for other modules (contextual_help, inline_help, etc.).
+        // Dispatched on `document` because those modules listen on `document`
+        // (an event dispatched on `window` does NOT reach document-level listeners).
+        document.dispatchEvent(new CustomEvent('languageChanged', { detail: { lang: lang } }));
     }
 
     // ── Public API ───────────────────────────────────────────────────

@@ -182,7 +182,6 @@
         if (path.includes('/preview'))             return 'preview';
         if (path.includes('/object-mapping'))       return 'mapping';
         if (path.includes('/details'))             return 'details';
-        if (path.includes('/wave-overview'))        return 'waves';
         return 'dashboard';
     }
 

@@ -1,6 +1,6 @@
 /**
  * batch_cards.js — Shared batch card and Kanban rendering
- * Used by index.html and wave_overview.html
+ * Used by index.html
  */
 
 /**

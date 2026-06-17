@@ -304,7 +304,7 @@ function createFileBatch() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SHARED: Submit to /prepare (SQL + File paths)
+//  SHARED: Submit to /prepare (File paths)
 // ═══════════════════════════════════════════════════════════════
 function appendMetadata(formData) {
     formData.append('wave', document.getElementById('batchWave').value);

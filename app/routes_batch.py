@@ -20,12 +20,6 @@ def index():
     return render_template('index.html', **get_template_context())
 
 
-@migrate_bp.route('/wave-overview')
-def wave_overview():
-    """Wave overview page - Kanban view of migration waves and their progress."""
-    return render_template('wave_overview.html', **get_template_context())
-
-
 @migrate_bp.route('/batches', methods=['GET'])
 def get_batches():
     """Get list of all migration batches."""

@@ -50,15 +50,15 @@
         dashboard: {
             title: 'Dashboard — Batch-Übersicht',
             icon: 'fas fa-tachometer-alt',
-            intro: 'Das Dashboard zeigt alle Migrationsbatches als Kanban-Board, gruppiert nach Wellen. Hier starten Sie neue Batches und verfolgen den Fortschritt.',
+            intro: 'Das Dashboard zeigt alle Migrationsbatches gruppiert nach Wellen als Wellen-Übersicht. Hier behalten Sie den Fortschritt im Blick und öffnen einzelne Batches.',
             sections: [
                 {
                     title: 'KPI-Karten',
-                    content: 'Am oberen Rand sehen Sie Gesamtstatistiken: Anzahl Dokumente, Erfolgsrate und Datenvolumen über alle Batches hinweg.'
+                    content: 'Am oberen Rand sehen Sie vier Gesamtkennzahlen über alle Batches:\n• <b>Wellen</b> — Anzahl der Migrationswellen\n• <b>Batches</b> — Anzahl aller Batches\n• <b>Dokumente</b> — Gesamtzahl der DMS-Dokumente\n• <b>Fehler</b> (rot) — Fehlgeschlagene Uploads/Verlinkungen'
                 },
                 {
-                    title: 'Kanban-Board',
-                    content: 'Jeder Batch erscheint als Karte in der Spalte seiner Wave. Die farbige Markierung zeigt die aktuelle Phase:\n• <b>Grau</b> = Vorbereitung\n• <b>Blau</b> = Upload läuft\n• <b>Grün</b> = Upload fertig\n• <b>Orange</b> = Verlinkung\n• <b>Dunkelgrün</b> = Abgeschlossen'
+                    title: 'Wellen-Übersicht',
+                    content: 'Die Batches sind nach Wellen gruppiert. Jede Welle zeigt aggregierte Fortschrittsbalken für Upload und Verlinkung sowie die enthaltenen Batches als Karten. Mit dem <b>Wellen-Filter</b> darüber blenden Sie einzelne Wellen ein/aus. Geplante, aber noch leere Wellen werden ebenfalls angezeigt.'
                 },
                 {
                     title: 'Batch-Karte — Aufbau im Detail',
@@ -70,7 +70,7 @@
                 },
                 {
                     title: 'Neuen Batch erstellen',
-                    content: 'Klicken Sie auf <b>„+ Neuer Batch"</b> um zur Batch-Erstellung zu gelangen. Dort wählen Sie Werke und laden DMS-Objekte aus der Quelldatenbank.'
+                    content: 'Klicken Sie oben auf den Workflow-Schritt <b>„1. Batch erstellen"</b> um zur Batch-Erstellung zu gelangen. Dort wählen Sie Werke und laden DMS-Objekte aus der Quelldatenbank.'
                 },
                 {
                     title: 'Batch öffnen',
@@ -78,7 +78,7 @@
                 },
                 {
                     title: 'Wellenverwaltung',
-                    content: 'Über <b>„Wellenverwaltung"</b> in der Navbar können Sie Wave-Pläne erstellen und zeitlich planen (Qual-Load, Qual-Link, Prod-Load, Prod-Link Phasen).'
+                    content: 'Über <b>„Wellenverwaltung"</b> in der Navbar oder den Button <b>„Welle planen"</b> legen Sie eine Welle an. Ein Wellenplan besteht aus dem Wellennamen und optionalen Notizen — die zugeordneten Batches erscheinen anschließend in der Wellen-Übersicht.'
                 }
             ]
         },
@@ -146,7 +146,7 @@
         prepare: {
             title: 'Schritt 1 — Batch erstellen',
             icon: 'fas fa-plus-circle',
-            intro: 'Erstellen Sie einen neuen Migrationsbach, indem Sie Werke auswählen und DMS-Objekte aus dem Quellsystem laden.',
+            intro: 'Erstellen Sie einen neuen Migrationsbatch. Dafür gibt es zwei Wege: Werke auswählen und DMS-Objekte laden (Tab „DMS Objekte"), oder eine fertige DMS-Key-Liste hochladen (Tab „DMS-Key Liste").',
             sections: [
                 {
                     title: '1. Werke auswählen',
@@ -167,6 +167,10 @@
                 {
                     title: '5. Batch erstellen',
                     content: 'Klicken Sie <b>„Batch erstellen"</b>. Das System:\n• Liest die lokalen DMS-Objekte\n• Wendet Filter und Ausschlüsse an\n• Erstellt den Batch (ID: DMS_YYYYMMDD_HHMMSS)\n• Generiert Ziel-Dokumentennummern (intern: automatisch, extern: beibehalten)\n\nSie werden anschließend zur Vorschau weitergeleitet.'
+                },
+                {
+                    title: 'Alternative: DMS-Key Liste hochladen',
+                    content: 'Statt Werke zu wählen, können Sie im Tab <b>„DMS-Key Liste"</b> eine fertige Liste von DMS-Keys hochladen (Excel/CSV):\n\n• <b>Template</b> über „Template herunterladen" laden — benötigte Spalten: <b>Documenttype, Documentversion, Documentpart, Documentnumber</b>\n• Key-Aufbau: <b>Typ / Version / Teil / Dokumentnummer</b> (intern oder extern)\n• Datei wählen und <b>„Keys laden & prüfen"</b> klicken\n• Die Objekt-Verknüpfungen werden anschließend automatisch in DRAD ermittelt — wie bei „DMS Objekte"\n• Nach der Prüfung erstellen Sie den Batch wie gewohnt'
                 }
             ],
             warnings: [
@@ -183,7 +187,7 @@
             sections: [
                 {
                     title: '1. Batch-Statistiken prüfen',
-                    content: 'Oben sehen Sie:\n• <b>Gesamtanzahl</b> Datensätze\n• <b>Dateigrößen-Verteilung</b> (Mini/Klein/Mittel/Groß)\n• <b>Ablage-Typ</b>: KPRO (Content Repository) vs. DB (Datenbank)\n• <b>Status-Verteilung</b>: Pending, Success, Failed, Partial'
+                    content: 'Oben sehen Sie:\n• <b>Gesamtanzahl</b> Datensätze (mit ✓ Erfolge)\n• <b>Ausgeschlossen / KPRO / DB</b> — Herkunft & Ablage\n• <b>Gesamtgröße</b> und eine Warnung bei <b>großen Dateien (>99MB)</b>\n• <b>Pacing</b> — aktuelle Verzögerungseinstellung\n• <b>Status-Verteilung</b> im Filter: Pending, Success, Failed, Partial'
                 },
                 {
                     title: '⭐ 2. „Daten anreichern" ausführen',
@@ -270,22 +274,6 @@
                     content: 'Klicken Sie <b>„Export"</b> um alle Datei-Details als formatierte Excel-Datei herunterzuladen:\n• Gleiche 12 Spalten wie die Web-Ansicht\n• Farbliche Hervorhebung bei Unterschieden (gelb)\n• Grün/Rot für Status\n• Autofilter, fixierte Kopfzeile, automatische Spaltenbreite'
                 }
             ]
-        },
-
-        waves: {
-            title: 'Wellen-Übersicht & Planung',
-            icon: 'fas fa-stream',
-            intro: 'Verwalten Sie Migrationswellen und planen Sie die zeitliche Abfolge der Migration.',
-            sections: [
-                {
-                    title: 'Wellen-Konzept',
-                    content: 'Batches werden in <b>Wellen (Waves)</b> gruppiert. Jede Welle hat typischerweise 4 Phasen:\n1. <b>Qual Load</b> — Qualitätssystem: Upload\n2. <b>Qual Link</b> — Qualitätssystem: Verlinkung\n3. <b>Prod Load</b> — Produktivsystem: Upload\n4. <b>Prod Link</b> — Produktivsystem: Verlinkung'
-                },
-                {
-                    title: 'Wellenplan erstellen',
-                    content: 'Für jede Phase können Sie Start-/Enddatum und Status festlegen:\n• <b>Vorbereitung</b> — Noch nicht begonnen\n• <b>Arbeit</b> — In Bearbeitung\n• <b>Fertig</b> — Abgeschlossen'
-                }
-            ]
         }
     };
 
@@ -334,15 +322,15 @@
         dashboard: {
             title: 'Dashboard — Batch Overview',
             icon: 'fas fa-tachometer-alt',
-            intro: 'The dashboard shows all migration batches as a Kanban board, grouped by waves. Here you create new batches and track progress.',
+            intro: 'The dashboard shows all migration batches grouped by waves as a wave overview. Here you track progress and open individual batches.',
             sections: [
                 {
                     title: 'KPI Cards',
-                    content: 'At the top you see overall statistics: number of documents, success rate and data volume across all batches.'
+                    content: 'At the top you see four overall metrics across all batches:\n• <b>Waves</b> — Number of migration waves\n• <b>Batches</b> — Number of all batches\n• <b>Documents</b> — Total number of DMS documents\n• <b>Errors</b> (red) — Failed uploads/linkings'
                 },
                 {
-                    title: 'Kanban Board',
-                    content: 'Each batch appears as a card in its wave\'s column. The colored marker indicates the current phase:\n• <b>Gray</b> = Preparation\n• <b>Blue</b> = Upload running\n• <b>Green</b> = Upload complete\n• <b>Orange</b> = Linking\n• <b>Dark green</b> = Completed'
+                    title: 'Wave Overview',
+                    content: 'Batches are grouped by wave. Each wave shows aggregated progress bars for upload and linking, plus the contained batches as cards. Use the <b>wave filter</b> above to show/hide individual waves. Planned but still empty waves are also shown.'
                 },
                 {
                     title: 'Batch Card — Detailed Structure',
@@ -354,7 +342,7 @@
                 },
                 {
                     title: 'Create New Batch',
-                    content: 'Click <b>"+ New Batch"</b> to go to the batch creation page. There you select plants and load DMS objects from the source database.'
+                    content: 'Click the workflow step <b>"1. Create Batch"</b> at the top to go to the batch creation page. There you select plants and load DMS objects from the source database.'
                 },
                 {
                     title: 'Open Batch',
@@ -362,7 +350,7 @@
                 },
                 {
                     title: 'Wave Management',
-                    content: 'Via <b>"Wave Management"</b> in the navbar you can create and schedule wave plans (Qual-Load, Qual-Link, Prod-Load, Prod-Link phases).'
+                    content: 'Via <b>"Wave Management"</b> in the navbar or the <b>"Plan Wave"</b> button you create a wave. A wave plan consists of the wave name and optional notes — the assigned batches then appear in the wave overview.'
                 }
             ]
         },
@@ -451,6 +439,10 @@
                 {
                     title: '5. Create Batch',
                     content: 'Click <b>"Create Batch"</b>. The system:\n• Reads the local DMS objects\n• Applies filters and exclusions\n• Creates the batch (ID: DMS_YYYYMMDD_HHMMSS)\n• Generates target document numbers (internal: automatic, external: retained)\n\nYou will then be redirected to the preview.'
+                },
+                {
+                    title: 'Alternative: Upload DMS Key List',
+                    content: 'Instead of selecting plants, you can upload a ready-made list of DMS keys in the <b>"DMS Key List"</b> tab (Excel/CSV):\n\n• Download the <b>template</b> via "Download Template" — required columns: <b>Documenttype, Documentversion, Documentpart, Documentnumber</b>\n• Key format: <b>Type / Version / Part / Document number</b> (internal or external)\n• Choose the file and click <b>"Load & check keys"</b>\n• The object links are then automatically determined in DRAD — like with "DMS Objects"\n• After the check, create the batch as usual'
                 }
             ],
             warnings: [
@@ -467,7 +459,7 @@
             sections: [
                 {
                     title: '1. Review Batch Statistics',
-                    content: 'At the top you see:\n• <b>Total count</b> of records\n• <b>File size distribution</b> (Tiny/Small/Medium/Large)\n• <b>Storage type</b>: KPRO (Content Repository) vs. DB (Database)\n• <b>Status distribution</b>: Pending, Success, Failed, Partial'
+                    content: 'At the top you see:\n• <b>Total count</b> of records (with ✓ successes)\n• <b>Excluded / KPRO / DB</b> — origin & storage\n• <b>Total size</b> and a warning for <b>large files (>99MB)</b>\n• <b>Pacing</b> — current delay setting\n• <b>Status distribution</b> in the filter: Pending, Success, Failed, Partial'
                 },
                 {
                     title: '⭐ 2. Run "Refresh Data"',
@@ -554,22 +546,6 @@
                     content: 'Click <b>"Export"</b> to download all file details as a formatted Excel file:\n• Same 12 columns as the web view\n• Color highlighting for differences (yellow)\n• Green/Red for status\n• Autofilter, frozen header row, auto-width columns'
                 }
             ]
-        },
-
-        waves: {
-            title: 'Wave Overview & Planning',
-            icon: 'fas fa-stream',
-            intro: 'Manage migration waves and plan the timeline of the migration.',
-            sections: [
-                {
-                    title: 'Wave Concept',
-                    content: 'Batches are grouped into <b>Waves</b>. Each wave typically has 4 phases:\n1. <b>Qual Load</b> — Quality system: Upload\n2. <b>Qual Link</b> — Quality system: Linking\n3. <b>Prod Load</b> — Production system: Upload\n4. <b>Prod Link</b> — Production system: Linking'
-                },
-                {
-                    title: 'Create Wave Plan',
-                    content: 'For each phase you can set start/end date and status:\n• <b>Preparation</b> — Not yet started\n• <b>In progress</b> — Work in progress\n• <b>Done</b> — Completed'
-                }
-            ]
         }
     };
 
@@ -592,7 +568,6 @@
         if (path.includes('/object-mapping'))                 return 'mapping';
         if (path.includes('/details') || path === '/details') return 'details';
         if (path.includes('/validation'))                     return 'details';
-        if (path.includes('/wave-overview'))                  return 'waves';
 
         return 'dashboard'; // fallback
     }

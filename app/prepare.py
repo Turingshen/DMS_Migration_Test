@@ -535,7 +535,9 @@ def apply_translations(data_df, rules):
             data_df[target_col] = None
 
         # Build mask based on condition
-        mask = pd.Series([True] * len(data_df))
+        # NOTE: index-aligned to data_df so it also works when data_df has a
+        # non-contiguous index (e.g. a filtered subset of partially-migrated rows).
+        mask = pd.Series(True, index=data_df.index)
         if cond_col and cond_col in data_df.columns and cond_val is not None:
             col_series = data_df[cond_col].astype(str)
             if cond_op == 'contains':
@@ -554,7 +556,7 @@ def apply_translations(data_df, rules):
             col_series = data_df[source_col].astype(str)
             # Treat '*' or '.*' as wildcard (match all rows)
             if str(source_val).strip() in ('*', '.*'):
-                mask = pd.Series([True] * len(data_df))
+                mask = pd.Series(True, index=data_df.index)
             else:
                 mask = col_series.str.contains(re.escape(str(source_val)), case=False, na=False)
 

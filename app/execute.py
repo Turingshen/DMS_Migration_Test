@@ -294,16 +294,21 @@ def get_filename_from_draw(doknr: str, dokar: str, dokvr: str, doktl: str) -> st
         return ''
     
     try:
-        query = f"""
+        query = """
             SELECT filep
             FROM dil.DRAW
-            WHERE doknr = '{doknr}'
-              AND dokar = '{dokar}'
-              AND dokvr = '{str(dokvr).zfill(2)}'
-              AND doktl = '{str(doktl).zfill(3)}'
+            WHERE doknr = :doknr
+              AND dokar = :dokar
+              AND dokvr = :dokvr
+              AND doktl = :doktl
         """
         with dil_engine.begin() as con:
-            result = con.execute(text(query)).fetchone()
+            result = con.execute(text(query), {
+                'doknr': doknr,
+                'dokar': dokar,
+                'dokvr': str(dokvr).zfill(2),
+                'doktl': str(doktl).zfill(3),
+            }).fetchone()
         
         if result and result[0]:
             filep = str(result[0]).strip()
@@ -1048,7 +1053,7 @@ def load_approved_records(batch_id):
             skip_migration,
             pers_resp_source
         FROM dbo.migration_staging
-        WHERE batch_id = '{batch_id}'
+        WHERE batch_id = :batch_id
             AND skip_migration = 0
             AND execution_status = 'pending'
             AND (target_link_count IS NULL OR target_link_count > 0)
@@ -1056,7 +1061,7 @@ def load_approved_records(batch_id):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(text(query), con)
+        df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
     
     return df
 
@@ -1066,7 +1071,7 @@ def load_specific_records(batch_id, record_ids):
     if not record_ids:
         return pd.DataFrame()
     
-    ids_str = ','.join(str(id) for id in record_ids)
+    ids_str = ','.join(str(int(id)) for id in record_ids)
     query = f"""
         SELECT 
             id,
@@ -1090,7 +1095,7 @@ def load_specific_records(batch_id, record_ids):
             ISNULL(container_created, 0) as container_created,
             pers_resp_source
         FROM dbo.migration_staging
-        WHERE batch_id = '{batch_id}'
+        WHERE batch_id = :batch_id
             AND id IN ({ids_str})
             AND skip_migration = 0
             AND (target_link_count IS NULL OR target_link_count > 0)
@@ -1098,7 +1103,7 @@ def load_specific_records(batch_id, record_ids):
     """
     
     with misc_engine.begin() as con:
-        df = pd.read_sql(text(query), con)
+        df = pd.read_sql(text(query), con, params={'batch_id': batch_id})
     
     return df
 
@@ -3371,20 +3376,20 @@ def is_migration_running(batch_id):
     
     # Also check database status as fallback (in case of crash/restart)
     with misc_engine.connect() as con:
-        result = con.execute(text(f"""
+        result = con.execute(text("""
             SELECT status, total_records, executed_records, 
                    DATEDIFF(MINUTE, created_at, GETDATE()) as minutes_elapsed
             FROM dbo.migration_batch 
-            WHERE batch_id = '{batch_id}'
-        """)).fetchone()
+            WHERE batch_id = :batch_id
+        """), {'batch_id': batch_id}).fetchone()
         
         if result and result.status == 'executing':
             # Check if there are "executing" status records 
-            executing_count = con.execute(text(f"""
+            executing_count = con.execute(text("""
                 SELECT COUNT(*) as cnt 
                 FROM dbo.migration_staging 
-                WHERE batch_id = '{batch_id}' AND execution_status = 'executing'
-            """)).fetchone().cnt
+                WHERE batch_id = :batch_id AND execution_status = 'executing'
+            """), {'batch_id': batch_id}).fetchone().cnt
             
             if executing_count > 0:
                 if VERBOSE_TERMINAL_LOGGING:
@@ -3416,11 +3421,11 @@ def set_migration_lock(batch_id):
 def reset_orphaned_records(batch_id):
     """Reset any records stuck in 'executing' status back to 'pending'."""
     with misc_engine.begin() as con:
-        result = con.execute(text(f"""
+        result = con.execute(text("""
             UPDATE dbo.migration_staging
             SET execution_status = 'pending'
-            WHERE batch_id = '{batch_id}' AND execution_status = 'executing'
-        """))
+            WHERE batch_id = :batch_id AND execution_status = 'executing'
+        """), {'batch_id': batch_id})
         if result.rowcount > 0:
             if VERBOSE_TERMINAL_LOGGING:
                 print(f"[CLEANUP] Reset {result.rowcount} orphaned 'executing' records to 'pending'")
@@ -3590,8 +3595,8 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                     successful_records = 0,
                     failed_records = 0,
                     last_execution_started_at = GETUTCDATE()
-                WHERE batch_id = '{batch_id}'
-            """))
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
         
         # Progress tracking
         completed_count = 0
@@ -3608,8 +3613,8 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                     SET executed_records = {completed_count},
                         successful_records = {success_count},
                         failed_records = {failed_count + partial_count}
-                    WHERE batch_id = '{batch_id}'
-                """))
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id})
         
         # Execute in parallel using ThreadPoolExecutor with PACKAGE-BASED processing
         # This allows cancel/circuit-breaker to work between packages
@@ -3851,8 +3856,8 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                         executed_records = {completed_count},
                         successful_records = {success_count},
                         failed_records = {failed_count + partial_count}
-                    WHERE batch_id = '{batch_id}'
-                """))
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id})
             
             # Clear migration lock
             clear_migration_lock(batch_id)
@@ -3904,7 +3909,7 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
             # Build SQL with optional record_ids filter
             if record_ids:
                 # Execute selected mode - only count the selected records
-                record_ids_str = ','.join(str(id) for id in record_ids)
+                record_ids_str = ','.join(str(int(id)) for id in record_ids)
                 stats_sql = f"""
                     SELECT 
                         COUNT(*) as total_executed,
@@ -3975,8 +3980,8 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
                     executed_records = {total_executed},
                     successful_records = {cumulative_success},
                     failed_records = {cumulative_failed + cumulative_partial}
-                WHERE batch_id = '{batch_id}'
-            """))
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
         
         # Format REAL duration with hours if needed (what user experiences)
         if real_duration >= 3600:
@@ -4148,13 +4153,13 @@ def execute_migration(batch_id, record_ids=None, session_snapshot=None):
         
         # Save statistics to database (separate column, not notes)
         import json
-        stats_json = json.dumps(batch_stats).replace("'", "''")
+        stats_json = json.dumps(batch_stats)
         with misc_engine.begin() as con:
-            con.execute(text(f"""
+            con.execute(text("""
                 UPDATE dbo.migration_batch
-                SET execution_stats = '{stats_json}'
-                WHERE batch_id = '{batch_id}'
-            """))
+                SET execution_stats = :stats_json
+                WHERE batch_id = :batch_id
+            """), {'stats_json': stats_json, 'batch_id': batch_id})
         
         # Print final summary - differentiate between full batch and selected records
         if record_ids:
@@ -4405,7 +4410,7 @@ def load_linkable_records(batch_id, record_ids=None, mappings=None):
     """
     
     if record_ids:
-        ids_str = ','.join(str(rid) for rid in record_ids)
+        ids_str = ','.join(str(int(rid)) for rid in record_ids)
         base_query += f" AND id IN ({ids_str})"
     
     base_query += " ORDER BY id"
@@ -4446,7 +4451,7 @@ def load_linkable_records(batch_id, record_ids=None, mappings=None):
             # Batch update in chunks of 500
             for i in range(0, len(unmapped_ids), 500):
                 chunk = unmapped_ids[i:i+500]
-                ids_str = ','.join(str(rid) for rid in chunk)
+                ids_str = ','.join(str(int(rid)) for rid in chunk)
                 with misc_engine.begin() as con:
                     con.execute(text(f"""
                         UPDATE dbo.migration_staging
@@ -4861,7 +4866,7 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                     if reset_ids:
                         for i in range(0, len(reset_ids), 500):
                             chunk = reset_ids[i:i+500]
-                            ids_str = ','.join(str(rid) for rid in chunk)
+                            ids_str = ','.join(str(int(rid)) for rid in chunk)
                             with misc_engine.begin() as con:
                                 con.execute(text(f"""
                                     UPDATE dbo.migration_staging
@@ -4896,7 +4901,7 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         # Reset all linkable records to 'pending' so the progress bar starts at 0%
         # (otherwise re-runs start at 100% because 'link_failed' counts as completed)
         record_ids_to_reset = [int(r['id']) for _, r in records_df.iterrows()]
-        ids_str = ','.join(str(rid) for rid in record_ids_to_reset)
+        ids_str = ','.join(str(int(rid)) for rid in record_ids_to_reset)
         with misc_engine.begin() as con:
             con.execute(text(f"""
                 UPDATE dbo.migration_staging
@@ -4906,13 +4911,13 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         
         # Update batch phase
         with misc_engine.begin() as con:
-            con.execute(text(f"""
+            con.execute(text("""
                 UPDATE dbo.migration_batch
                 SET migration_phase = 'linking',
                     status = CASE WHEN status IN ('completed', 'completed_with_errors', 'upload_done') 
                                   THEN 'linking' ELSE status END
-                WHERE batch_id = '{batch_id}'
-            """))
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
         
         # Progress tracking
         batch_start_time = time.time()
@@ -5029,8 +5034,8 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 con.execute(text(f"""
                     UPDATE dbo.migration_batch
                     SET executed_records = {completed_count}
-                    WHERE batch_id = '{batch_id}'
-                """))
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id})
         
         # Final statistics
         duration = time.time() - batch_start_time
@@ -5038,10 +5043,10 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         # Determine final phase
         # Count skipped records from DB (includes bulk-skipped by load_linkable_records)
         with misc_engine.begin() as con:
-            skipped_in_db = con.execute(text(f"""
+            skipped_in_db = con.execute(text("""
                 SELECT COUNT(*) FROM dbo.migration_staging
-                WHERE batch_id = '{batch_id}' AND link_status = 'link_skipped'
-            """)).scalar() or 0
+                WHERE batch_id = :batch_id AND link_status = 'link_skipped'
+            """), {'batch_id': batch_id}).scalar() or 0
         if cancel_reason:
             final_phase = 'link_cancelled'
             final_status = 'link_cancelled'
@@ -5061,8 +5066,8 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
                 UPDATE dbo.migration_batch
                 SET migration_phase = '{final_phase}',
                     status = '{final_status}'
-                WHERE batch_id = '{batch_id}'
-            """))
+                WHERE batch_id = :batch_id
+            """), {'batch_id': batch_id})
         
         # Format duration
         if duration >= 3600:
@@ -5098,12 +5103,12 @@ def execute_linking(batch_id, record_ids=None, session_snapshot=None):
         # Update batch phase on error
         try:
             with misc_engine.begin() as con:
-                con.execute(text(f"""
+                con.execute(text("""
                     UPDATE dbo.migration_batch
                     SET migration_phase = 'link_error',
                         status = 'link_error'
-                    WHERE batch_id = '{batch_id}'
-                """))
+                    WHERE batch_id = :batch_id
+                """), {'batch_id': batch_id})
         except Exception:
             pass
         
